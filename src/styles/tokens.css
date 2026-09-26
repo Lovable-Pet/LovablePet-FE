@@ -71,6 +71,14 @@
   --color-warning-800: #854d0e;
   --color-warning-950: #422006;
 
+  /* Color: Rose (Badge/Chip accent) */
+  --color-rose-50: #fff1f2;
+  --color-rose-500: #f43f5e;
+
+  /* Color: Violet (Badge/Chip accent) */
+  --color-violet-50: #f5f3ff;
+  --color-violet-500: #8b5cf6;
+
   /* Color: Zinc (Neutrals) */
   --color-neutral-50: #fafafa;
   --color-neutral-100: #f4f4f5;
