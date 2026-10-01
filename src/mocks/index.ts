@@ -1,3 +1,5 @@
-import { healthHandlers } from './handlers/health'
+import type { AnyHandler } from 'msw'
 
-export const handlers = [...healthHandlers]
+// 도메인별 핸들러를 여기에
+// [...authHandlers, ...petHandlers]
+export const handlers: AnyHandler[] = []
