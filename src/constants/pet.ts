@@ -39,10 +39,4 @@ export const TEMPLATE_LABEL: Record<string, string> = {
   retriever: '리트리버형',
 }
 
-/** GLB 에 들어 있는 애니메이션 이름 (고정) */
-export const MODEL_ANIMATION = {
-  IDLE: 'idle',
-  TAIL_WAG: 'tail_wag',
-} as const
-
 export const PUPPY_NOTICE = '지금 크기예요. 아직 어린 아이라 다 자라면 크게 달라질 수 있어요.'

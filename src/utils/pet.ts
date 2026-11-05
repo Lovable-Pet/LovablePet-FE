@@ -44,3 +44,28 @@ export const adoptionStateOf = (
   const inNotice = pet.processState === '보호중' && parseDate(pet.noticeEnd) >= todayStart
   return inNotice ? 'IN_NOTICE' : 'CLOSED'
 }
+
+/**
+ * 나이 원문을 화면 문구로 바꾼다.
+ * "2023(년생)" → "2023년생", "2026(60일미만)(년생)" → "2026년생 (60일미만)"
+ */
+export const formatAge = (ageText: string) => {
+  const year = ageText.match(/^(\d{4})/)?.[1]
+  if (!year) return ageText
+  const extra = [...ageText.matchAll(/\(([^)]+)\)/g)]
+    .map((match) => match[1])
+    .filter((part) => part !== '년생')
+  return extra.length > 0 ? `${year}년생 (${extra.join(', ')})` : `${year}년생`
+}
+
+/** 'YYYY-MM-DD' → 'MM.DD' (공고 기간 표시용) */
+export const formatMonthDay = (date: string) => {
+  const [, month, day] = date.split('-')
+  return month && day ? `${month}.${day}` : date
+}
+
+/** 전화 걸기 링크용 (숫자·+·- 만 남긴다) */
+export const toTelHref = (tel: string) => `tel:${tel.replace(/[^\d+-]/g, '')}`
+
+/** 보호가 끝난 이유가 입양·반환인지 (그 밖의 종료는 사유를 단정하지 않고 중립 문구를 쓴다) */
+export const isMetFamily = (processState: string) => processState.includes('입양') || processState.includes('반환')
