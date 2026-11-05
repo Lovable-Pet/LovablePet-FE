@@ -1,23 +1,8 @@
-import { http, HttpResponse } from 'msw'
-import type { ApiFailResponse, ApiSuccessResponse } from '../../apis/dto/common.dto'
+import { http } from 'msw'
 import type { FavoriteStatus } from '../../apis/dto/favorite.dto'
 import type { PetFilterOption, PetPageResponse, PetSummary } from '../../apis/dto/pet.dto'
 import { petDetails, toSummary } from '../fixtures/pets'
-
-const now = () => new Date().toISOString().slice(0, 19)
-
-const success = <T>(data: T, path: string): ApiSuccessResponse<T> => ({
-  resultType: 'SUCCESS',
-  success: { data },
-  error: null,
-  meta: { timestamp: now(), path },
-})
-
-const fail = (status: number, code: string, message: string, path: string) =>
-  HttpResponse.json<ApiFailResponse>(
-    { resultType: 'FAIL', success: null, error: { code, message, details: null }, meta: { timestamp: now(), path } },
-    { status },
-  )
+import { fail, roleOf, success, unauthorized } from '../utils'
 
 const toPage = (all: PetSummary[], page: number, size: number): PetPageResponse => ({
   items: all.slice(page * size, (page + 1) * size),
@@ -40,9 +25,16 @@ const numberParam = (url: URL, key: string) => {
   return value === null || value === '' ? null : Number(value)
 }
 
-// 목업 안에서만 유지되는 찜 상태 (최근에 찜한 순). 목업은 항상 로그인한 것으로 본다
+// 목업 안에서만 유지되는 찜 상태 (최근에 찜한 순)
 const favoriteIds = petDetails.filter((pet) => pet.favorited).map((pet) => pet.id)
-const withFavorite = <T extends { id: number }>(pet: T) => ({ ...pet, favorited: favoriteIds.includes(pet.id) })
+
+// 백엔드처럼 로그인하지 않았으면 favorited 는 항상 false
+const withFavorite =
+  (request: Request) =>
+  <T extends { id: number }>(pet: T) => ({
+    ...pet,
+    favorited: roleOf(request) !== null && favoriteIds.includes(pet.id),
+  })
 
 const adoptablePets = () => petDetails.filter((pet) => pet.adoptable)
 
@@ -51,7 +43,7 @@ export const petHandlers = [
     const pets = adoptablePets()
     const regions = countBy(pets.map((pet) => pet.orgName.split(' ')[0]))
     const kinds = countBy(pets.map((pet) => pet.kindName))
-    return HttpResponse.json(success({ regions, kinds }, new URL(request.url).pathname))
+    return success({ regions, kinds }, request)
   }),
 
   http.get('/api/pets', ({ request }) => {
@@ -75,34 +67,35 @@ export const petHandlers = [
         sort === 'OLDEST' ? a.noticeStart.localeCompare(b.noticeStart) : b.noticeStart.localeCompare(a.noticeStart),
       )
       .map(toSummary)
-      .map(withFavorite)
+      .map(withFavorite(request))
 
-    return HttpResponse.json(success(toPage(filtered, page, size), url.pathname))
+    return success(toPage(filtered, page, size), request)
   }),
 
   http.get('/api/pets/:id', ({ params, request }) => {
-    const path = new URL(request.url).pathname
     const pet = petDetails.find((item) => item.id === Number(params.id))
-    if (!pet) return fail(404, 'PET_404', '동물을 찾을 수 없습니다.', path)
-    return HttpResponse.json(success(withFavorite(pet), path))
+    if (!pet) return fail(404, 'PET_404', '동물을 찾을 수 없습니다.', request)
+    return success(withFavorite(request)(pet), request)
   }),
 
   http.put('/api/pets/:id/favorite', ({ params, request }) => {
-    const path = new URL(request.url).pathname
+    if (!roleOf(request)) return unauthorized(request)
     const petId = Number(params.id)
-    if (!petDetails.some((pet) => pet.id === petId)) return fail(404, 'PET_404', '동물을 찾을 수 없습니다.', path)
+    if (!petDetails.some((pet) => pet.id === petId)) return fail(404, 'PET_404', '동물을 찾을 수 없습니다.', request)
     if (!favoriteIds.includes(petId)) favoriteIds.unshift(petId)
-    return HttpResponse.json(success<FavoriteStatus>({ petId, favorited: true }, path))
+    return success<FavoriteStatus>({ petId, favorited: true }, request)
   }),
 
   http.delete('/api/pets/:id/favorite', ({ params, request }) => {
+    if (!roleOf(request)) return unauthorized(request)
     const petId = Number(params.id)
     const index = favoriteIds.indexOf(petId)
     if (index >= 0) favoriteIds.splice(index, 1)
-    return HttpResponse.json(success<FavoriteStatus>({ petId, favorited: false }, new URL(request.url).pathname))
+    return success<FavoriteStatus>({ petId, favorited: false }, request)
   }),
 
   http.get('/api/members/me/favorites', ({ request }) => {
+    if (!roleOf(request)) return unauthorized(request)
     const url = new URL(request.url)
     const page = numberParam(url, 'page') ?? 0
     const size = numberParam(url, 'size') ?? 20
@@ -110,7 +103,7 @@ export const petHandlers = [
       .map((id) => petDetails.find((pet) => pet.id === id))
       .filter((pet) => pet !== undefined)
       .map(toSummary)
-      .map(withFavorite)
-    return HttpResponse.json(success(toPage(favorites, page, size), url.pathname))
+      .map(withFavorite(request))
+    return success(toPage(favorites, page, size), request)
   }),
 ]

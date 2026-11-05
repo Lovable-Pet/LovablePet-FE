@@ -190,6 +190,80 @@ export const petDetails: PetDetail[] = [
   },
 ]
 
+// 목록·페이지 넘김·필터 확인용으로 입양 가능한 아이를 더 만든다 (id 101부터, 매번 같은 값)
+const REGIONS: [string, string[]][] = [
+  ['경기도', ['화성시', '평택시', '수원시', '용인시', '안성시', '이천시', '포천시']],
+  ['경상남도', ['창원시', '김해시']],
+  ['충청남도', ['천안시', '아산시']],
+  ['서울특별시', ['강서구', '노원구']],
+  ['부산광역시', ['해운대구']],
+]
+const KINDS: [string, string][] = [
+  ['믹스견', 'jindo'],
+  ['믹스견', 'jindo'],
+  ['믹스견', 'retriever'],
+  ['진도견', 'jindo'],
+  ['말티즈', 'maltese'],
+  ['푸들', 'toypoodle'],
+  ['포메라니안', 'chihuahua'],
+  ['시바', 'jindo'],
+]
+const COLORS = ['갈색', '흰색', '검정색', '갈색&흰색', '크림색', '황색']
+const SEXES = ['M', 'F', 'Q'] as const
+
+const generatedPets: PetDetail[] = Array.from({ length: 26 }, (_, index) => {
+  const id = 101 + index
+  const [sido, sigungus] = REGIONS[index % REGIONS.length]
+  const orgName = `${sido} ${sigungus[index % sigungus.length]}`
+  const [kindName, template] = KINDS[(index * 3) % KINDS.length]
+  const small = kindName === '말티즈' || kindName === '푸들' || kindName === '포메라니안'
+  const weightKg = small ? 2.5 + (index % 5) * 0.7 : 8 + ((index * 7) % 23)
+  const birthYear = 2018 + (index % 9)
+  const hasModel = index % 10 < 7
+  // 2026-07-20부터 약 3일 간격으로 공고 시작
+  const start = new Date(2026, 6, 20 + index * 3)
+  const noticeStart = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`
+  const desertionNo = `4485672026${String(id).padStart(5, '0')}`
+  const weightText = `${weightKg.toFixed(1)}(Kg)`
+  return {
+    id,
+    desertionNo,
+    noticeNo: `${sido.slice(0, 2)}-${sigungus[0].slice(0, 2)}-2026-${String(id).padStart(5, '0')}`,
+    displayName: `${kindName} · ${orgName} · ${Number(weightKg.toFixed(1))}kg`,
+    kindName,
+    color: COLORS[index % COLORS.length],
+    ageText: `${birthYear}(년생)`,
+    birthYear,
+    weightText,
+    weightKg: Number(weightKg.toFixed(1)),
+    sex: SEXES[index % SEXES.length],
+    neutered: index % 2 === 0 ? 'Y' : 'U',
+    processState: '보호중',
+    adoptable: true,
+    noticeStart,
+    noticeEnd: noticeStart,
+    orgName,
+    happenPlace: `${sigungus[0]} 인근`,
+    careName: `${sigungus[index % sigungus.length]}동물보호센터`,
+    careTel: '000-0000-0000',
+    careAddr: `${orgName} [보호소 주소]`,
+    specialMark: '[특징]',
+    // 사진 0~3장 (0장이면 관리자 화면에서 '사진이 없어 만들 수 없어요')
+    photoUrls: Array.from({ length: index % 4 }, (_, photoIndex) => `/mock/photos/${id}-${photoIndex}.jpg`),
+    model: hasModel
+      ? {
+          glbUrl: glb(desertionNo),
+          withersM: Number((0.18 + Math.cbrt(weightKg) * 0.13).toFixed(2)),
+          template,
+          behavior: { tapAnimation: 'tail_wag', playbackRate: 1 },
+        }
+      : null,
+    favorited: false,
+  }
+})
+
+petDetails.push(...generatedPets)
+
 export const toSummary = (pet: PetDetail): PetSummary => ({
   id: pet.id,
   displayName: pet.displayName,

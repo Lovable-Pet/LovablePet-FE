@@ -1,4 +1,4 @@
-import { http, HttpResponse } from 'msw'
+import { delay, http, HttpResponse } from 'msw'
 import type {
   FitCheckResponse,
   GenerateModelRequest,
@@ -8,6 +8,7 @@ import type {
 } from '../../apis/dto/admin.dto'
 import type { ApiFailResponse, ApiSuccessResponse } from '../../apis/dto/common.dto'
 import { petDetails } from '../fixtures/pets'
+import { roleOf } from '../utils'
 
 const now = () => new Date().toISOString().slice(0, 19)
 
@@ -63,20 +64,73 @@ const settle = (attempt: PetModelAttempt) => {
     costUsd: 0.075,
     finishedAt: new Date().toISOString(),
   } satisfies Partial<PetModelAttempt>)
+  // 완성되면 앱 목록·상세에서도 AR 모델이 보이게 붙인다
+  const pet = petDetails.find((item) => item.id === attempt.petId)
+  if (pet && !pet.model && attempt.glbUrl && attempt.withersM !== null)
+    pet.model = {
+      glbUrl: attempt.glbUrl,
+      withersM: attempt.withersM,
+      template: attempt.template ?? 'jindo',
+      behavior: { tapAnimation: 'tail_wag', playbackRate: 1 },
+    }
   return attempt
 }
 
 const isToday = (iso: string) => new Date(iso).toDateString() === new Date().toDateString()
 
+// 생성 기록 화면 확인용으로 상태별 기록을 미리 넣는다 (모델이 없고 체중·사진이 있는 아이들)
+const seedTargets = petDetails.filter((pet) => !pet.model && pet.adoptable && pet.weightKg !== null && pet.photoUrls.length > 0 && pet.id !== 3)
+const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
+const seed = (
+  pet: (typeof petDetails)[number] | undefined,
+  status: PetModelAttempt['status'],
+  extra: Partial<PetModelAttempt>,
+  minutes: number,
+) => {
+  if (!pet || pet.weightKg === null) return
+  attempts.push({
+    id: nextId++, petId: pet.id, status, jobId: `${pet.desertionNo}-${(0xa5ca257e + nextId).toString(16)}`,
+    photoUrl: pet.photoUrls[0] ?? '', weightKg: pet.weightKg, forced: false, fitLevel: 'good', fitScore: 88,
+    template: 'jindo', reasons: null, error: null, glbUrl: null, withersM: 0.45, tapAnimation: null,
+    playbackRate: null, costUsd: null, createdAt: minutesAgo(minutes), finishedAt: minutesAgo(minutes - 2), ...extra,
+  })
+}
+seed(seedTargets[0], 'PHOTO_REJECTED', { fitLevel: 'poor', fitScore: 0, template: null, withersM: null, reasons: ['사람 손이 몸통 털을 많이 가렸어요'], costUsd: 0.021 }, 44)
+seed(seedTargets[1], 'UNSUITABLE', { fitLevel: 'poor', fitScore: 38, reasons: ['털이 길어 템플릿 체형과 많이 달라요'], costUsd: 0.034 }, 71)
+seed(seedTargets[2], 'FAILED', { error: '파이프라인 재시작으로 중단됐어요', costUsd: null }, 150)
+seed(petDetails.find((pet) => pet.id === 1), 'DONE', {
+  glbUrl: petDetails[0].model?.glbUrl ?? null, withersM: 0.48, tapAnimation: 'tail_wag', playbackRate: 1, costUsd: 0.075,
+}, 20)
+// 만드는 중 기록은 목업 규칙대로 15초 뒤 완성된다 (생성 기록 화면의 5초 새로 고침 확인용)
+seed(seedTargets[3], 'PENDING', { finishedAt: null, withersM: 0.5, createdAt: new Date().toISOString() }, 0)
+attempts.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+
+// /api/admin/** 는 ADMIN만. 로그인하지 않았으면 COMMON_401, 일반 회원이면 COMMON_403
+const guard = (request: Request) => {
+  const role = roleOf(request)
+  const path = new URL(request.url).pathname
+  if (!role) return fail(401, 'COMMON_401', '로그인이 필요합니다.', path)
+  if (role !== 'ADMIN') return fail(403, 'COMMON_403', '접근 권한이 없습니다.', path)
+  return null
+}
+
 export const adminHandlers = [
-  http.post('/api/admin/pets/sync', ({ request }) =>
-    success<PetSyncResult>(
+  // 실제는 10초 안팎. 목업은 진행 표시를 볼 수 있게 1.5초 늦춘다
+  http.post('/api/admin/pets/sync', async ({ request }) => {
+    const denied = guard(request)
+    if (denied) return denied
+    await delay(1500)
+    return success<PetSyncResult>(
       { fetched: 3300, created: 120, updated: 3180, unlisted: 95, skipped: 0, tookMs: 21500 },
       new URL(request.url).pathname,
-    ),
-  ),
+    )
+  }),
 
+  // 실제는 5~20초. 목업은 진행 표시를 볼 수 있게 1.5초 늦춘다
   http.post('/api/admin/pets/:id/model/fit', async ({ params, request }) => {
+    const denied = guard(request)
+    if (denied) return denied
+    await delay(1500)
     const path = new URL(request.url).pathname
     const pet = petDetails.find((item) => item.id === Number(params.id))
     if (!pet) return fail(404, 'PET_404', '동물을 찾을 수 없습니다.', path)
@@ -89,6 +143,8 @@ export const adminHandlers = [
   }),
 
   http.post('/api/admin/pets/:id/model', async ({ params, request }) => {
+    const denied = guard(request)
+    if (denied) return denied
     const path = new URL(request.url).pathname
     const pet = petDetails.find((item) => item.id === Number(params.id))
     if (!pet) return fail(404, 'PET_404', '동물을 찾을 수 없습니다.', path)
@@ -119,11 +175,15 @@ export const adminHandlers = [
   }),
 
   http.get('/api/admin/pets/:id/model', ({ params, request }) => {
+    const denied = guard(request)
+    if (denied) return denied
     const latest = attempts.find((item) => item.petId === Number(params.id))
     return success(latest ? settle(latest) : null, new URL(request.url).pathname)
   }),
 
   http.get('/api/admin/pet-models', ({ request }) => {
+    const denied = guard(request)
+    if (denied) return denied
     const url = new URL(request.url)
     const status = url.searchParams.get('status')
     const items = attempts
