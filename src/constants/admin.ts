@@ -31,3 +31,22 @@ export const PHOTO_REJECT_LABEL: Record<PhotoRejectReason, string> = {
 
 /** 생성 상태 조회 간격. 생성은 1.5~4분 걸린다 */
 export const MODEL_POLL_INTERVAL_MS = 5_000
+
+/** 생성 상태 배지 색 (Badge tone) */
+export const MODEL_STATUS_TONE = {
+  PENDING: 'info',
+  DONE: 'success',
+  PHOTO_REJECTED: 'danger',
+  UNSUITABLE: 'warning',
+  FAILED: 'danger',
+} as const satisfies Record<PetModelStatus, string>
+
+/** 관리자 목록에서 최근 시도 상태별 버튼 문구 */
+export const MODEL_ACTION_LABEL: Record<PetModelStatus | 'NONE', string> = {
+  NONE: 'AR 만들기',
+  PENDING: '상태 보기',
+  DONE: '결과 보기',
+  PHOTO_REJECTED: '다른 사진으로',
+  UNSUITABLE: '다시 만들기',
+  FAILED: '다시 시도',
+}
