@@ -1,39 +1,9 @@
-import { useState } from 'react'
-import { SignUpPage } from './pages/SignUp/SignUpPage'
-import { OnboardingPage } from './pages/Onboarding/OnboardingPage'
-import { PetListPage } from './pages/PetList/PetListPage'
-import { PetDetailPage } from './pages/PetDetail/PetDetailPage'
-import { ARPreviewPage } from './pages/ARPreview/ARPreviewPage'
-
-const pageKeys = ['SignUp', 'Onboarding', 'PetList', 'PetDetail', 'ARPreview'] as const
-type PageKey = (typeof pageKeys)[number]
-
+// 새 디자인 적용 전 임시 화면. 디자인 시스템·화면 구현 이슈에서 교체
 function App() {
-  const [page, setPage] = useState<PageKey>('SignUp')
-
   return (
-    <div>
-      <div className="flex justify-center gap-2 border-b border-base-200 bg-white py-2">
-        {pageKeys.map((key) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setPage(key)}
-            className={`rounded px-2 py-1 text-[12px] ${
-              page === key ? 'bg-primary-500 text-white' : 'text-base-500'
-            }`}
-          >
-            {key}
-          </button>
-        ))}
-      </div>
-
-      {page === 'SignUp' && <SignUpPage />}
-      {page === 'Onboarding' && <OnboardingPage />}
-      {page === 'PetList' && <PetListPage />}
-      {page === 'PetDetail' && <PetDetailPage onViewAR={() => setPage('ARPreview')} />}
-      {page === 'ARPreview' && <ARPreviewPage onBack={() => setPage('PetDetail')} />}
-    </div>
+    <main className="flex min-h-screen items-center justify-center p-6 text-center">
+      <p>LovablePet — 새 디자인 적용 준비 중</p>
+    </main>
   )
 }
 
