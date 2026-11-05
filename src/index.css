@@ -1,1 +1,35 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
 @import 'tailwindcss';
+@import './styles/tokens.css';
+
+@layer base {
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+    /* 한글이 글자 단위로 줄바꿈되지 않게 (긴 영문·숫자는 넘치면 끊는다) */
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  button {
+    cursor: pointer;
+  }
+}
+
+/* 공고 사진이 없을 때 자리: 옅은 빗금 */
+@utility photo-placeholder {
+  background-color: var(--color-muted);
+  background-image: repeating-linear-gradient(135deg, rgb(26 26 23 / 0.06) 0 8px, transparent 8px 16px);
+}
+
+/* 가로 목록의 스크롤바 숨김 */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}

@@ -1,0 +1,124 @@
+/*
+ * LovablePet 디자인 토큰 (디자인 캔버스 기준)
+ * https://claude.ai/artifact/WtedaDRe9NooiWF3odAjHH
+ *
+ * 이름 규칙: 색(--color-*)과 글자 크기(--text-*)가 같은 이름을 쓰지 않게 한다.
+ * (text-ink = 글자색, text-body = 글자 크기)
+ */
+@theme {
+  /* 서체 */
+  --font-sans: 'IBM Plex Sans KR', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* 바탕·면 */
+  --color-canvas: #f5f5f1;
+  --color-surface: #ffffff;
+  --color-muted: #efeee8; /* 회색 면, 옅은 선 */
+  --color-segment: #e9e8e2; /* 정렬 토글 바탕 */
+
+  /* 글자 (흰 바탕 대비 4.5:1 이상) */
+  --color-ink: #1a1a17; /* 기본, 진한 버튼·크기 카드 배경 */
+  --color-ink-secondary: #3d3c37;
+  --color-ink-tertiary: #5e5d57; /* 설명 */
+  --color-ink-caption: #6b6a62;
+
+  /* 선 */
+  --color-line: #e4e3dc;
+  --color-line-subtle: #efeee8;
+  --color-line-strong: #d6d5ce; /* 입력 테두리, 손잡이 */
+
+  /* 강조 (주황) — 기존 #f97316은 흰 글자 대비 미달이라 쓰지 않는다 */
+  --color-accent: #c2410c; /* 주 버튼, 강조 글자 */
+  --color-accent-soft: #ffedd5;
+  --color-accent-ink: #9a3412;
+  --color-accent-line: #fdba74;
+
+  /* 안내 박스 */
+  --color-notice: #fff7ed;
+  --color-notice-line: #fed7aa;
+  --color-notice-ink: #7c2d12;
+
+  /* 측정 (AR 배지, 체고 숫자, 줄자) — 글자는 ink */
+  --color-measure: #facc15;
+
+  /* 상태 */
+  --color-success-soft: #dcfce7;
+  --color-success-ink: #166534;
+  --color-success-strong: #14532d;
+  --color-success-line: #16a34a; /* 입력 성공 테두리 */
+  --color-success-subtle: #f0fdf4; /* 완성 상자 (관리자 13) */
+  --color-success-border: #bbf7d0;
+  --color-info-soft: #dbeafe;
+  --color-info-ink: #1e40af;
+  --color-info-subtle: #eff6ff; /* 만드는 중 상자 (관리자 13) */
+  --color-info-line: #bfdbfe;
+  --color-info-strong: #1e3a8a;
+  --color-info: #2563eb; /* 진행 막대 */
+  --color-danger-soft: #fee2e2;
+  --color-danger-ink: #991b1b;
+  --color-danger: #b91c1c; /* 입력 오류 글자·테두리 */
+  --color-danger-strong: #7f1d1d; /* 사진 거부 배지 글자 (관리자 13) */
+  --color-warning-soft: #fef3c7;
+  --color-warning-ink: #854d0e;
+  --color-warning-strong: #713f12;
+
+  /* 카카오 */
+  --color-kakao: #fee500;
+  --color-kakao-ink: #191600;
+
+  /* 어두운 면 (크기 카드, AR, 캡처) */
+  --color-on-dark: #e7e5dd;
+  --color-on-dark-secondary: #d6d4cb;
+  --color-on-dark-tertiary: #b8b6ad;
+  --color-dark-track: #33322e; /* 줄자 빈 칸 */
+  --color-dark-notice: #3a2a12; /* 크기 카드 안 안내 */
+  --color-dark-notice-ink: #fde9a8;
+  --color-ar-camera: #23221f;
+  --color-ar-camera-alt: #2c2b27;
+  --color-ar-floor: #3a3833;
+  --color-capture: #141412;
+  --color-overlay: rgb(20 20 18 / 0.82);
+  --color-scrim: #8a8983; /* 시트 뒤 배경 */
+
+  /* 글자 크기 */
+  --text-display: 26px; /* 화면 제목 */
+  --text-display--line-height: 36px;
+  --text-display--letter-spacing: -0.03em;
+  --text-headline: 24px; /* 안내 제목 */
+  --text-headline--line-height: 33px;
+  --text-headline--letter-spacing: -0.03em;
+  --text-title: 20px; /* 시트 제목 */
+  --text-title--line-height: 28px;
+  --text-title--letter-spacing: -0.02em;
+  --text-section: 18px; /* 섹션 제목 */
+  --text-section--line-height: 26px;
+  --text-section--letter-spacing: -0.02em;
+  --text-subtitle: 17px;
+  --text-subtitle--line-height: 24px;
+  --text-emphasis: 16px; /* 버튼, 강조 */
+  --text-emphasis--line-height: 24px;
+  --text-body-lg: 15px; /* 본문, 카드 제목 */
+  --text-body-lg--line-height: 22px;
+  --text-body: 14px;
+  --text-body--line-height: 21px;
+  --text-label: 13px; /* 보조 */
+  --text-label--line-height: 20px;
+  --text-caption: 12px; /* 캡션, 배지 */
+  --text-caption--line-height: 16px;
+  --text-tab: 11px; /* 하단 탭 */
+  --text-tab--line-height: 14px;
+
+  /* 둥글기 */
+  --radius-badge: 6px;
+  --radius-chip: 8px;
+  --radius-button-sm: 10px;
+  --radius-input: 12px; /* 입력, 보조 버튼 */
+  --radius-button: 14px; /* 주 버튼 */
+  --radius-card: 16px; /* 사진, 카드 */
+  --radius-card-lg: 20px;
+  --radius-sheet: 24px; /* 크기 카드, 시트 */
+
+  /* 그림자 (거의 안 씀) */
+  --shadow-segment: 0 1px 2px rgb(0 0 0 / 0.08);
+  --shadow-knob: 0 1px 3px rgb(0 0 0 / 0.2);
+}
