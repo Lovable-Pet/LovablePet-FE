@@ -1,6 +1,12 @@
+/** ADMIN 이면 관리자 기능(AR 만들기 등)을 보여 준다 */
+export type MemberRole = 'USER' | 'ADMIN'
+
 export interface TokenResponse {
+  /** Authorization: Bearer {accessToken} (기본 30분) */
   accessToken: string
+  /** 재발급용 (기본 14일). 재발급하면 새 값으로 바뀐다 */
   refreshToken: string
+  role: MemberRole
 }
 
 export interface SignUpRequest {

@@ -1,5 +1,7 @@
 import type { AnyHandler } from 'msw'
+import { adminHandlers } from './handlers/admin'
+import { healthHandlers } from './handlers/health'
+import { petHandlers } from './handlers/pet'
 
 // 도메인별 핸들러를 여기에
-// [...authHandlers, ...petHandlers]
-export const handlers: AnyHandler[] = []
+export const handlers: AnyHandler[] = [...healthHandlers, ...petHandlers, ...adminHandlers]
