@@ -1,17 +1,21 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { Button } from '../Button/Button'
 import { Field } from './Field'
 
 const meta: Meta<typeof Field> = {
   title: 'Components/Field',
   component: Field,
   tags: ['autodocs'],
-  argTypes: {
-    size: { control: 'select', options: ['lg', 'md', 'sm'] },
-  },
+  decorators: [
+    (Story) => (
+      <div className="w-[342px]">
+        <Story />
+      </div>
+    ),
+  ],
   args: {
-    label: 'Label',
-    placeholder: 'Placeholder',
-    size: 'md',
+    label: '아이디',
+    placeholder: '영문·숫자·밑줄 4~20자',
   },
 }
 
@@ -20,18 +24,22 @@ type Story = StoryObj<typeof Field>
 
 export const Playground: Story = {}
 
-export const Required: Story = {
-  args: { required: true },
-}
-
-export const Filled: Story = {
-  args: { filled: true, defaultValue: 'Filled content' },
+export const WithHint: Story = {
+  args: { label: '이메일', type: 'email', placeholder: 'name@example.com', hint: '연락이 필요할 때만 써요.' },
 }
 
 export const ErrorState: Story = {
-  args: { required: true, error: '올바른 형식이 아닙니다', defaultValue: 'Invalid Input' },
+  args: { label: '비밀번호', type: 'password', defaultValue: 'secret', error: '아이디 또는 비밀번호가 맞지 않아요.' },
 }
 
-export const NoLabel: Story = {
-  args: { label: undefined },
+export const WithTrailingButton: Story = {
+  args: {
+    defaultValue: 'lovable_01',
+    success: '사용할 수 있는 아이디예요.',
+    trailing: (
+      <Button variant="outline-strong" size="field">
+        중복 확인
+      </Button>
+    ),
+  },
 }

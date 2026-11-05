@@ -6,26 +6,27 @@ export interface ToggleProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
   onChange: (checked: boolean) => void
 }
 
-export function Toggle({ checked, onChange, disabled, className, ...props }: ToggleProps) {
+/** 52×32 스위치. 화면에 보이는 이름이 없으면 aria-label을 꼭 넘긴다 */
+export function Toggle({ checked, onChange, className, ...props }: ToggleProps) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
-      disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        'inline-flex h-[24px] w-[44px] shrink-0 items-center rounded-full p-[2px] transition-colors',
-        checked ? 'bg-primary-500' : 'bg-base-200',
-        disabled && 'opacity-45 pointer-events-none',
+        'inline-flex h-8 w-13 shrink-0 items-center rounded-full p-[3px] transition-colors',
+        'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
+        'disabled:pointer-events-none disabled:opacity-45',
+        checked ? 'bg-accent' : 'bg-line-strong',
         className,
       )}
       {...props}
     >
       <span
         className={cn(
-          'block size-[20px] rounded-full bg-white shadow-sm transition-transform',
-          checked ? 'translate-x-[20px]' : 'translate-x-0',
+          'block size-6.5 rounded-full bg-white shadow-knob transition-transform',
+          checked ? 'translate-x-5' : 'translate-x-0',
         )}
       />
     </button>

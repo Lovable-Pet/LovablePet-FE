@@ -1,22 +1,20 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { Box } from 'lucide-react'
 import { Badge } from './Badge'
+
+const tones = ['measure', 'dark', 'closed', 'success', 'info', 'danger', 'warning', 'neutral'] as const
 
 const meta: Meta<typeof Badge> = {
   title: 'Components/Badge',
   component: Badge,
   tags: ['autodocs'],
   argTypes: {
-    color: {
-      control: 'select',
-      options: ['primary', 'rose', 'success', 'warning', 'neutral', 'info', 'violet'],
-    },
-    variant: { control: 'select', options: ['filled', 'outlined'] },
-    size: { control: 'select', options: ['lg', 'md', 'sm'] },
+    tone: { control: 'select', options: tones },
+    size: { control: 'select', options: ['sm', 'md'] },
   },
   args: {
-    children: 'BADGE',
-    color: 'primary',
-    variant: 'filled',
+    children: '지금 입양할 수 있어요',
+    tone: 'success',
     size: 'md',
   },
 }
@@ -26,21 +24,27 @@ type Story = StoryObj<typeof Badge>
 
 export const Playground: Story = {}
 
-export const AllColors: Story = {
+export const AllTones: Story = {
   render: () => (
-    <div className="flex flex-col gap-3">
-      {(['primary', 'rose', 'success', 'warning', 'neutral', 'info', 'violet'] as const).map(
-        (color) => (
-          <div key={color} className="flex items-center gap-2">
-            <Badge color={color} variant="filled">
-              BADGE
-            </Badge>
-            <Badge color={color} variant="outlined">
-              BADGE
-            </Badge>
-          </div>
-        ),
-      )}
+    <div className="flex flex-col items-start gap-2">
+      {tones.map((tone) => (
+        <Badge key={tone} tone={tone}>
+          {tone}
+        </Badge>
+      ))}
     </div>
   ),
+}
+
+export const ArBadge: Story = {
+  render: () => (
+    <Badge tone="measure" size="sm">
+      <Box className="size-3" strokeWidth={2.4} aria-hidden />
+      AR로 보기
+    </Badge>
+  ),
+}
+
+export const NoticeNumber: Story = {
+  args: { tone: 'neutral', className: 'font-mono', children: '경기-화성-2026-01509' },
 }

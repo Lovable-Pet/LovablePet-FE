@@ -1,20 +1,30 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { Button } from './Button'
 
+const variants = [
+  'primary',
+  'dark',
+  'soft',
+  'outline',
+  'outline-strong',
+  'outline-subtle',
+  'measure',
+  'accent-soft',
+  'kakao',
+] as const
+
 const meta: Meta<typeof Button> = {
   title: 'Components/Button',
   component: Button,
   tags: ['autodocs'],
   argTypes: {
-    color: { control: 'select', options: ['primary', 'secondary', 'neutral', 'danger'] },
-    variant: { control: 'select', options: ['solid', 'outline', 'ghost'] },
-    size: { control: 'select', options: ['lg', 'md', 'sm'] },
+    variant: { control: 'select', options: variants },
+    size: { control: 'select', options: ['xl', 'lg', 'md', 'sm', 'field'] },
   },
   args: {
-    children: 'BUTTON',
-    color: 'primary',
-    variant: 'solid',
-    size: 'md',
+    children: '우리 집에 놓아 보기',
+    variant: 'primary',
+    size: 'lg',
     disabled: false,
   },
 }
@@ -24,22 +34,29 @@ type Story = StoryObj<typeof Button>
 
 export const Playground: Story = {}
 
-export const AllColors: Story = {
+export const AllVariants: Story = {
   render: () => (
-    <div className="flex flex-col gap-4">
-      {(['primary', 'secondary', 'neutral', 'danger'] as const).map((color) => (
-        <div key={color} className="flex items-center gap-2">
-          <Button color={color} variant="solid">
-            BUTTON
-          </Button>
-          <Button color={color} variant="outline">
-            BUTTON
-          </Button>
-          <Button color={color} variant="ghost">
-            BUTTON
-          </Button>
-        </div>
+    <div className="flex w-[350px] flex-col gap-3">
+      {variants.map((variant) => (
+        <Button key={variant} variant={variant} fullWidth>
+          {variant}
+        </Button>
       ))}
+    </div>
+  ),
+}
+
+export const Sizes: Story = {
+  render: () => (
+    <div className="flex items-center gap-3">
+      <Button size="xl">xl 56</Button>
+      <Button size="lg">lg 52</Button>
+      <Button size="md" variant="outline">
+        md 48
+      </Button>
+      <Button size="sm" variant="outline">
+        sm 44
+      </Button>
     </div>
   ),
 }

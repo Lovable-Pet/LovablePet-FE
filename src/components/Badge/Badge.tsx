@@ -1,75 +1,50 @@
 import type { HTMLAttributes } from 'react'
 import { cn } from '../utils/cn'
 
-export type BadgeColor =
-  | 'primary'
-  | 'rose'
-  | 'success'
-  | 'warning'
-  | 'neutral'
-  | 'info'
-  | 'violet'
-export type BadgeVariant = 'filled' | 'outlined'
-export type BadgeSize = 'lg' | 'md' | 'sm'
+export type BadgeTone =
+  | 'measure' // AR로 보기, 관리자 (노랑 + 진한 글자)
+  | 'dark' // 기다린 지 N일
+  | 'closed' // 입양 완료
+  | 'success' // 입양 가능, 완성
+  | 'info' // 만드는 중
+  | 'danger' // 사진 거부, 실패
+  | 'warning' // 체형 부적합
+  | 'neutral' // 공고번호 등
+
+/** sm 24 / md 26 */
+export type BadgeSize = 'sm' | 'md'
 
 export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
-  color?: BadgeColor
-  variant?: BadgeVariant
+  tone?: BadgeTone
   size?: BadgeSize
 }
 
+const toneClasses: Record<BadgeTone, string> = {
+  measure: 'bg-measure text-ink font-bold',
+  dark: 'bg-ink text-white font-semibold',
+  closed: 'bg-ink-secondary text-white font-semibold',
+  success: 'bg-success-soft text-success-ink font-semibold',
+  info: 'bg-info-soft text-info-ink font-semibold',
+  danger: 'bg-danger-soft text-danger-ink font-semibold',
+  warning: 'bg-warning-soft text-warning-ink font-semibold',
+  neutral: 'bg-muted text-ink-tertiary font-medium',
+}
+
 const sizeClasses: Record<BadgeSize, string> = {
-  lg: 'px-[12px] py-[6px] text-[12px]',
-  md: 'px-[10px] py-[4px] text-[10px]',
-  sm: 'px-[8px] py-[2px] text-[9px]',
+  sm: 'h-6',
+  md: 'h-6.5',
 }
 
-const darkTextColors: BadgeColor[] = ['warning']
-
-const filledBg: Record<BadgeColor, string> = {
-  primary: 'bg-primary-500',
-  rose: 'bg-rose-500',
-  success: 'bg-success-500',
-  warning: 'bg-warning-500',
-  neutral: 'bg-base-500',
-  info: 'bg-info-500',
-  violet: 'bg-violet-500',
-}
-
-const outlinedColors: Record<BadgeColor, string> = {
-  primary: 'bg-primary-50 border border-primary-500 text-primary-500',
-  rose: 'bg-rose-50 border border-rose-500 text-rose-500',
-  success: 'bg-success-50 border border-success-500 text-success-500',
-  warning: 'bg-warning-50 border border-warning-500 text-warning-500',
-  neutral: 'bg-base-50 border border-base-500 text-base-500',
-  info: 'bg-info-50 border border-info-500 text-info-500',
-  violet: 'bg-violet-50 border border-violet-500 text-violet-500',
-}
-
-export function Badge({
-  color = 'primary',
-  variant = 'filled',
-  size = 'md',
-  className,
-  children,
-  ...props
-}: BadgeProps) {
-  const colorClass =
-    variant === 'filled'
-      ? cn(filledBg[color], darkTextColors.includes(color) ? 'text-warning-950' : 'text-white')
-      : outlinedColors[color]
-
+export function Badge({ tone = 'neutral', size = 'md', className, ...props }: BadgeProps) {
   return (
     <span
       className={cn(
-        'inline-flex items-center justify-center rounded-full font-[Geist] font-bold tracking-[0.5px] whitespace-nowrap',
+        'inline-flex items-center gap-1 rounded-badge px-2 text-caption whitespace-nowrap',
         sizeClasses[size],
-        colorClass,
+        toneClasses[tone],
         className,
       )}
       {...props}
-    >
-      {children}
-    </span>
+    />
   )
 }
