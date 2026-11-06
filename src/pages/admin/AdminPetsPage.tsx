@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router'
+import { ApiError } from '../../apis/apiError'
 import type { PetModelAttempt, PetSyncResult } from '../../apis/dto/admin.dto'
 import type { PetListParams, PetSort, PetSummary } from '../../apis/dto/pet.dto'
 import { Button } from '../../components/Button/Button'
@@ -74,7 +75,7 @@ export function AdminPetsPage() {
       {sync.isSuccess && <SyncResultBanner result={sync.data} />}
       {sync.isError && (
         <p role="alert" className="rounded-input bg-danger-soft px-4 py-3 text-body text-danger-ink">
-          {isForbidden(sync.error) ? '관리자만 동기화할 수 있어요.' : '동기화하지 못했어요. 잠시 후 다시 시도해 주세요.'}
+          {syncErrorMessage(sync.error)}
         </p>
       )}
       {limitReached && (
@@ -164,6 +165,15 @@ export function AdminPetsPage() {
       </p>
     </div>
   )
+}
+
+/** 동기화 실패 문구 (백엔드 PetSyncService 에러 코드별) */
+const syncErrorMessage = (error: unknown) => {
+  if (isForbidden(error)) return '관리자만 동기화할 수 있어요.'
+  const code = error instanceof ApiError ? error.code : null
+  if (code === 'PET_409_SYNC') return '이미 동기화하고 있어요. 잠시 뒤 목록을 다시 확인해 주세요.'
+  if (code === 'PET_503_SYNC_KEY') return '공공데이터 인증키가 없어 동기화할 수 없어요. 서버 설정을 확인해 주세요.'
+  return '동기화하지 못했어요. 잠시 후 다시 시도해 주세요.'
 }
 
 function PetRow({ pet, latest, limitReached }: { pet: PetSummary; latest?: PetModelAttempt; limitReached: boolean }) {

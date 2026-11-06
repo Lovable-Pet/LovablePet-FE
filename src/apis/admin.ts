@@ -9,7 +9,7 @@ import type {
   PetSyncResult,
 } from './dto/admin.dto'
 
-// 적합도 확인은 5~20초, 동기화는 10초 안팎이라 기본 타임아웃(10초)보다 길게 잡는다
+// 적합도 확인은 5~20초(배포 직후 첫 확인은 30초 넘게), 동기화는 10초 안팎이라 기본 타임아웃(10초)보다 길게 잡는다
 const LONG_TIMEOUT = 60_000
 
 export const adminApi = {
@@ -20,7 +20,10 @@ export const adminApi = {
     }),
   /** 생성 등록 (202, 약 $0.075). 이후 getLatestModel 을 몇 초마다 조회한다 */
   generateModel: (petId: number, body: GenerateModelRequest) =>
-    apiClient.post<PetModelAttempt, GenerateModelRequest>(`/admin/pets/${petId}/model`, body),
+    // 서버가 사진을 받아 파이프라인에 작업을 등록한 뒤 202로 답한다
+    apiClient.post<PetModelAttempt, GenerateModelRequest>(`/admin/pets/${petId}/model`, body, {
+      timeout: LONG_TIMEOUT,
+    }),
   /** 이 개의 최근 생성 시도. 시도가 없으면 null */
   getLatestModel: (petId: number) => apiClient.get<PetModelAttempt | null>(`/admin/pets/${petId}/model`),
   /** 최근 100건과 오늘 사용량 */

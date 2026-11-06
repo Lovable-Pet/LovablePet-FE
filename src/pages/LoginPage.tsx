@@ -33,10 +33,13 @@ export function LoginPage() {
       navigate(redirect, { replace: true })
     },
     onError: (loginError) => {
+      const code = loginError instanceof ApiError ? loginError.code : null
       setError(
-        loginError instanceof ApiError && loginError.code === AUTH_ERROR.CREDENTIALS
+        code === AUTH_ERROR.CREDENTIALS
           ? '아이디 또는 비밀번호가 맞지 않아요.'
-          : '로그인하지 못했어요. 잠시 후 다시 시도해 주세요.',
+          : code === AUTH_ERROR.INACTIVE
+            ? '탈퇴했거나 이용할 수 없는 계정이에요.'
+            : '로그인하지 못했어요. 잠시 후 다시 시도해 주세요.',
       )
     },
   })

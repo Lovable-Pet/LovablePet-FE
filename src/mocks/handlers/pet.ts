@@ -78,7 +78,7 @@ export const petHandlers = [
     return success(withFavorite(request)(pet), request)
   }),
 
-  http.put('/api/pets/:id/favorite', ({ params, request }) => {
+  http.put('/api/members/me/favorites/:id', ({ params, request }) => {
     if (!roleOf(request)) return unauthorized(request)
     const petId = Number(params.id)
     if (!petDetails.some((pet) => pet.id === petId)) return fail(404, 'PET_404', '동물을 찾을 수 없습니다.', request)
@@ -86,7 +86,7 @@ export const petHandlers = [
     return success<FavoriteStatus>({ petId, favorited: true }, request)
   }),
 
-  http.delete('/api/pets/:id/favorite', ({ params, request }) => {
+  http.delete('/api/members/me/favorites/:id', ({ params, request }) => {
     if (!roleOf(request)) return unauthorized(request)
     const petId = Number(params.id)
     const index = favoriteIds.indexOf(petId)

@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { Link, useNavigate, useSearchParams } from 'react-router'
+import { ApiError } from '../apis/apiError'
 import { authApi } from '../apis/auth'
 import { tokenStorage } from '../apis/tokenStorage'
 import { buttonStyles } from '../components/Button/buttonStyles'
 import { StateView } from '../components/StateView/StateView'
+import { AUTH_ERROR } from '../constants/auth'
 import { safeRedirect, withRedirect } from '../features/auth/redirect'
 
 /** 카카오 인가 후 돌아오는 화면 (/oauth/kakao?code=…&state=돌아갈 경로) */
@@ -34,6 +36,13 @@ export function KakaoCallbackPage() {
   }, [code, denied, mutate])
 
   const failed = !code || denied || kakaoLogin.isError
+  const errorCode = kakaoLogin.error instanceof ApiError ? kakaoLogin.error.code : null
+  const failDescription =
+    errorCode === AUTH_ERROR.INACTIVE
+      ? '탈퇴했거나 이용할 수 없는 계정이에요.'
+      : errorCode === AUTH_ERROR.KAKAO_CODE
+        ? '로그인 시간이 지났어요. 카카오로 다시 시작해 주세요.'
+        : '잠시 후 다시 시도해 주세요.'
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-[480px] flex-col justify-center bg-canvas px-4">
@@ -41,7 +50,7 @@ export function KakaoCallbackPage() {
         <StateView
           tone={denied ? 'empty' : 'error'}
           title={denied ? '카카오 로그인을 취소했어요' : '카카오로 로그인하지 못했어요'}
-          description={denied ? '둘러보기와 AR은 로그인 없이도 쓸 수 있어요.' : '잠시 후 다시 시도해 주세요.'}
+          description={denied ? '둘러보기와 AR은 로그인 없이도 쓸 수 있어요.' : failDescription}
           action={
             <Link to={withRedirect('/login', redirect)} replace className={buttonStyles({ variant: 'dark', size: 'md' })}>
               로그인 화면으로
