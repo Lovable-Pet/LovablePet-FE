@@ -102,7 +102,7 @@ export function AdminAttemptsPage() {
                 ? Array.from({ length: 6 }, (_, index) => (
                     <tr key={index} aria-hidden>
                       <td colSpan={7} className="border-b border-line-subtle px-4 py-3">
-                        <div className="h-10 animate-pulse rounded bg-muted" />
+                        <div className="h-10 rounded skeleton" />
                       </td>
                     </tr>
                   ))

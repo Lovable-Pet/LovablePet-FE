@@ -20,11 +20,12 @@ export function SortToggle({ value, onChange }: SortToggleProps) {
           aria-pressed={value === sort}
           onClick={() => onChange(sort)}
           className={cn(
-            'h-7.5 rounded-chip px-2.5 text-caption',
+            // 보이는 높이는 30, 터치 영역은 44
+            'h-7.5 rounded-chip px-2.5 text-caption transition touch-target',
             'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent',
             value === sort
               ? 'bg-surface font-semibold text-ink shadow-segment'
-              : 'bg-transparent font-medium text-ink-tertiary',
+              : 'bg-transparent font-medium text-ink-tertiary hover:text-ink',
           )}
         >
           {SORT_LABEL[sort]}

@@ -6,7 +6,7 @@ import { buttonStyles } from '../components/Button/buttonStyles'
 export function ArPendingPage() {
   const { petId } = useParams()
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-[480px] flex-col items-center justify-center gap-2 bg-canvas px-6 text-center">
+    <div className="mx-auto flex min-h-dvh w-full max-w-[480px] flex-col items-center justify-center gap-2 bg-canvas px-6 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-center">
       <Box className="mb-2 size-11 text-accent" strokeWidth={1.6} aria-hidden />
       <p className="text-subtitle font-bold">AR 보기는 곧 열려요.</p>
       <Link

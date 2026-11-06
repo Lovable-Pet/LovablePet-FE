@@ -1,20 +1,27 @@
-import { cn } from '../utils/cn'
+import type { Flash } from '../../hooks/useFlashMessage'
 
 export interface FlashMessageProps {
-  message: string | null
-  /** 화면 아래에서 띄울 거리 (하단 바 위에 보이게) */
-  className?: string
+  flash: Flash | null
 }
 
-/** 화면 아래쪽에 잠깐 뜨는 안내. 화면 읽기 도구에도 읽힌다 */
-export function FlashMessage({ message, className }: FlashMessageProps) {
+/**
+ * 토스트. 하단 가운데, 하단 바(탭·버튼 바)가 있으면 그 위에 뜬다.
+ * 띄울 높이는 --toast-offset (index.css 의 data-bottom-bar 규칙) + 홈 바 높이.
+ * 화면 읽기 도구에도 읽힌다
+ */
+export function FlashMessage({ flash }: FlashMessageProps) {
   return (
     <div
       aria-live="polite"
-      className={cn('pointer-events-none fixed inset-x-0 z-20 mx-auto flex w-full max-w-[480px] justify-center px-5', className)}
+      className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--toast-offset)+env(safe-area-inset-bottom))] z-20 mx-auto flex w-full max-w-[480px] justify-center px-5"
     >
-      {message && (
-        <p className="rounded-full bg-ink px-4 py-2.5 text-body font-medium text-white shadow-segment">{message}</p>
+      {flash && (
+        <p
+          key={flash.id}
+          className="animate-toast-in rounded-full bg-ink px-4 py-2.5 text-body font-medium text-white shadow-segment"
+        >
+          {flash.text}
+        </p>
       )}
     </div>
   )

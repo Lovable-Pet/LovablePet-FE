@@ -92,9 +92,11 @@ export function FilterSheet({ initial, sort, onApply, onClose }: FilterSheetProp
                     )
                   }
                   className={cn(
-                    'flex h-16 flex-col items-center justify-center gap-0.5 rounded-button border',
+                    'flex h-16 flex-col items-center justify-center gap-0.5 rounded-button border transition active:scale-99',
                     'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
-                    selected ? 'border-ink bg-ink text-white' : 'border-line bg-surface text-ink',
+                    selected
+                      ? 'border-ink bg-ink text-white hover:bg-ink-hover'
+                      : 'border-line bg-surface text-ink hover:bg-surface-hover',
                   )}
                 >
                   <span className="text-body-lg font-semibold">{item.label}</span>
@@ -171,7 +173,8 @@ function WeightInput({ label, value, onChange }: WeightInputProps) {
           setLastValue(next)
           onChange(next)
         }}
-        className="w-full min-w-0 flex-1 bg-transparent text-right font-mono text-body-lg font-semibold text-ink outline-none"
+        // 16px: 아이폰에서 입력할 때 화면이 확대되지 않게
+        className="w-full min-w-0 flex-1 bg-transparent text-right font-mono text-emphasis font-semibold text-ink outline-none"
       />
       kg
     </label>
@@ -208,7 +211,7 @@ function OptionGroup({ title, options, selected, onSelect, error, previewCount }
       ) : !options ? (
         <div className="flex flex-wrap gap-2" aria-hidden>
           {Array.from({ length: 6 }, (_, index) => (
-            <span key={index} className="h-10 w-20 animate-pulse rounded-full bg-muted" />
+            <span key={index} className="h-10 w-20 rounded-full skeleton" />
           ))}
         </div>
       ) : (

@@ -27,11 +27,12 @@ export function FavoriteCard({ pet }: FavoriteCardProps) {
 
   return (
     <article className={cn('rounded-card-lg bg-surface p-3', unavailable && 'opacity-72')}>
-      <Link to={`/pets/${pet.id}`} className="flex items-center gap-3.5">
+      <Link to={`/pets/${pet.id}`} className="group flex items-center gap-3.5">
         <PetPhoto
           src={pet.thumbnailUrl}
           alt={`${pet.kindName} 공고 사진`}
           showPlaceholderLabel={false}
+          zoomOnHover
           className="size-22 shrink-0 rounded-button"
         >
           {unavailable && (
@@ -80,15 +81,16 @@ function StatusNote({ children }: { children: string }) {
 
 export function FavoriteCardSkeleton() {
   return (
-    <div className="animate-pulse rounded-card-lg bg-surface p-3" aria-hidden>
+    <div className="rounded-card-lg bg-surface p-3" aria-hidden>
       <div className="flex items-center gap-3.5">
-        <div className="size-22 rounded-button bg-muted" />
+        <div className="size-22 rounded-button skeleton" />
         <div className="flex flex-1 flex-col gap-2">
-          <div className="h-4 w-1/2 rounded bg-muted" />
-          <div className="h-3.5 w-3/4 rounded bg-muted" />
+          <div className="h-4.5 w-1/2 rounded skeleton" />
+          <div className="h-4 w-3/4 rounded skeleton" />
+          <div className="h-3.5 w-1/3 rounded skeleton" />
         </div>
       </div>
-      <div className="mt-3 h-11 rounded-input bg-muted" />
+      <div className="mt-3 h-11 rounded-input skeleton" />
     </div>
   )
 }

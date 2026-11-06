@@ -7,17 +7,17 @@ import { cn } from '../utils/cn'
  */
 export type IconButtonVariant = 'ghost' | 'floating' | 'outline'
 
-/** sm 40 (카드 위 찜) / md 44 (최소 터치 영역) / lg 52 (주 버튼 옆) */
+/** sm 40 (카드 위 찜, 터치 영역은 44로 넓힌다) / md 44 (최소 터치 영역) / lg 52 (주 버튼 옆) */
 export type IconButtonSize = 'sm' | 'md' | 'lg'
 
 const variantClasses: Record<IconButtonVariant, string> = {
-  ghost: 'rounded-input bg-transparent',
-  floating: 'rounded-full bg-white/92',
-  outline: 'border border-line bg-surface',
+  ghost: 'rounded-input bg-transparent hover:bg-muted',
+  floating: 'rounded-full bg-white/92 hover:bg-white',
+  outline: 'border border-line bg-surface hover:bg-surface-hover',
 }
 
 const sizeClasses: Record<IconButtonSize, string> = {
-  sm: 'size-10',
+  sm: 'size-10 touch-target',
   md: 'size-11',
   lg: 'size-13',
 }
@@ -41,7 +41,8 @@ export const iconButtonStyles = ({
   className,
 }: IconButtonStyleOptions = {}) =>
   cn(
-    'inline-flex shrink-0 items-center justify-center',
+    // group: 안의 화살표가 호버 때 움직일 수 있게 (뒤로 ← 2px)
+    'group inline-flex shrink-0 items-center justify-center transition active:scale-99',
     color,
     'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
     'disabled:pointer-events-none disabled:opacity-45',

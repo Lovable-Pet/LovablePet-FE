@@ -7,7 +7,7 @@ import { cn } from '../utils/cn'
  */
 export type ChipVariant = 'filter' | 'accent'
 
-/** md 40 알약 / sm 30 작은 칩 (적용된 필터 표시) */
+/** md 40 알약 / sm 30 작은 칩 (적용된 필터 표시, 터치 영역은 44로 넓힌다) */
 export type ChipSize = 'md' | 'sm'
 
 export interface ChipProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -21,17 +21,17 @@ export interface ChipProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const sizeClasses: Record<ChipSize, string> = {
   md: 'h-10 gap-1.5 rounded-full px-3.5 text-body',
-  sm: 'h-7.5 gap-1 rounded-chip px-2.5 text-label',
+  sm: 'h-7.5 gap-1 rounded-chip px-2.5 text-label touch-target',
 }
 
 const selectedClasses: Record<ChipVariant, string> = {
-  filter: 'border-ink bg-ink text-white font-medium',
-  accent: 'border-accent-line bg-accent-soft text-accent-ink font-semibold',
+  filter: 'border-ink bg-ink text-white font-medium hover:bg-ink-hover',
+  accent: 'border-accent-line bg-accent-soft text-accent-ink font-semibold hover:bg-accent-soft-hover',
 }
 
 const unselectedClasses: Record<ChipVariant, string> = {
-  filter: 'border-line bg-surface text-ink-secondary font-medium',
-  accent: 'border-line bg-surface text-ink-secondary font-semibold',
+  filter: 'border-line bg-surface text-ink-secondary font-medium hover:bg-surface-hover',
+  accent: 'border-line bg-surface text-ink-secondary font-semibold hover:bg-surface-hover',
 }
 
 export function Chip({
@@ -49,7 +49,7 @@ export function Chip({
       type={type}
       aria-pressed={selected}
       className={cn(
-        'inline-flex shrink-0 items-center border whitespace-nowrap',
+        'inline-flex shrink-0 items-center border whitespace-nowrap transition active:scale-99',
         'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
         'disabled:pointer-events-none disabled:opacity-45',
         sizeClasses[size],

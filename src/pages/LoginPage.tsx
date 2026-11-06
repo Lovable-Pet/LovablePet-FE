@@ -69,7 +69,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-[480px] flex-col bg-canvas">
+    <div className="mx-auto flex min-h-dvh w-full max-w-[480px] flex-col bg-canvas pt-[env(safe-area-inset-top)]">
       <AuthHeader kind="close" fallback="/" />
 
       <div className="px-6 pt-3">
@@ -116,9 +116,12 @@ export function LoginPage() {
         </form>
       </div>
 
-      <div className="mt-auto flex justify-center gap-1.5 px-6 pt-8 pb-8 text-body text-ink-tertiary">
+      <div className="mt-auto flex justify-center gap-1.5 px-6 pt-8 pb-[calc(32px+env(safe-area-inset-bottom))] text-body text-ink-tertiary">
         처음이신가요?
-        <Link to={withRedirect('/signup', redirect)} className="font-semibold text-accent">
+        <Link
+          to={withRedirect('/signup', redirect)}
+          className="font-semibold text-accent touch-target hover:underline hover:underline-offset-3"
+        >
           회원가입
         </Link>
       </div>

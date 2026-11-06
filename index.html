@@ -2,7 +2,15 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      viewport-fit=cover: 노치·홈 바 영역까지 그리고 env(safe-area-inset-*)로 피한다
+      interactive-widget=resizes-content: 안드로이드 크롬에서 키보드가 뜨면 화면 높이를 줄여 하단 고정 요소가 키보드 위로 온다
+      확대는 막지 않는다 (접근성)
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>LovablePet</title>
   </head>
   <body>

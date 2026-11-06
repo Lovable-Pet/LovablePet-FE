@@ -35,7 +35,7 @@ export function AdminPetsPage() {
     const next = new URLSearchParams(searchParams)
     if (value) next.set(key, value)
     else next.delete(key)
-    setSearchParams(next, { replace: true })
+    setSearchParams(next, { replace: true, preventScrollReset: true })
   }
 
   if (isForbidden(list.error) || isForbidden(attempts.error)) return <AdminForbidden />
@@ -234,9 +234,9 @@ function SkeletonRow() {
   return (
     <tr aria-hidden>
       <td colSpan={6} className="border-b border-line-subtle px-4 py-3">
-        <div className="flex animate-pulse items-center gap-3">
-          <div className="size-12 rounded-button-sm bg-muted" />
-          <div className="h-4 w-1/3 rounded bg-muted" />
+        <div className="flex items-center gap-3">
+          <div className="size-12 rounded-button-sm skeleton" />
+          <div className="h-4 w-1/3 rounded skeleton" />
         </div>
       </td>
     </tr>
@@ -279,7 +279,8 @@ function SelectBox({ label, value, onChange, children }: SelectBoxProps) {
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="bg-transparent text-body font-semibold text-ink outline-none"
+        // 모바일은 16px (아이폰 입력 확대 방지), 태블릿부터 14px
+        className="bg-transparent text-emphasis font-semibold text-ink outline-none tablet:text-body"
       >
         {children}
       </select>

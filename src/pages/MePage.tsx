@@ -33,7 +33,7 @@ function Guest() {
       </Link>
       <Link
         to="/signup?redirect=%2Fme"
-        className="mt-3.5 inline-block text-body text-ink-secondary underline underline-offset-3"
+        className="mt-3.5 inline-block text-body text-ink-secondary underline underline-offset-3 touch-target hover:text-ink"
       >
         아이디로 회원가입
       </Link>
@@ -73,14 +73,17 @@ function SignedIn({ isAdmin }: { isAdmin: boolean }) {
 
       <Link
         to="/favorites"
-        className="flex h-15 items-center justify-between rounded-card-lg bg-surface px-5 text-body-lg font-medium"
+        className="group flex h-15 items-center justify-between rounded-card-lg bg-surface px-5 text-body-lg font-medium transition hover:bg-surface-hover active:scale-99"
       >
         찜한 아이 보기
-        <ChevronRight className="size-4.5 text-ink-caption" strokeWidth={2} aria-hidden />
+        <ForwardIcon className="text-ink-caption" />
       </Link>
 
       {isAdmin && (
-        <Link to="/admin" className="flex items-center gap-3.5 rounded-card-lg bg-ink px-5 py-4 text-white">
+        <Link
+          to="/admin"
+          className="group flex items-center gap-3.5 rounded-card-lg bg-ink px-5 py-4 text-white transition hover:bg-ink-hover active:scale-99"
+        >
           <Badge tone="measure" size="sm">
             관리자
           </Badge>
@@ -88,7 +91,7 @@ function SignedIn({ isAdmin }: { isAdmin: boolean }) {
             <span className="block text-body-lg font-semibold">관리자 화면</span>
             <span className="mt-0.5 block text-label text-on-dark-secondary">AR 모델 만들기 · 생성 기록</span>
           </span>
-          <ChevronRight className="size-4.5 text-on-dark-secondary" strokeWidth={2} aria-hidden />
+          <ForwardIcon className="text-on-dark-secondary" />
         </Link>
       )}
 
@@ -102,5 +105,16 @@ function SignedIn({ isAdmin }: { isAdmin: boolean }) {
         {loggingOut ? '로그아웃하는 중…' : '로그아웃'}
       </Button>
     </>
+  )
+}
+
+/** 앞으로 화살표. 감싼 링크에 마우스를 올리면 진행 방향(오른쪽)으로 2px */
+function ForwardIcon({ className }: { className: string }) {
+  return (
+    <ChevronRight
+      className={`size-4.5 shrink-0 transition group-hover:translate-x-0.5 ${className}`}
+      strokeWidth={2}
+      aria-hidden
+    />
   )
 }

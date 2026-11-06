@@ -23,7 +23,7 @@ export function PhotoGallery({ photoUrls, alt, children }: PhotoGalleryProps) {
       <ul
         onScroll={onScroll}
         aria-label="공고 사진"
-        className="flex h-full snap-x snap-mandatory overflow-x-auto no-scrollbar"
+        className="flex h-full snap-x snap-mandatory overflow-x-auto overscroll-x-contain no-scrollbar"
       >
         {photos.map((src, photoIndex) => (
           <li key={src ?? 'placeholder'} className="h-full w-full shrink-0 snap-start">

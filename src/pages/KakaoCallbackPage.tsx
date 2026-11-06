@@ -45,7 +45,7 @@ export function KakaoCallbackPage() {
         : '잠시 후 다시 시도해 주세요.'
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-[480px] flex-col justify-center bg-canvas px-4">
+    <div className="mx-auto flex min-h-dvh w-full max-w-[480px] flex-col justify-center bg-canvas px-4 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       {failed ? (
         <StateView
           tone={denied ? 'empty' : 'error'}

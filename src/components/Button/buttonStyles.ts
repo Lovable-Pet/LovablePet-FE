@@ -27,16 +27,17 @@ const sizeClasses: Record<ButtonSize, string> = {
   xs: 'h-9 px-3.5 rounded-button-sm text-label',
 }
 
+/** hover: 는 마우스 기기에서만 동작한다 (Tailwind v4 는 @media (hover: hover) 안에 넣는다) */
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-white',
-  dark: 'bg-ink text-white',
-  soft: 'bg-muted text-ink',
-  outline: 'border border-line bg-surface text-ink',
-  'outline-strong': 'border border-ink bg-surface text-ink',
-  'outline-subtle': 'border border-line bg-transparent text-ink-secondary',
-  measure: 'bg-measure text-ink font-bold',
-  'accent-soft': 'bg-accent-soft text-accent-ink',
-  kakao: 'bg-kakao text-kakao-ink',
+  primary: 'bg-accent text-white hover:bg-accent-hover',
+  dark: 'bg-ink text-white hover:bg-ink-hover',
+  soft: 'bg-muted text-ink hover:bg-muted-hover',
+  outline: 'border border-line bg-surface text-ink hover:bg-surface-hover',
+  'outline-strong': 'border border-ink bg-surface text-ink hover:bg-surface-hover',
+  'outline-subtle': 'border border-line bg-transparent text-ink-secondary hover:bg-muted',
+  measure: 'bg-measure text-ink font-bold hover:bg-measure-hover',
+  'accent-soft': 'bg-accent-soft text-accent-ink hover:bg-accent-soft-hover',
+  kakao: 'bg-kakao text-kakao-ink hover:bg-kakao-hover',
 }
 
 export interface ButtonStyleOptions {
@@ -54,7 +55,8 @@ export const buttonStyles = ({
   className,
 }: ButtonStyleOptions = {}) =>
   cn(
-    'inline-flex shrink-0 items-center justify-center gap-2 font-semibold whitespace-nowrap transition-opacity',
+    // 누르면 살짝 작아진다 (scale .99, fast 200ms)
+    'inline-flex shrink-0 items-center justify-center gap-2 font-semibold whitespace-nowrap transition active:scale-99',
     'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
     'disabled:pointer-events-none disabled:opacity-45 aria-disabled:pointer-events-none aria-disabled:opacity-45',
     sizeClasses[size],

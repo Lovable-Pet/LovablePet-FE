@@ -24,7 +24,8 @@ export function AuthHeader({ kind, title, fallback }: AuthHeaderProps) {
         {kind === 'close' ? (
           <X className="size-5.5" strokeWidth={2} aria-hidden />
         ) : (
-          <ChevronLeft className="size-5.5" strokeWidth={2} aria-hidden />
+          // 마우스를 올리면 뒤쪽(왼쪽)으로 2px
+          <ChevronLeft className="size-5.5 transition group-hover:-translate-x-0.5" strokeWidth={2} aria-hidden />
         )}
       </IconButton>
       {title && <h1 className="text-subtitle font-bold">{title}</h1>}

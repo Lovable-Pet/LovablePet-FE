@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { ChevronLeft, Info, Share } from 'lucide-react'
+import { ChevronLeft, Info, Phone, Share } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { ApiError } from '../apis/apiError'
 import type { PetDetail } from '../apis/dto/pet.dto'
@@ -92,6 +92,7 @@ function PetDetailView({ pet, onBack }: { pet: PetDetail; onBack: () => void }) 
   const badge = adoptionBadgeOf(adoption, pet.processState)
   const weight = formatWeight(pet.weightKg)
   const similarSize = similarSizeLinkOf(pet.weightKg)
+  const canPlaceAr = pet.model !== null && pet.weightKg !== null
   const showFlash = useFlash()
 
   const share = async () => {
@@ -151,11 +152,12 @@ function PetDetailView({ pet, onBack }: { pet: PetDetail; onBack: () => void }) 
   ]
 
   return (
-    <div className="mx-auto min-h-dvh w-full max-w-[480px] bg-canvas pb-28">
+    <div className="mx-auto min-h-dvh w-full max-w-[480px] bg-canvas pb-[calc(112px+env(safe-area-inset-bottom))]">
       <PhotoGallery photoUrls={pet.photoUrls} alt={`${pet.kindName} 공고 사진`}>
-        <div className="absolute inset-x-2 top-2 flex justify-between">
+        {/* 사진은 노치 밑까지 깔고 버튼만 피한다 */}
+        <div className="absolute inset-x-2 top-[calc(8px+env(safe-area-inset-top))] flex justify-between">
           <IconButton variant="floating" aria-label="뒤로" onClick={onBack}>
-            <ChevronLeft className="size-5.5" strokeWidth={2} aria-hidden />
+            <BackIcon />
           </IconButton>
           <IconButton variant="floating" aria-label="공유" onClick={share}>
             <Share className="size-5" strokeWidth={2} aria-hidden />
@@ -214,7 +216,11 @@ function PetDetailView({ pet, onBack }: { pet: PetDetail; onBack: () => void }) 
         </p>
       </aside>
 
-      <div className="fixed inset-x-0 bottom-0 z-10 mx-auto flex w-full max-w-[480px] gap-2 border-t border-line bg-surface px-4 pt-3 pb-[calc(28px+env(safe-area-inset-bottom))]">
+      <div
+        // 토스트가 이 바 위에 뜨게 (index.css --toast-offset)
+        data-bottom-bar="action"
+        className="fixed inset-x-0 bottom-0 z-10 mx-auto flex w-full max-w-[480px] gap-2 border-t border-line bg-surface px-4 pt-3 pb-[calc(28px+env(safe-area-inset-bottom))]"
+      >
         <FavoriteButton petId={pet.id} favorited={pet.favorited} variant="outline" size="lg" />
         {adoption === 'CLOSED' ? (
           similarSize ? (
@@ -230,13 +236,21 @@ function PetDetailView({ pet, onBack }: { pet: PetDetail; onBack: () => void }) 
           )
         ) : (
           <>
-            <a href={toTelHref(pet.careTel)} className={buttonStyles({ variant: 'soft', className: 'flex-1' })}>
-              보호소 문의
+            <a
+              href={toTelHref(pet.careTel)}
+              className={buttonStyles({
+                variant: 'soft',
+                // 360px 보다 좁으면(최소 320) AR 버튼 글자가 들어가도록 전화 아이콘만 남긴다
+                className: canPlaceAr ? 'flex-1 max-[359px]:w-13 max-[359px]:flex-none max-[359px]:px-0' : 'flex-1',
+              })}
+            >
+              {canPlaceAr && <Phone className="hidden size-5 max-[359px]:block" strokeWidth={2} aria-hidden />}
+              <span className={canPlaceAr ? 'max-[359px]:sr-only' : undefined}>보호소 문의</span>
             </a>
-            {pet.model && pet.weightKg !== null && (
+            {canPlaceAr && (
               <Link
                 to={`/pets/${pet.id}/ar`}
-                className={buttonStyles({ variant: 'primary', className: 'flex-[1.4]' })}
+                className={buttonStyles({ variant: 'primary', className: 'flex-[1.4] max-[359px]:px-3' })}
               >
                 우리 집에 놓아 보기
               </Link>
@@ -248,13 +262,24 @@ function PetDetailView({ pet, onBack }: { pet: PetDetail; onBack: () => void }) 
   )
 }
 
+/** 뒤로 화살표. 버튼에 마우스를 올리면 뒤쪽(왼쪽)으로 2px */
+function BackIcon() {
+  return (
+    <ChevronLeft
+      className="size-5.5 transition group-hover:-translate-x-0.5"
+      strokeWidth={2}
+      aria-hidden
+    />
+  )
+}
+
 /** 오류·없는 공고일 때도 뒤로 갈 수 있게 */
 function DetailShell({ onBack, children }: { onBack: () => void; children: ReactNode }) {
   return (
-    <div className="mx-auto min-h-dvh w-full max-w-[480px] bg-canvas">
+    <div className="mx-auto min-h-dvh w-full max-w-[480px] bg-canvas pt-[env(safe-area-inset-top)]">
       <div className="px-2 pt-2">
         <IconButton aria-label="뒤로" onClick={onBack}>
-          <ChevronLeft className="size-5.5" strokeWidth={2} aria-hidden />
+          <BackIcon />
         </IconButton>
       </div>
       <div className="px-4 pt-10">{children}</div>
@@ -265,13 +290,13 @@ function DetailShell({ onBack, children }: { onBack: () => void; children: React
 function DetailSkeleton() {
   return (
     <div className="mx-auto min-h-dvh w-full max-w-[480px] bg-canvas" aria-busy="true" aria-label="공고 불러오는 중">
-      <div className="h-90 animate-pulse bg-muted" />
-      <div className="flex animate-pulse flex-col gap-3 px-5 pt-5">
-        <div className="h-6.5 w-40 rounded-badge bg-muted" />
-        <div className="h-8 w-48 rounded bg-muted" />
-        <div className="h-5 w-64 rounded bg-muted" />
+      <div className="h-90 skeleton" />
+      <div className="flex flex-col gap-3 px-5 pt-5">
+        <div className="h-6.5 w-40 rounded-badge skeleton" />
+        <div className="h-8 w-48 rounded skeleton" />
+        <div className="h-5 w-64 rounded skeleton" />
       </div>
-      <div className="mx-4 mt-5 h-80 animate-pulse rounded-sheet bg-muted" />
+      <div className="mx-4 mt-5 h-80 rounded-sheet skeleton" />
     </div>
   )
 }

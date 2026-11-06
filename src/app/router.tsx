@@ -14,43 +14,50 @@ import { AdminPetsPage } from '../pages/admin/AdminPetsPage'
 import { RequireAdmin } from './guards/RequireAdmin'
 import { RequireAuth } from './guards/RequireAuth'
 import { AdminLayout } from './layouts/AdminLayout'
+import { RootLayout } from './layouts/RootLayout'
 import { TabLayout } from './layouts/TabLayout'
 
 export const router = createBrowserRouter([
   {
-    element: <TabLayout />,
-    errorElement: <NotFoundPage />,
+    // 스크롤 복원·키보드 높이 (모든 화면 공통)
+    element: <RootLayout />,
     children: [
-      { index: true, element: <BrowsePage /> },
       {
-        path: 'favorites',
-        element: (
-          <RequireAuth>
-            <FavoritesPage />
-          </RequireAuth>
-        ),
+        element: <TabLayout />,
+        errorElement: <NotFoundPage />,
+        children: [
+          { index: true, element: <BrowsePage /> },
+          {
+            path: 'favorites',
+            element: (
+              <RequireAuth>
+                <FavoritesPage />
+              </RequireAuth>
+            ),
+          },
+          { path: 'me', element: <MePage /> },
+        ],
       },
-      { path: 'me', element: <MePage /> },
+      { path: 'pets/:petId', element: <PetDetailPage /> },
+      // AR(6단계)은 대기 중. 상세의 '우리 집에 놓아 보기'를 누르면 안내만 보인다
+      { path: 'pets/:petId/ar', element: <ArPendingPage /> },
+      { path: 'login', element: <LoginPage /> },
+      { path: 'signup', element: <SignUpPage /> },
+      { path: 'oauth/kakao', element: <KakaoCallbackPage /> },
+      {
+        path: 'admin',
+        element: (
+          <RequireAdmin>
+            <AdminLayout />
+          </RequireAdmin>
+        ),
+        children: [
+          { index: true, element: <AdminPetsPage /> },
+          { path: 'pets/:petId/model', element: <AdminCreatePage /> },
+          { path: 'models', element: <AdminAttemptsPage /> },
+        ],
+      },
+      { path: '*', element: <NotFoundPage /> },
     ],
   },
-  { path: 'pets/:petId', element: <PetDetailPage /> },
-  // AR(6단계)은 대기 중. 상세의 '우리 집에 놓아 보기'를 누르면 안내만 보인다
-  { path: 'pets/:petId/ar', element: <ArPendingPage /> },
-  { path: 'login', element: <LoginPage /> },
-  { path: 'signup', element: <SignUpPage /> },
-  { path: 'oauth/kakao', element: <KakaoCallbackPage /> },
-  {
-    path: 'admin',
-    element: (
-      <RequireAdmin>
-        <AdminLayout />
-      </RequireAdmin>
-    ),
-    children: [
-      { index: true, element: <AdminPetsPage /> },
-      { path: 'pets/:petId/model', element: <AdminCreatePage /> },
-      { path: 'models', element: <AdminAttemptsPage /> },
-    ],
-  },
-  { path: '*', element: <NotFoundPage /> },
 ])

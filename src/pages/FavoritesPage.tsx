@@ -6,14 +6,17 @@ import { useAuth } from '../features/auth/useAuth'
 import { FavoriteCard, FavoriteCardSkeleton } from '../features/favorite/components/FavoriteCard'
 import { useFavoriteList } from '../features/favorite/queries'
 import { LoadMore } from '../components/LoadMore/LoadMore'
+import { useEntranceStagger } from '../hooks/useEntranceStagger'
 
 /** 찜한 아이 (RequireAuth 안에서만 보인다) */
 export function FavoritesPage() {
   const { isLoggedIn } = useAuth()
   const list = useFavoriteList(isLoggedIn)
 
-  const pets = list.data?.pages.flatMap((page) => page.items) ?? []
-  const total = list.data?.pages[0]?.totalElements
+  const pages = list.data?.pages ?? []
+  const pets = pages.flatMap((page) => page.items)
+  const total = pages[0]?.totalElements
+  const entrance = useEntranceStagger(pages.length, 'favorites')
 
   return (
     <div className="pb-6">
@@ -61,11 +64,16 @@ export function FavoritesPage() {
         ) : (
           <>
             <ul className="flex flex-col gap-3">
-              {pets.map((pet) => (
-                <li key={pet.id}>
-                  <FavoriteCard pet={pet} />
-                </li>
-              ))}
+              {pages.flatMap((page, pageIndex) =>
+                page.items.map((pet, index) => {
+                  const enter = entrance(pageIndex, index)
+                  return (
+                    <li key={pet.id} className={enter?.className} style={enter?.style}>
+                      <FavoriteCard pet={pet} />
+                    </li>
+                  )
+                }),
+              )}
             </ul>
             <LoadMore
               hasNextPage={list.hasNextPage}

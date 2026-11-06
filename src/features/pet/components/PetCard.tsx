@@ -17,8 +17,13 @@ export function PetCard({ pet }: PetCardProps) {
 
   return (
     <div className="relative">
-      <Link to={`/pets/${pet.id}`} className="flex flex-col gap-2">
-        <PetPhoto src={pet.thumbnailUrl} alt={`${pet.kindName} 공고 사진`} className="aspect-square rounded-card">
+      <Link to={`/pets/${pet.id}`} className="group flex flex-col gap-2 transition active:scale-99">
+        <PetPhoto
+          src={pet.thumbnailUrl}
+          alt={`${pet.kindName} 공고 사진`}
+          zoomOnHover
+          className="aspect-square rounded-card"
+        >
           {pet.hasModel && (
             <Badge tone="measure" size="sm" className="absolute bottom-2 left-2">
               <Box className="size-3" strokeWidth={2.4} aria-hidden />
@@ -42,10 +47,14 @@ export function PetCard({ pet }: PetCardProps) {
 
 export function PetCardSkeleton() {
   return (
-    <div className="flex animate-pulse flex-col gap-2" aria-hidden>
-      <div className="aspect-square rounded-card bg-muted" />
-      <div className="h-4 w-2/3 rounded bg-muted" />
-      <div className="h-3.5 w-full rounded bg-muted" />
+    // 실제 카드와 같은 크기·위치·모서리 (사진 정사각형 + 글 세 줄)
+    <div className="flex flex-col gap-2" aria-hidden>
+      <div className="aspect-square rounded-card skeleton" />
+      <div className="flex flex-col gap-1 py-0.5">
+        <div className="h-4.5 w-2/3 rounded skeleton" />
+        <div className="h-4 w-full rounded skeleton" />
+        <div className="h-3.5 w-1/2 rounded skeleton" />
+      </div>
     </div>
   )
 }

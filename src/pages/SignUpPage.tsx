@@ -115,7 +115,7 @@ export function SignUpPage() {
   }[check]
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-[480px] flex-col bg-canvas">
+    <div className="mx-auto flex min-h-dvh w-full max-w-[480px] flex-col bg-canvas pt-[env(safe-area-inset-top)]">
       <AuthHeader kind="back" title="회원가입" fallback={withRedirect('/login', redirect)} />
 
       <form id="signup-form" onSubmit={submit} noValidate className="flex flex-col gap-5 px-6 pt-4">
@@ -167,7 +167,7 @@ export function SignUpPage() {
         />
       </form>
 
-      <div className="mt-auto px-6 pt-8 pb-8">
+      <div className="mt-auto px-6 pt-8 pb-[calc(32px+env(safe-area-inset-bottom))]">
         {formError && (
           <p role="alert" className="mb-3 text-center text-label text-danger">
             {formError}

@@ -66,13 +66,16 @@ export function AdminCreatePage() {
 
   return (
     <div>
-      <Link to="/admin" className="inline-flex h-9 items-center gap-1 text-body text-ink-tertiary">
-        <ChevronLeft className="size-4.5" strokeWidth={2} aria-hidden />
+      <Link
+        to="/admin"
+        className="group inline-flex h-11 items-center gap-1 text-body text-ink-tertiary transition hover:text-ink"
+      >
+        <ChevronLeft className="size-4.5 transition group-hover:-translate-x-0.5" strokeWidth={2} aria-hidden />
         AR 모델 만들기 목록
       </Link>
 
       {detail.isPending ? (
-        <div className="mt-2 h-9 w-72 animate-pulse rounded bg-muted" aria-busy="true" aria-label="공고 불러오는 중" />
+        <div className="mt-2 h-9 w-72 rounded skeleton" aria-busy="true" aria-label="공고 불러오는 중" />
       ) : (
         <PetHeading pet={detail.data} />
       )}
@@ -86,7 +89,7 @@ export function AdminCreatePage() {
           remaining={remaining}
         />
       ) : (
-        <div className="mt-5 h-80 animate-pulse rounded-card-lg bg-muted" aria-busy="true" aria-label="불러오는 중" />
+        <div className="mt-5 h-80 rounded-card-lg skeleton" aria-busy="true" aria-label="불러오는 중" />
       )}
     </div>
   )
