@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { ChevronLeft, Info, Phone, Share } from 'lucide-react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useParams } from 'react-router'
 import { ApiError } from '../apis/apiError'
 import type { PetDetail } from '../apis/dto/pet.dto'
 import { Badge, type BadgeTone } from '../components/Badge/Badge'
@@ -16,6 +16,7 @@ import { InNoticeBanner, SizeCard } from '../features/pet/components/detail/Size
 import { similarSizeLinkOf } from '../features/pet/browseQuery'
 import { usePetDetail } from '../features/pet/queries'
 import { useFlash } from '../app/flash'
+import { useGoBack } from '../hooks/useGoBack'
 import {
   adoptionStateOf,
   formatAge,
@@ -31,16 +32,6 @@ const adoptionBadgeOf = (state: AdoptionState, processState: string): { label: s
   if (state === 'ADOPTABLE') return { label: '지금 입양할 수 있어요', tone: 'success' }
   if (state === 'IN_NOTICE') return { label: '공고 기간 중', tone: 'warning' }
   return { label: isMetFamily(processState) ? '입양 완료' : '보호 종료', tone: 'closed' }
-}
-
-/** 앱 안에서 들어왔으면 뒤로, 주소로 바로 들어왔으면 둘러보기로 */
-function useGoBack() {
-  const navigate = useNavigate()
-  return () => {
-    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
-    if (idx > 0) navigate(-1)
-    else navigate('/')
-  }
 }
 
 export function PetDetailPage() {
