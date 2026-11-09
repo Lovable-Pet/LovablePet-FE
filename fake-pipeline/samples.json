@@ -1,0 +1,65 @@
+[
+ {
+  "desertionNo": "441407202600741",
+  "kindName": "진도견",
+  "weightKg": 25.0,
+  "coatColor": "크림색",
+  "withersM": 0.541
+ },
+ {
+  "desertionNo": "447510202600669",
+  "kindName": "믹스견",
+  "weightKg": 15.0,
+  "coatColor": "황갈색",
+  "withersM": 0.457
+ },
+ {
+  "desertionNo": "444461202600256",
+  "kindName": "진도견",
+  "weightKg": 15.0,
+  "coatColor": "갈색",
+  "withersM": 0.457
+ },
+ {
+  "desertionNo": "413587202600172",
+  "kindName": "믹스견",
+  "weightKg": 5.69,
+  "coatColor": "갈색&흰색",
+  "withersM": 0.331
+ },
+ {
+  "desertionNo": "441399202601337",
+  "kindName": "믹스견",
+  "weightKg": 18.0,
+  "coatColor": "검정색",
+  "withersM": 0.485
+ },
+ {
+  "desertionNo": "441554202601431",
+  "kindName": "진도견",
+  "weightKg": 7.0,
+  "coatColor": "흑갈색",
+  "withersM": 0.354
+ },
+ {
+  "desertionNo": "447508202601188",
+  "kindName": "진도견",
+  "weightKg": 19.4,
+  "coatColor": "호반색(호랑이무늬)",
+  "withersM": 0.497
+ },
+ {
+  "desertionNo": "427342202600461",
+  "kindName": "믹스견",
+  "weightKg": 16.0,
+  "coatColor": "회색",
+  "withersM": 0.467
+ },
+ {
+  "desertionNo": "441383202600291",
+  "kindName": "믹스견",
+  "weightKg": 15.0,
+  "coatColor": "흑백",
+  "withersM": 0.457
+ }
+]
