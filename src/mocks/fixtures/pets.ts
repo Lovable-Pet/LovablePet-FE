@@ -1,4 +1,6 @@
 import type { PetDetail, PetSummary } from '../../apis/dto/pet.dto'
+import { sampleModelFor } from './sampleModels'
+import { samplePets } from './samplePets'
 
 // MSW 목업 데이터. 백엔드 응답 모양 그대로, 화면 상태별로 한 마리씩 둔다
 // 1: 성견, 모델 있음 (기본 흐름)
@@ -7,7 +9,8 @@ import type { PetDetail, PetSummary } from '../../apis/dto/pet.dto'
 // 4: 체중 원문을 숫자로 못 바꿈 → 모델을 만들 수 없음
 // 5: 공고 기간 중 (보호중이지만 adoptable=false, 목록에는 안 나옴)
 // 6: 입양 완료 (찜 목록에서만 보임)
-const glb = (desertionNo: string) => `/models/${desertionNo}/${desertionNo}-mock.glb`
+// 7~: 이름 없는 개 26마리, 201~209: AI 저장소의 AR 샘플 9마리 (samplePets)
+// 모델은 체중이 가장 가까운 진도 샘플의 GLB 를 쓴다 (public/mock/models, docs/mock-models.md)
 
 export const petDetails: PetDetail[] = [
   {
@@ -35,8 +38,7 @@ export const petDetails: PetDetail[] = [
     specialMark: '사람을 잘 따르고 순함. 목줄을 한 채로 발견됨',
     photoUrls: [],
     model: {
-      glbUrl: glb('448567202600101'),
-      withersM: 0.48,
+      ...sampleModelFor(14),
       template: 'jindo',
       behavior: { tapAnimation: 'tail_wag', playbackRate: 1 },
     },
@@ -67,8 +69,7 @@ export const petDetails: PetDetail[] = [
     specialMark: '형제견 3마리와 함께 구조',
     photoUrls: [],
     model: {
-      glbUrl: glb('448567202600102'),
-      withersM: 0.36,
+      ...sampleModelFor(6.5),
       template: 'jindo_puppy',
       behavior: { tapAnimation: 'tail_wag', playbackRate: 1.2 },
     },
@@ -181,8 +182,7 @@ export const petDetails: PetDetail[] = [
     specialMark: '활발함',
     photoUrls: [],
     model: {
-      glbUrl: glb('448567202600106'),
-      withersM: 0.39,
+      ...sampleModelFor(9.8),
       template: 'jindo',
       behavior: { tapAnimation: 'tail_wag', playbackRate: 1 },
     },
@@ -252,8 +252,7 @@ const generatedPets: PetDetail[] = Array.from({ length: 26 }, (_, index) => {
     photoUrls: Array.from({ length: index % 4 }, (_, photoIndex) => `/mock/photos/${id}-${photoIndex}.jpg`),
     model: hasModel
       ? {
-          glbUrl: glb(desertionNo),
-          withersM: Number((0.18 + Math.cbrt(weightKg) * 0.13).toFixed(2)),
+          ...sampleModelFor(weightKg),
           template,
           behavior: { tapAnimation: 'tail_wag', playbackRate: 1 },
         }
@@ -262,7 +261,7 @@ const generatedPets: PetDetail[] = Array.from({ length: 26 }, (_, index) => {
   }
 })
 
-petDetails.push(...generatedPets)
+petDetails.push(...generatedPets, ...samplePets)
 
 export const toSummary = (pet: PetDetail): PetSummary => ({
   id: pet.id,

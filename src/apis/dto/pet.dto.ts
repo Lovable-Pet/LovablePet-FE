@@ -32,7 +32,7 @@ export interface PetSummary {
 }
 
 export interface PetModelBehavior {
-  /** 탭했을 때 재생할 GLB 애니메이션 (idle, tail_wag) */
+  /** 탭했을 때 한 번 재생하고 대기 루프로 돌아갈 GLB 애니메이션 (보통 tail_wag) */
   tapAnimation: string
   /** AnimationMixer.timeScale */
   playbackRate: number
@@ -42,6 +42,8 @@ export interface PetModelBehavior {
 export interface PetModelView {
   /** API 주소 기준 경로 (예: /models/{desertionNo}/{file}.glb). resolveModelUrl 로 절대 주소로 바꿔 쓴다 */
   glbUrl: string
+  /** 아이폰 Quick Look 용 USDZ (대기 루프 하나만 들어 있음). 없으면 null. glbUrl 과 같은 기준의 경로 */
+  usdzUrl: string | null
   /** 체고(m). 표시용 — GLB 에 이미 미터 단위로 적용돼 있어 AR 에서 크기를 다시 조정하지 않는다 */
   withersM: number
   /** jindo, jindo_puppy, maltese, toypoodle, chihuahua, retriever */

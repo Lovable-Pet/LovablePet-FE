@@ -8,6 +8,7 @@ import type {
 } from '../../apis/dto/admin.dto'
 import type { ApiFailResponse, ApiSuccessResponse } from '../../apis/dto/common.dto'
 import { petDetails } from '../fixtures/pets'
+import { sampleModelFor } from '../fixtures/sampleModels'
 import { roleOf } from '../utils'
 
 const now = () => new Date().toISOString().slice(0, 19)
@@ -58,7 +59,10 @@ const settle = (attempt: PetModelAttempt) => {
   if (attempt.status !== 'PENDING' || Date.now() - Date.parse(attempt.createdAt) < MOCK_GENERATION_MS) return attempt
   Object.assign(attempt, {
     status: 'DONE',
-    glbUrl: `/models/${attempt.jobId.split('-')[0]}/${attempt.jobId}.glb`,
+    // 진짜는 /models/{유기번호}/{jobId}.glb. 목업은 체중이 가장 가까운 진도 샘플 GLB 를 쓴다
+    glbUrl: sampleModelFor(attempt.weightKg).glbUrl,
+    // 상세·AR 의 체고와 맞춘다 (모델이 샘플 크기라서)
+    withersM: sampleModelFor(attempt.weightKg).withersM,
     tapAnimation: 'tail_wag',
     playbackRate: 1,
     costUsd: 0.075,
@@ -68,8 +72,7 @@ const settle = (attempt: PetModelAttempt) => {
   const pet = petDetails.find((item) => item.id === attempt.petId)
   if (pet && !pet.model && attempt.glbUrl && attempt.withersM !== null)
     pet.model = {
-      glbUrl: attempt.glbUrl,
-      withersM: attempt.withersM,
+      ...sampleModelFor(attempt.weightKg),
       template: attempt.template ?? 'jindo',
       behavior: { tapAnimation: 'tail_wag', playbackRate: 1 },
     }
