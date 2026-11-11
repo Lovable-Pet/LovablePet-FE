@@ -1,2 +1,4 @@
+# 설치 스크립트 실행 허용 목록. esbuild 는 플랫폼별 바이너리를 optional 패키지로 받아서 스크립트가 없어도 된다
+# (빈칸으로 두면 CI 의 pnpm install 이 ERR_PNPM_IGNORED_BUILDS 로 멈춘다)
 allowBuilds:
-  esbuild: set this to true or false
+  esbuild: false
