@@ -29,3 +29,6 @@ storybook-static
 # AR 목업 모델·공고 사진 (약 165MB, AI 저장소에서 받음. docs/mock-models.md)
 public/mock/models/
 public/mock/samples/
+
+# 버셀 프로젝트 연결 정보 (vercel link)
+.vercel
