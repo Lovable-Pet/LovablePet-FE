@@ -44,6 +44,18 @@ export default defineConfig(({ mode }) => {
           fs.rmSync(path.join(outDir, 'mock'), { recursive: true, force: true });
         },
       },
+      {
+        // 개발 서버는 .usdz 의 Content-Type 을 비워 보낸다. 아이폰 Quick Look 이 알아보도록 붙인다
+        // (백엔드 /models 는 model/vnd.usdz+zip 으로 준다)
+        name: 'usdz-content-type',
+        apply: 'serve',
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.url?.split('?')[0].endsWith('.usdz')) res.setHeader('Content-Type', 'model/vnd.usdz+zip');
+            next();
+          });
+        },
+      },
     ],
     server: {
       proxy: {
