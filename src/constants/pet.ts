@@ -39,4 +39,4 @@ export const TEMPLATE_LABEL: Record<string, string> = {
   retriever: '리트리버형',
 }
 
-export const PUPPY_NOTICE = '지금 크기예요. 아직 어린 아이라 다 자라면 크게 달라질 수 있어요.'
+export const PUPPY_NOTICE = '지금 크기예요. 아직 어린 유기견이라 다 자라면 크게 달라질 수 있어요.'

@@ -75,7 +75,7 @@ export function LoginPage() {
       <div className="px-6 pt-3">
         <Logo size={40} />
         <h1 className="mt-4 text-headline font-bold">
-          마음에 남는 아이를
+          마음에 남는 유기견을
           <br />
           찜해 두세요
         </h1>

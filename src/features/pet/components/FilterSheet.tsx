@@ -61,11 +61,11 @@ export function FilterSheet({ initial, sort, onApply, onClose }: FilterSheetProp
       <div className="flex flex-col gap-7 px-5 pt-1 pb-6">
         <section className="flex items-center justify-between gap-4 rounded-card border border-notice-line bg-notice p-4">
           <div>
-            <p className="text-body-lg font-semibold">AR로 볼 수 있는 아이만</p>
+            <p className="text-body-lg font-semibold">AR로 볼 수 있는 유기견만</p>
             <p className="mt-1 text-label text-ink-tertiary">3D 모델이 준비돼 우리 집에 바로 놓아 볼 수 있어요</p>
           </div>
           <Toggle
-            aria-label="AR로 볼 수 있는 아이만"
+            aria-label="AR로 볼 수 있는 유기견만"
             checked={draft.hasModel === true}
             onChange={(checked) => update({ hasModel: checked || undefined })}
           />

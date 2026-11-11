@@ -26,7 +26,7 @@ function Guest() {
   return (
     <section className="rounded-card-lg bg-surface px-5 py-7 text-center">
       <Heart className="mx-auto mb-3 size-11 text-accent" strokeWidth={1.6} aria-hidden />
-      <p className="text-emphasis font-semibold">로그인하면 찜한 아이를 모아 볼 수 있어요</p>
+      <p className="text-emphasis font-semibold">로그인하면 찜한 유기견을 모아 볼 수 있어요</p>
       <p className="mt-1.5 mb-5 text-body text-ink-tertiary">둘러보기와 AR은 로그인 없이도 쓸 수 있어요.</p>
       <Link to="/login?redirect=%2Fme" className={buttonStyles({ variant: 'dark', fullWidth: true })}>
         로그인
@@ -75,7 +75,7 @@ function SignedIn({ isAdmin }: { isAdmin: boolean }) {
         to="/favorites"
         className="group flex h-15 items-center justify-between rounded-card-lg bg-surface px-5 text-body-lg font-medium transition hover:bg-surface-hover active:scale-99"
       >
-        찜한 아이 보기
+        찜한 유기견 보기
         <ForwardIcon className="text-ink-caption" />
       </Link>
 

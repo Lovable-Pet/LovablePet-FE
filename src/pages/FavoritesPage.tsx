@@ -22,13 +22,13 @@ export function FavoritesPage() {
     <div className="pb-6">
       <header className="flex h-14 items-center px-5">
         <h1 className="text-title font-bold">
-          찜한 아이{' '}
+          찜한 유기견{' '}
           {total !== undefined && <span className="font-mono text-accent">{total.toLocaleString()}</span>}
         </h1>
       </header>
 
       <p className="mx-5 mt-1 mb-4 text-body text-ink-tertiary">
-        찜해 둔 아이를 우리 집에 다시 놓아 보고,
+        찜해 둔 유기견을 우리 집에 다시 놓아 보고,
         <br />
         마음이 정해지면 보호소에 연락해 보세요.
       </p>
@@ -53,11 +53,11 @@ export function FavoritesPage() {
           />
         ) : pets.length === 0 ? (
           <StateView
-            title="아직 찜한 아이가 없어요"
-            description="마음에 남는 아이를 찜해 두면 여기서 다시 볼 수 있어요."
+            title="아직 찜한 유기견이 없어요"
+            description="마음에 남는 유기견을 찜해 두면 여기서 다시 볼 수 있어요."
             action={
               <Link to="/" className={buttonStyles({ variant: 'dark', size: 'md' })}>
-                아이들 둘러보기
+                유기견 둘러보기
               </Link>
             }
           />

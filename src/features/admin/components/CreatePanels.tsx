@@ -60,7 +60,7 @@ export function CreateFlow({ pet, photoIndex, lastAttempt, remaining }: CreateFl
       ) : (
         <>
           <p className="text-body text-ink-secondary">
-            고른 사진으로 이 아이를 만들 수 있는지 먼저 확인해요. 사진이 거부되거나 체형이 템플릿과 다르면 여기서 알려
+            고른 사진으로 이 유기견을 만들 수 있는지 먼저 확인해요. 사진이 거부되거나 체형이 템플릿과 다르면 여기서 알려
             드려요.
           </p>
           {fit.isError && checkedIndex === photoIndex && (
@@ -157,7 +157,7 @@ function FitResult({
           </ul>
         )}
         <div className="rounded-input border border-notice-line bg-notice px-3.5 py-3 text-label text-notice-ink">
-          만들어도 이 아이처럼 보이지 않을 수 있어요. 앱에서는 정상 모델과 똑같이 보이니, 다른 사진이 있으면 먼저 확인해
+          만들어도 이 유기견처럼 보이지 않을 수 있어요. 앱에서는 정상 모델과 똑같이 보이니, 다른 사진이 있으면 먼저 확인해
           보세요.
         </div>
         <label className="flex min-h-11 cursor-pointer items-center gap-2.5 text-body">
@@ -281,7 +281,7 @@ export function DonePanel({ pet, attempt }: { pet: PetDetail; attempt: PetModelA
     <>
       <div className="rounded-button border border-success-border bg-success-subtle p-5 text-success-strong">
         <p className="text-emphasis font-bold">완성했어요</p>
-        <p className="mt-1 text-body">이제 앱에서 이 아이를 AR로 볼 수 있어요.</p>
+        <p className="mt-1 text-body">이제 앱에서 이 유기견을 AR로 볼 수 있어요.</p>
         <dl className="mt-3.5 grid grid-cols-[96px_minmax(0,1fr)] gap-y-1.5 text-body">
           <dt>체고</dt>
           <dd className="font-mono">{withersM !== null ? `${toWithersCm(withersM)}cm` : '-'}</dd>
@@ -303,7 +303,7 @@ export function DonePanel({ pet, attempt }: { pet: PetDetail; attempt: PetModelA
           앱에서 보기
         </Link>
         <Link to="/admin" className={buttonStyles({ variant: 'outline', size: 'md' })}>
-          다음 아이 만들기
+          다음 유기견 만들기
         </Link>
       </div>
     </>

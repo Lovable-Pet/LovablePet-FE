@@ -279,12 +279,12 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           </div>
           <p aria-live="polite" className="text-center text-body text-on-dark [text-shadow:0_1px_3px_rgb(0_0_0/0.6)]">
             {arStatus === 'session-started'
-              ? '바닥을 천천히 비춰 주세요. 바닥을 찾으면 아이가 놓여요'
+              ? '바닥을 천천히 비춰 주세요. 바닥을 찾으면 유기견이 놓여요'
               : hasCommands
                 ? `${POSE_LABEL[pose]} · 명령을 눌러 보세요`
                 : inAr
                   ? '아래 버튼을 누르면 꼬리를 흔들어요'
-                  : '아이를 탭하면 꼬리를 흔들어요'}
+                  : '유기견을 탭하면 꼬리를 흔들어요'}
           </p>
           {isLikelyPuppy(pet.birthYear) && (
             <p className="flex max-w-[340px] gap-1.5 rounded-input bg-dark-notice px-3 py-2 text-label text-dark-notice-ink">
@@ -387,7 +387,7 @@ function CommandBar({
   onTap: () => void
 }) {
   return (
-    <div role="group" aria-label="아이에게 명령하기" className="pointer-events-auto -mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none]">
+    <div role="group" aria-label="유기견에게 명령하기" className="pointer-events-auto -mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none]">
       {hasCommands &&
         COMMANDS.map((command) => (
           <ChipButton
@@ -455,9 +455,9 @@ function ArGuide({
   onPreview: () => void
 }) {
   const steps = [
-    ['밝은 곳에서 바닥을 비춰요', '아이가 지낼 거실이나 방의 넓고 평평한 바닥이 좋아요.'],
-    ['아이가 바닥에 놓여요', '실제 크기로 고정돼서 가까이 가도 멀어져도 크기는 그대로예요.'],
-    ['아이에게 말을 걸어 보세요', '앉아, 엎드려 같은 버튼을 누르면 움직여요. 소파 옆, 현관 앞에도 놓아 보세요.'],
+    ['밝은 곳에서 바닥을 비춰요', '유기견이 지낼 거실이나 방의 넓고 평평한 바닥이 좋아요.'],
+    ['유기견이 바닥에 놓여요', '실제 크기로 고정돼서 가까이 가도 멀어져도 크기는 그대로예요.'],
+    ['유기견에게 말을 걸어 보세요', '앉아, 엎드려 같은 버튼을 누르면 움직여요. 소파 옆, 현관 앞에도 놓아 보세요.'],
   ] as const
 
   return (

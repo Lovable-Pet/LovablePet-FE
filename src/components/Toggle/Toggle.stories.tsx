@@ -13,7 +13,7 @@ type Story = StoryObj<typeof Toggle>
 
 function ControlledToggle() {
   const [checked, setChecked] = useState(true)
-  return <Toggle checked={checked} onChange={setChecked} aria-label="AR로 볼 수 있는 아이만" />
+  return <Toggle checked={checked} onChange={setChecked} aria-label="AR로 볼 수 있는 유기견만" />
 }
 
 export const Playground: Story = {

@@ -38,7 +38,7 @@ function RealSizeCard({ pet, model, weightKg }: { pet: PetDetail; model: PetMode
     <section aria-labelledby="size-title" className="rounded-sheet bg-ink p-5 text-white">
       <div className="flex items-center justify-between">
         <h2 id="size-title" className="text-body-lg font-semibold text-on-dark">
-          이 아이의 실제 크기
+          이 유기견의 실제 크기
         </h2>
         <span className="text-caption text-on-dark-tertiary">지금 체중 기준</span>
       </div>
@@ -103,7 +103,7 @@ function NoModelCard({ pet, weightKg }: { pet: PetDetail; weightKg: number }) {
   return (
     <section aria-labelledby="size-title" className="rounded-sheet border border-line bg-surface p-5">
       <h2 id="size-title" className="text-body-lg font-semibold">
-        이 아이의 크기
+        이 유기견의 크기
       </h2>
       <dl className="mt-3">
         <dt className="text-label text-ink-caption">체중</dt>
@@ -113,7 +113,7 @@ function NoModelCard({ pet, weightKg }: { pet: PetDetail; weightKg: number }) {
         </dd>
       </dl>
       <p className="mt-3 text-label text-ink-tertiary">
-        이 아이는 아직 AR로 볼 수 없어요. 체중만으로는 실제 크기가 잘 그려지지 않으니, 보호소에 키를 물어보는 것도
+        이 유기견은 아직 AR로 볼 수 없어요. 체중만으로는 실제 크기가 잘 그려지지 않으니, 보호소에 키를 물어보는 것도
         좋아요.
       </p>
       <div className="mt-3.5 grid grid-cols-2 gap-2">
@@ -124,7 +124,7 @@ function NoModelCard({ pet, weightKg }: { pet: PetDetail; weightKg: number }) {
           to={`/?${toSearchParams({ hasModel: true, sort: 'NEWEST' })}`}
           className={buttonStyles({ variant: 'dark', size: 'md' })}
         >
-          AR 가능한 아이 보기
+          AR 가능한 유기견 보기
         </Link>
       </div>
     </section>
@@ -136,7 +136,7 @@ function NoWeightCard({ pet }: { pet: PetDetail }) {
   return (
     <section aria-labelledby="size-title" className="rounded-sheet border border-line bg-surface p-5">
       <h2 id="size-title" className="text-body-lg font-semibold">
-        이 아이의 실제 크기
+        이 유기견의 실제 크기
       </h2>
       <p className="mt-2.5 text-body-lg text-ink-secondary">공고에 체중이 적혀 있지 않아 실제 크기를 계산할 수 없어요.</p>
       <p className="mt-1.5 text-label text-ink-caption">
@@ -157,12 +157,12 @@ function ClosedCard({ pet }: { pet: PetDetail }) {
   return (
     <section className="rounded-sheet border border-line bg-surface p-5 text-center">
       <h2 className="text-subtitle font-bold">
-        {isMetFamily(pet.processState) ? '이 아이는 가족을 만났어요' : '보호가 끝난 아이예요'}
+        {isMetFamily(pet.processState) ? '이 유기견은 가족을 만났어요' : '보호가 끝난 유기견이에요'}
       </h2>
       <p className="mt-1.5 text-body text-ink-tertiary">
         찜 목록에는 그대로 남아 있어요.
         <br />
-        비슷한 크기의 다른 아이를 만나 보세요.
+        비슷한 크기의 다른 유기견을 만나 보세요.
       </p>
     </section>
   )

@@ -21,7 +21,7 @@ export function WaitingRail({ pets, isLoading, animationKey }: WaitingRailProps)
     <section aria-labelledby="waiting-title" className="mt-6">
       <div className="flex items-baseline justify-between px-5">
         <h2 id="waiting-title" className="text-section font-bold">
-          오래 기다린 아이들
+          오래 기다린 유기견
         </h2>
         <span className="text-label text-ink-caption">공고가 오래된 순</span>
       </div>

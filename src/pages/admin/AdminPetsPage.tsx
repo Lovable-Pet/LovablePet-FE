@@ -55,7 +55,7 @@ export function AdminPetsPage() {
     <div className="flex flex-col gap-5">
       <AdminPageHeader
         title="AR 모델 만들기"
-        description="아직 AR 모델이 없는 입양 가능한 아이들이에요. 오래 기다린 아이부터 보여 드려요."
+        description="아직 AR 모델이 없는 입양 가능한 유기견이에요. 오래 기다린 유기견부터 보여 드려요."
         aside={
           <>
             {usage && <UsageMeter todayCount={usage.todayCount} dailyLimit={usage.dailyLimit} showRemaining />}
@@ -125,13 +125,13 @@ export function AdminPetsPage() {
           }
         />
       ) : !list.isPending && pets.length === 0 ? (
-        <StateView title="AR 모델이 없는 아이가 없어요" description="모든 아이가 AR로 보여요. 필터를 바꿔 보세요." />
+        <StateView title="AR 모델이 없는 유기견이 없어요" description="모든 유기견이 AR로 보여요. 필터를 바꿔 보세요." />
       ) : (
         <div className="relative overflow-x-auto rounded-card border border-line bg-surface">
           <table className="w-full min-w-[820px] border-collapse text-body">
             <thead>
               <tr className="text-left text-label text-ink-tertiary">
-                {['아이', '체중', '사진', '기다린 날', '최근 시도'].map((heading) => (
+                {['유기견', '체중', '사진', '기다린 날', '최근 시도'].map((heading) => (
                   <th key={heading} scope="col" className="border-b border-line-subtle px-4 py-3 font-medium">
                     {heading}
                   </th>

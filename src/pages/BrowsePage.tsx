@@ -88,7 +88,7 @@ export function BrowsePage() {
           onClick={() => setQuery({ ...query, hasModel: query.hasModel ? undefined : true })}
         >
           <Box className="size-4" strokeWidth={2} aria-hidden />
-          AR로 볼 수 있는 아이
+          AR로 볼 수 있는 유기견
         </Chip>
       </div>
       {appliedChips.length > 0 && (
@@ -108,7 +108,7 @@ export function BrowsePage() {
       <section aria-labelledby="list-title" className="mt-6 px-5 pb-24">
         <div className="flex items-center justify-between">
           <p id="list-title" className="text-body text-ink-secondary">
-            입양 가능한 아이{' '}
+            입양 가능한 유기견{' '}
             <strong className="font-mono font-semibold text-ink">{total?.toLocaleString() ?? '–'}</strong>
             마리
           </p>
@@ -125,7 +125,7 @@ export function BrowsePage() {
           ) : list.isError ? (
             <StateView
               tone="error"
-              title="아이들을 불러오지 못했어요"
+              title="유기견 목록을 불러오지 못했어요"
               description="잠시 후 다시 시도해 주세요."
               action={
                 <Button variant="outline" size="md" onClick={() => list.refetch()}>
@@ -135,7 +135,7 @@ export function BrowsePage() {
             />
           ) : pets.length === 0 ? (
             <StateView
-              title="조건에 맞는 아이가 없어요"
+              title="조건에 맞는 유기견이 없어요"
               description="필터를 바꾸거나 초기화해 보세요."
               action={
                 <Button variant="dark" size="md" onClick={() => setQuery({ sort: query.sort })}>

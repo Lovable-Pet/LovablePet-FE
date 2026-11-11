@@ -60,7 +60,7 @@ function ArToggle() {
   return (
     <Chip variant="accent" selected={on} onClick={() => setOn((prev) => !prev)}>
       <Box className="size-4" aria-hidden />
-      AR로 볼 수 있는 아이
+      AR로 볼 수 있는 유기견
     </Chip>
   )
 }

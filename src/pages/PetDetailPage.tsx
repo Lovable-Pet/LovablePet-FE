@@ -217,12 +217,12 @@ function PetDetailView({ pet, onBack }: { pet: PetDetail; onBack: () => void }) 
           similarSize ? (
             <Link to={similarSize.to} className={buttonStyles({ variant: 'dark', className: 'flex-1' })}>
               <span>
-                체중 <span className="font-mono">{similarSize.range}</span> 아이들 보기
+                체중 <span className="font-mono">{similarSize.range}</span> 유기견 보기
               </span>
             </Link>
           ) : (
             <Link to="/" className={buttonStyles({ variant: 'soft', className: 'flex-1' })}>
-              다른 아이들 둘러보기
+              다른 유기견 둘러보기
             </Link>
           )
         ) : (
