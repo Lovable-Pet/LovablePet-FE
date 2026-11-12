@@ -11,7 +11,13 @@ import { buttonStyles } from '../components/Button/buttonStyles'
 import { StateView } from '../components/StateView/StateView'
 import { cn } from '../components/utils/cn'
 import { PUPPY_NOTICE, SEX_LABEL } from '../constants/pet'
+import { ArFloorGate } from '../features/ar/components/ArFloorGate'
+import { ArHitDebug } from '../features/ar/components/ArHitDebug'
+import { ArTouchLayer } from '../features/ar/components/ArTouchLayer'
+import { HoldRing } from '../features/ar/components/HoldRing'
+import { VoiceCommandButton } from '../features/ar/components/VoiceCommandButton'
 import { COMMANDS, DogAnimator, POSE_LABEL, type CommandId, type Pose } from '../features/ar/dogAnimator'
+import { LONG_PRESS_MS, useLongPress, type LongPressHandlers } from '../features/ar/useLongPress'
 import { PetPhoto } from '../features/pet/components/PetPhoto'
 import { usePetDetail } from '../features/pet/queries'
 import { useGoBack } from '../hooks/useGoBack'
@@ -193,13 +199,33 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     animatorRef.current?.tap()
   }
 
+  // 개를 누른 채 3초 → 짖기. 그 뒤 손을 떼도 탭 반응은 내지 않는다 (onPointerUp)
+  const dogHold = useLongPress<ReactPointerEvent>({
+    enabled: hasCommands,
+    slopPx: TAP_SLOP_PX,
+    canStart: (event) => {
+      const mv = mvRef.current
+      return event.target === mv && !!mv?.positionAndNormalFromPoint(event.clientX, event.clientY)
+    },
+    onLongPress: () => runCommand('bark'),
+  })
+  // AR 안에서 개를 직접 누를 수 없을 때 대신: 꼬리 흔들기 칩을 3초 누르면 짖기
+  const tapChipHold = useLongPress<ReactPointerEvent>({
+    enabled: hasCommands && inAr,
+    slopPx: TAP_SLOP_PX,
+    canStart: (event) => !(event.target as Element).closest('button')?.disabled,
+    onLongPress: () => runCommand('bark'),
+  })
+
   // 화면 안 3D 에서 개를 탭하면 반응한다. 카메라를 돌린 드래그는 빼고, 개를 맞혔을 때만
   const onPointerDown = (event: ReactPointerEvent) => {
     pointerStart.current = { x: event.clientX, y: event.clientY }
+    dogHold.handlers.onPointerDown(event)
   }
   const onPointerUp = (event: ReactPointerEvent) => {
     const start = pointerStart.current
     pointerStart.current = null
+    if (dogHold.handlers.onPointerUp(event)) return
     const mv = mvRef.current
     if (!start || !mv || event.target !== mv) return
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > TAP_SLOP_PX) return
@@ -247,6 +273,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         style={{ '--poster-color': 'transparent' } as CSSProperties}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
+        onPointerMove={dogHold.handlers.onPointerMove}
+        onPointerCancel={dogHold.handlers.onPointerCancel}
       >
         {/* 기본 AR 버튼은 숨기고 아래 '우리 집 바닥에 놓기' 로 연다 */}
         <span slot="ar-button" hidden />
@@ -254,6 +282,17 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         <span slot="progress-bar" hidden />
 
         {/* 아래는 WebXR 화면에도 그대로 겹쳐 보인다 (model-viewer 의 DOM overlay) */}
+        {/* AR: 바닥에 내려앉을 때까지 개를 숨기고, 이동·회전 터치를 막는다. 오버레이보다 앞에 둬야 칩·버튼이 위에 온다 */}
+        <ArFloorGate mvRef={mvRef} />
+        <ArTouchLayer
+          active={inAr}
+          dogReady={arStatus === 'object-placed'}
+          holdEnabled={hasCommands}
+          slopPx={TAP_SLOP_PX}
+          mvRef={mvRef}
+          onTap={tapReaction}
+          onLongPress={() => runCommand('bark')}
+        />
         <div
           ref={topOverlayRef}
           className="pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center gap-2 px-3 pt-[calc(12px+env(safe-area-inset-top))]">
@@ -302,6 +341,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         <div
           ref={bottomOverlayRef}
           className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col gap-3 px-4 pb-[calc(20px+env(safe-area-inset-bottom))]">
+          {hasCommands && <VoiceCommandButton inAr={inAr} onCommand={runCommand} />}
           <CommandBar
             hasCommands={hasCommands}
             pose={pose}
@@ -309,6 +349,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
             disabled={!loaded}
             onCommand={runCommand}
             onTap={tapReaction}
+            tapHold={tapChipHold.handlers}
           />
 
           {!inAr && (
@@ -352,6 +393,9 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
               )
             ))}
         </div>
+
+        <HoldRing at={dogHold.press ?? tapChipHold.press} durationMs={LONG_PRESS_MS} />
+        {import.meta.env.DEV && <ArHitDebug mvRef={mvRef} arStatus={arStatus} />}
       </model-viewer>
 
       {showGuide && (
@@ -378,6 +422,7 @@ function CommandBar({
   disabled,
   onCommand,
   onTap,
+  tapHold,
 }: {
   hasCommands: boolean
   pose: Pose
@@ -385,6 +430,8 @@ function CommandBar({
   disabled: boolean
   onCommand: (id: CommandId) => void
   onTap: () => void
+  /** 꼬리 흔들기 칩을 길게 누를 때 */
+  tapHold: LongPressHandlers<ReactPointerEvent>
 }) {
   return (
     <div role="group" aria-label="유기견에게 명령하기" className="pointer-events-auto -mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none]">
@@ -399,10 +446,12 @@ function CommandBar({
             {command.label}
           </ChipButton>
         ))}
-      {/* 꼬리 흔들기는 서 있을 때만 자연스럽다 */}
-      <ChipButton highlighted={false} disabled={disabled || pose !== 'stand'} onClick={onTap}>
-        꼬리 흔들기
-      </ChipButton>
+      {/* 꼬리 흔들기는 서 있을 때만 자연스럽다. AR 에서는 3초 누르면 짖는다 */}
+      <span className="contents" {...tapHold}>
+        <ChipButton highlighted={false} disabled={disabled || pose !== 'stand'} onClick={onTap}>
+          꼬리 흔들기
+        </ChipButton>
+      </span>
     </div>
   )
 }
