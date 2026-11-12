@@ -20,7 +20,7 @@ const ASK_MIC_IN_AR = true
  * 아이폰·아이패드에서도 마이크 버튼을 보일지. 실제 기기에서 음성 인식을 확인하기 전까지 숨긴다.
  * iOS 의 브라우저는 Chrome 도 사파리 엔진이라 모두 같이 숨는다
  */
-const VOICE_ON_IOS = false
+const VOICE_ON_IOS = true
 
 /** 아이폰·아이패드. 아이패드는 기본(데스크톱 모드)으로 Mac 처럼 보여 터치 수로 가른다 */
 const isIos = () =>
