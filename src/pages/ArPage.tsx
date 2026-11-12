@@ -11,7 +11,9 @@ import { buttonStyles } from '../components/Button/buttonStyles'
 import { StateView } from '../components/StateView/StateView'
 import { cn } from '../components/utils/cn'
 import { PUPPY_NOTICE, SEX_LABEL } from '../constants/pet'
+import { ArFloorGate } from '../features/ar/components/ArFloorGate'
 import { ArHitDebug } from '../features/ar/components/ArHitDebug'
+import { ArTouchLayer } from '../features/ar/components/ArTouchLayer'
 import { HoldRing } from '../features/ar/components/HoldRing'
 import { VoiceCommandButton } from '../features/ar/components/VoiceCommandButton'
 import { COMMANDS, DogAnimator, POSE_LABEL, type CommandId, type Pose } from '../features/ar/dogAnimator'
@@ -280,6 +282,17 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         <span slot="progress-bar" hidden />
 
         {/* 아래는 WebXR 화면에도 그대로 겹쳐 보인다 (model-viewer 의 DOM overlay) */}
+        {/* AR: 바닥에 내려앉을 때까지 개를 숨기고, 이동·회전 터치를 막는다. 오버레이보다 앞에 둬야 칩·버튼이 위에 온다 */}
+        <ArFloorGate mvRef={mvRef} />
+        <ArTouchLayer
+          active={inAr}
+          dogReady={arStatus === 'object-placed'}
+          holdEnabled={hasCommands}
+          slopPx={TAP_SLOP_PX}
+          mvRef={mvRef}
+          onTap={tapReaction}
+          onLongPress={() => runCommand('bark')}
+        />
         <div
           ref={topOverlayRef}
           className="pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center gap-2 px-3 pt-[calc(12px+env(safe-area-inset-top))]">
