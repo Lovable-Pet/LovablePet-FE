@@ -22,6 +22,7 @@ import { PetPhoto } from '../features/pet/components/PetPhoto'
 import { usePetDetail } from '../features/pet/queries'
 import { useGoBack } from '../hooks/useGoBack'
 import { formatWeight, isLikelyPuppy, toWithersCm } from '../utils/pet'
+import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 
 // /pets/:petId/ar — 캔버스 06 AR 시작 안내 → 07·08 실제 크기로 놓기
 //
@@ -79,7 +80,7 @@ export function ArPage() {
       </MessageShell>
     )
   }
-  if (isPending) return <div className="min-h-dvh bg-canvas" aria-busy="true" />
+  if (isPending) return <LoadingScreen description="우리 집에 놓을 준비를 하고 있어요" />
   if (!pet.model) {
     return (
       <MessageShell onBack={goBack}>

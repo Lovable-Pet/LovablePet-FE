@@ -15,6 +15,7 @@ import { RequireAuth } from './guards/RequireAuth'
 import { AdminLayout } from './layouts/AdminLayout'
 import { RootLayout } from './layouts/RootLayout'
 import { TabLayout } from './layouts/TabLayout'
+import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 
 export const router = createBrowserRouter([
   {
@@ -43,7 +44,7 @@ export const router = createBrowserRouter([
         path: 'pets/:petId/ar',
         lazy: () => import('../pages/ArPage').then((m) => ({ Component: m.ArPage })),
         // 주소로 바로 들어와 화면 코드를 받는 동안
-        HydrateFallback: () => <div className="min-h-dvh bg-canvas" aria-busy="true" />,
+        HydrateFallback: () => <LoadingScreen description="AR 화면을 준비하고 있어요" />,
       },
       { path: 'login', element: <LoginPage /> },
       { path: 'signup', element: <SignUpPage /> },

@@ -8,6 +8,7 @@ import { buttonStyles } from '../components/Button/buttonStyles'
 import { StateView } from '../components/StateView/StateView'
 import { AUTH_ERROR } from '../constants/auth'
 import { safeRedirect, withRedirect } from '../features/auth/redirect'
+import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 
 /** 카카오 인가 후 돌아오는 화면 (/oauth/kakao?code=…&state=돌아갈 경로) */
 export function KakaoCallbackPage() {
@@ -58,9 +59,7 @@ export function KakaoCallbackPage() {
           }
         />
       ) : (
-        <p className="text-center text-body text-ink-tertiary" aria-live="polite">
-          카카오로 로그인하는 중…
-        </p>
+        <LoadingScreen title="카카오로 로그인하는 중이에요" className="min-h-0" />
       )}
     </div>
   )

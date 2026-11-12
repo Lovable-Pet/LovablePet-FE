@@ -72,6 +72,23 @@
   animation: shimmer 1.4s linear infinite;
 }
 
+/* 달리는 강아지 (RunningDog). 8칸 스프라이트를 0.68초에 한 바퀴 (한 칸 85ms) */
+.dog-run {
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  animation: dog-run 680ms steps(8) infinite;
+}
+@keyframes dog-run {
+  to {
+    background-position: calc(var(--dog-size) * -8) 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dog-run {
+    animation: none;
+  }
+}
+
 @keyframes shimmer {
   from {
     background-position: 150% 0;
