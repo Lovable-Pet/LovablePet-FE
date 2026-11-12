@@ -16,6 +16,16 @@ import { matchVoiceCommand } from './voiceWords'
  */
 const ASK_MIC_IN_AR = true
 
+/**
+ * 아이폰·아이패드에서도 마이크 버튼을 보일지. 실제 기기에서 음성 인식을 확인하기 전까지 숨긴다.
+ * iOS 의 브라우저는 Chrome 도 사파리 엔진이라 모두 같이 숨는다
+ */
+const VOICE_ON_IOS = false
+
+/** 아이폰·아이패드. 아이패드는 기본(데스크톱 모드)으로 Mac 처럼 보여 터치 수로 가른다 */
+const isIos = () =>
+  /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1)
+
 /** 들은 말·오류를 보이는 시간 */
 const VOICE_FLASH_MS = 2500
 
@@ -79,7 +89,7 @@ function useMicPermission() {
 }
 
 export function useVoiceCommand({ inAr, onCommand }: { inAr: boolean; onCommand: (id: CommandId) => void }) {
-  const [supported] = useState(() => getRecognition() !== undefined)
+  const [supported] = useState(() => getRecognition() !== undefined && (VOICE_ON_IOS || !isIos()))
   const [listening, setListening] = useState(false)
   /** 듣는 중에 들린 말 (중간 결과) */
   const [heard, setHeard] = useState('')
