@@ -4,6 +4,7 @@ import { useEffect, useState, type RefObject } from 'react'
 /** 이벤트가 도착한 곳. model-viewer 면 'mv' (그림자 DOM 안에서 난 이벤트도 mv 로 보인다) */
 const describe = (target: EventTarget | null, mv: Element) => {
   if (target === mv) return 'mv'
+  if (target instanceof HTMLElement && target.dataset.arTouch !== undefined) return 'touch-layer'
   if (!(target instanceof Element)) return String(target)
   const className = typeof target.className === 'string' ? target.className.split(' ')[0] : ''
   return `${target.tagName.toLowerCase()}${className ? `.${className}` : ''}`
@@ -11,7 +12,7 @@ const describe = (target: EventTarget | null, mv: Element) => {
 
 /**
  * 개발 모드에서만 보이는 AR 터치 확인 표시 (ArPage 에서 import.meta.env.DEV 일 때만 그린다).
- * WebXR 화면에서 누르면 pointer 이벤트가 model-viewer 에 도착하는지('→ mv'),
+ * WebXR 화면에서 누르면 pointer 이벤트가 어디에 도착하는지(AR 중에는 '→ touch-layer', 화면 안 3D 는 '→ mv'),
  * positionAndNormalFromPoint 가 그 자리에서 개를 맞히는지(hit/miss)를 보인다.
  * AR 안에서 model-viewer 는 XR 카메라와 window.screen 크기로 계산한다
  */
