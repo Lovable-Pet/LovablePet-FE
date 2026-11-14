@@ -69,6 +69,7 @@ class RecentCounts {
 interface Spot {
   /** 원 중심 = 가운데 광선이 맞은 점 */
   center: Vec3
+  /** floor 또는 raised (lower 는 원 자리로 쓰지 않는다) */
   level: SurfaceLevel
   seenAt: number
 }
@@ -102,6 +103,8 @@ export class PlacementController {
   private spot: Spot | null = null
   private camera: Vec3 | null = null
   private lastHit: SurfaceHit | null = null
+  /** 마지막 가운데 hit 이 바닥에 견줘 어디인지 (수평면이 아니면 null) */
+  private lastLevel: SurfaceLevel | null = null
   private placed: { position: Vec3; yaw: number } | null = null
   private reported: PlacementSnapshot | null = null
   private lastDebugAt = -Infinity
@@ -129,11 +132,9 @@ export class PlacementController {
   /** 화면 탭. 놓을 수 있을 때만 놓고 true. force 면 빨간 원(막힘)에서도 원 자리에 놓는다 (디버그 확인용) */
   place({ force = false }: { force?: boolean } = {}): boolean {
     const { spot } = this
-    const floorY = this.floor.y
     const allowed = this.phase === 'placeable' || (force && this.phase === 'blocked')
-    if (this.stopped || !allowed || !spot || floorY === null) return false
-    // 높은 면에서 강제로 놓으면 원이 있는 그 면 높이에 둔다
-    const y = spot.level === 'raised' ? spot.center.y : floorY
+    const y = spot && this.surfaceY(spot)
+    if (this.stopped || !allowed || !spot || y === null) return false
     const position = { x: spot.center.x, y, z: spot.center.z }
     this.forced = this.phase === 'blocked'
     // 앞쪽이 휴대폰(바닥에 투영한 점)을 향하게. 놓은 뒤에는 다시 계산하지 않아 카메라를 따라 돌지 않는다
@@ -171,16 +172,22 @@ export class PlacementController {
     if (this.stopped) return
     this.camera = frame.camera
     this.lastHit = frame.centerHit
+    // 놓은 뒤에도 바닥 추정은 이어 간다 (다시 놓을 때 쓴다)
+    this.floor.update(frame.time, frame.centerHit, frame.camera)
     if (this.phase !== 'placed') this.track(frame)
     this.debug(frame)
   }
 
   private track(frame: StageFrame) {
     const { time, centerHit } = frame
-    // 수평면만 쓴다. 벽 등을 맞히면 놓친 것과 같다
-    if (centerHit && isHorizontal(centerHit.normal)) {
-      this.floor.observe(centerHit)
-      this.spot = { center: centerHit.position, level: this.floor.levelOf(centerHit.position.y), seenAt: time }
+    // 수평면만 쓴다. 벽 등을 맞히면 놓친 것과 같다.
+    // 확정된 바닥보다 5cm 넘게 낮은 면도 놓친 것으로 본다: 광택 바닥의 반사로 잠깐 잡힌 가짜 면이면 원이 그대로 있고,
+    // 정말 더 낮은 바닥(좌표가 내려앉음, 책상을 먼저 본 경우)이면 바닥 추정이 그 높이로 바뀔 때(약 2초)까지 '바닥 찾는 중'이다.
+    // 믿을 수 없는 높이에 개를 놓지 않는다
+    const level = centerHit && isHorizontal(centerHit.normal) ? this.floor.levelOf(centerHit.position.y) : null
+    this.lastLevel = level
+    if (centerHit && level !== null && level !== 'lower') {
+      this.spot = { center: centerHit.position, level, seenAt: time }
       // hit-test 는 인식한 면만 맞힌다. 그 바닥이 실제로 처음 닿는 면인지 본다
       this.occlusion = this.centerOcclusion.update({
         time,
@@ -197,8 +204,8 @@ export class PlacementController {
       this.centerOcclusion.reset()
     }
 
-    const floorY = this.floor.y
-    if (this.spot?.level === 'floor' && floorY !== null) {
+    const floorY = this.spot && this.spot.level !== 'raised' ? this.surfaceY(this.spot) : null
+    if (this.spot && floorY !== null) {
       const { center } = this.spot
       this.spotReport = this.spotCheck.update(center, floorY)
       const depth =
@@ -237,6 +244,14 @@ export class PlacementController {
     this.phase = phase
     this.blockedBy = blockedBy
     this.report()
+  }
+
+  /**
+   * 원 자리의 바닥 높이. 바닥이면 바닥 추정값(러그 몇 cm 는 바닥에 맞춘다), 높은 면(강제로 놓을 때)은 그 면 높이.
+   * 바닥보다 낮은 면은 원 자리로 쓰지 않아 여기에 오지 않는다
+   */
+  private surfaceY(spot: Spot): number | null {
+    return spot.level === 'floor' ? this.floor.y : spot.center.y
   }
 
   /** 놓았을 때: 검사를 멈추고 기록을 버린다 */
@@ -279,8 +294,8 @@ export class PlacementController {
     const lines = [
       `센서 깊이 ${sensors.depth}${sensors.depthFormat ? ` (${sensors.depthFormat})` : ''} · 특징점 ${sensors.points}`,
       `개 ${meters(size.x)}×${meters(size.y)}×${meters(size.z)} · 원 r ${meters(this.ringRadius)} · 둘레 r ${meters(this.spotCheck.radius)}`,
-      `바닥 ${meters(this.floor.y)} · 맞은 점 ${hit ? `${meters(hit.position.y)} (위 ${hit.normal.y.toFixed(2)})` : '없음'}`,
-      `판정 ${this.phase}${this.blockedBy ? ` (${this.blockedBy})` : ''}${this.spot ? ` · ${this.spot.level}` : ''}`,
+      `바닥 ${meters(this.floor.y)}${this.floor.provisional ? ' (임시)' : ''} · 맞은 점 ${hit ? `${meters(hit.position.y)} (위 ${hit.normal.y.toFixed(2)})` : '없음'}`,
+      `판정 ${this.phase}${this.blockedBy ? ` (${this.blockedBy})` : ''} · 맞은 면 ${this.lastLevel ?? '-'}${this.lastLevel === 'lower' ? ' (바닥보다 낮아 무시)' : ''}`,
     ]
     if (this.placed) {
       const { position, yaw } = this.placed
