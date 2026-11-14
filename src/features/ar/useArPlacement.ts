@@ -1,7 +1,7 @@
 import type { ModelViewerElement } from '@google/model-viewer'
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { ModelViewerArStage } from './modelViewerArStage'
-import { PlacementController, type PlacementPhase } from './placement/placementController'
+import { PlacementController, type BlockReason, type PlacementPhase } from './placement/placementController'
 import { requestDepthWithArSessions } from './xrDepthRequest'
 
 export interface ArPlacement {
@@ -14,6 +14,8 @@ export interface ArPlacement {
   manual: boolean
   /** 바닥(수평면)을 한 번이라도 찾았는지 */
   floorKnown: boolean
+  /** blocked 일 때 까닭 (occluded: 바닥 앞에 실제 물체) */
+  blockedBy: BlockReason | null
   /** ?debug 일 때 바닥 높이·맞은 점·판정·yaw */
   debugLines: string[]
   /** 화면 탭. 놓을 수 있을 때만 놓고 true */
@@ -26,9 +28,10 @@ interface PlacementState {
   phase: PlacementPhase | 'off'
   manual: boolean
   floorKnown: boolean
+  blockedBy: BlockReason | null
 }
 
-const OFF: PlacementState = { phase: 'off', manual: false, floorKnown: false }
+const OFF: PlacementState = { phase: 'off', manual: false, floorKnown: false, blockedBy: null }
 
 /**
  * WebXR(안드로이드 Chrome) AR 에서 개를 사용자가 놓을 때까지 숨기고, 바닥 원을 보이다가 탭하면 놓는다.
@@ -59,7 +62,12 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
     /** 직접 놓기를 못 할 때: 개를 보이고 model-viewer 가 스스로 바닥에 놓게 둔다 */
     const fallBack = () => {
       stop()
-      setState({ phase: mv.getAttribute('ar-status') === 'object-placed' ? 'placed' : 'searching', manual: false, floorKnown: false })
+      setState({
+        phase: mv.getAttribute('ar-status') === 'object-placed' ? 'placed' : 'searching',
+        manual: false,
+        floorKnown: false,
+        blockedBy: null,
+      })
     }
 
     // ar-status 는 model-viewer 가 그 자리에서 바로 보내서, React 상태를 거치지 않고 여기서 받아야 첫 프레임 전에 개를 숨길 수 있다
@@ -75,7 +83,7 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
           return
         }
         const controller = new PlacementController(stage, {
-          onChange: ({ phase, floorKnown }) => setState({ phase, manual: true, floorKnown }),
+          onChange: ({ phase, floorKnown, blockedBy }) => setState({ phase, manual: true, floorKnown, blockedBy }),
           onUnavailable: (reason) => {
             if (import.meta.env.DEV) console.warn('[ar] 직접 놓기를 못 해 자동 착지로 둔다:', reason)
             if (controllerRef.current === controller) fallBack()

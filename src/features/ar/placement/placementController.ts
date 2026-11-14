@@ -1,6 +1,7 @@
 import type { ArStage, StageFrame } from './arStage'
 import { yawToward } from './facing'
 import { FloorEstimate, isHorizontal, type SurfaceLevel } from './floorEstimate'
+import { CenterOcclusion, PerimeterDepth, type DepthCounts, type OcclusionResult } from './occlusion'
 import { SpotCheck, type SpotReport } from './spotCheck'
 import { distanceXZ, type SurfaceHit, type Vec3 } from './types'
 
@@ -9,10 +10,18 @@ import { distanceXZ, type SurfaceHit, type Vec3 } from './types'
  */
 export type PlacementPhase = 'searching' | 'placeable' | 'blocked' | 'placed'
 
+/**
+ * 놓을 수 없는 까닭.
+ * raised: 바닥보다 높은 면 · occluded: 바닥 앞에 실제 물체가 있음 (면으로 인식 안 된 책상·문) · obstacle: 둘레에 장애물
+ */
+export type BlockReason = 'raised' | 'occluded' | 'obstacle'
+
 export interface PlacementSnapshot {
   phase: PlacementPhase
   /** 바닥(수평면)을 한 번이라도 봤는지 */
   floorKnown: boolean
+  /** blocked 일 때 까닭 */
+  blockedBy: BlockReason | null
 }
 
 export interface PlacementControllerOptions {
@@ -38,8 +47,10 @@ interface Spot {
 
 /**
  * AR 배치 흐름. 렌더러는 ArStage 로만 만진다.
- * 1. 개를 숨기고, 매 프레임 화면 가운데 광선이 맞은 수평면에 원을 눕힌다 (바닥보다 5cm 넘게 높으면 놓을 수 없음).
- *    바닥이면 둘레도 본다 (SpotCheck: 둘레에 높은 면·수직면이 확인되면 놓을 수 없음)
+ * 1. 개를 숨기고, 매 프레임 화면 가운데 광선이 맞은 수평면에 원을 눕힌다. 놓을 수 없는 때:
+ *    - 바닥보다 5cm 넘게 높은 면
+ *    - 바닥 hit 앞에 실제 물체가 있음 (CenterOcclusion: 깊이 센서 → 특징점 → 판정 안 함)
+ *    - 둘레에 장애물이 확인됨 (SpotCheck 광선, PerimeterDepth 깊이)
  * 2. place(): 놓을 수 있을 때만 원 중심·바닥 높이에 개를 놓고, 앞쪽이 휴대폰을 향하게 한다. 그 뒤 방향은 고정
  * 3. replace(): 개를 숨기고 1 로 돌아간다
  */
@@ -50,8 +61,13 @@ export class PlacementController {
   private readonly options: PlacementControllerOptions
   private readonly floor = new FloorEstimate()
   private readonly spotCheck: SpotCheck
+  private readonly centerOcclusion = new CenterOcclusion()
+  private readonly perimeterDepth = new PerimeterDepth()
   private spotReport: SpotReport | null = null
+  private occlusion: OcclusionResult | null = null
+  private perimeter: DepthCounts | null = null
   private phase: PlacementPhase = 'searching'
+  private blockedBy: BlockReason | null = null
   private spot: Spot | null = null
   private camera: Vec3 | null = null
   private lastHit: SurfaceHit | null = null
@@ -88,11 +104,11 @@ export class PlacementController {
     // 앞쪽이 휴대폰(바닥에 투영한 점)을 향하게. 놓은 뒤에는 다시 계산하지 않아 카메라를 따라 돌지 않는다
     const yaw = this.camera ? yawToward(position, this.camera) : 0
     this.stage.setRing(this.options.onDebug ? { center: position, radius: this.ringRadius, tone: 'marker' } : null)
-    this.spotCheck.idle()
-    this.spotReport = null
+    this.clearChecks()
     this.stage.placeDog(position, yaw)
     this.placed = { position, yaw }
     this.phase = 'placed'
+    this.blockedBy = null
     this.report()
     return true
   }
@@ -124,50 +140,102 @@ export class PlacementController {
     this.debug(frame)
   }
 
-  private track({ time, centerHit }: StageFrame) {
+  private track(frame: StageFrame) {
+    const { time, centerHit } = frame
     // 수평면만 쓴다. 벽 등을 맞히면 놓친 것과 같다
     if (centerHit && isHorizontal(centerHit.normal)) {
       this.floor.observe(centerHit)
       this.spot = { center: centerHit.position, level: this.floor.levelOf(centerHit.position.y), seenAt: time }
+      // hit-test 는 인식한 면만 맞힌다. 그 바닥이 실제로 처음 닿는 면인지 본다
+      this.occlusion = this.centerOcclusion.update({
+        time,
+        camera: frame.camera,
+        view: frame.view,
+        floorHit: centerHit.position,
+        depth: frame.depth,
+        pointHit: frame.centerPointHit?.position ?? null,
+        sensors: frame.sensors,
+      })
     } else if (this.spot && time - this.spot.seenAt > LOST_GRACE_MS) {
       this.spot = null
+      this.occlusion = null
+      this.centerOcclusion.reset()
     }
+
     const floorY = this.floor.y
     if (this.spot?.level === 'floor' && floorY !== null) {
       this.spotReport = this.spotCheck.update(this.spot.center, floorY)
+      this.perimeter =
+        frame.sensors.depth === 'on'
+          ? this.perimeterDepth.update(this.spot.center, floorY, this.spotCheck.radius, frame.view, frame.depth)
+          : null
     } else {
       this.spotCheck.idle()
+      this.perimeterDepth.reset()
       this.spotReport = null
+      this.perimeter = null
     }
-    const phase: PlacementPhase = !this.spot
-      ? 'searching'
-      : this.spot.level === 'raised' || this.spotReport?.blocked
-        ? 'blocked'
-        : 'placeable'
+
+    const blockedBy: BlockReason | null = !this.spot
+      ? null
+      : this.spot.level === 'raised'
+        ? 'raised'
+        : this.occlusion?.occluded
+          ? 'occluded'
+          : this.spotReport?.blocked || (this.perimeter?.obstacles ?? 0) > 0
+            ? 'obstacle'
+            : null
+    const phase: PlacementPhase = !this.spot ? 'searching' : blockedBy ? 'blocked' : 'placeable'
     this.stage.setRing(
       this.spot && { center: this.spot.center, radius: this.ringRadius, tone: phase === 'placeable' ? 'ok' : 'blocked' },
     )
     this.phase = phase
+    this.blockedBy = blockedBy
     this.report()
   }
 
+  /** 놓았을 때: 검사를 멈추고 기록을 버린다 */
+  private clearChecks() {
+    this.spotCheck.idle()
+    this.perimeterDepth.reset()
+    this.centerOcclusion.reset()
+    this.spotReport = null
+    this.perimeter = null
+    this.occlusion = null
+  }
+
   private report() {
-    const snapshot: PlacementSnapshot = { phase: this.phase, floorKnown: this.floor.y !== null }
+    const snapshot: PlacementSnapshot = {
+      phase: this.phase,
+      floorKnown: this.floor.y !== null,
+      blockedBy: this.blockedBy,
+    }
     const last = this.reported
-    if (last && last.phase === snapshot.phase && last.floorKnown === snapshot.floorKnown) return
+    if (
+      last &&
+      last.phase === snapshot.phase &&
+      last.floorKnown === snapshot.floorKnown &&
+      last.blockedBy === snapshot.blockedBy
+    ) {
+      return
+    }
     this.reported = snapshot
     this.options.onChange(snapshot)
   }
 
-  private debug({ time, camera }: StageFrame) {
+  private debug({ time, camera, sensors, centerPointHit }: StageFrame) {
     const { onDebug } = this.options
     if (!onDebug || time - this.lastDebugAt < DEBUG_INTERVAL_MS) return
     this.lastDebugAt = time
     const hit = this.lastHit
+    const occlusion = this.occlusion
     const lines = [
+      `센서 깊이 ${sensors.depth}${sensors.depthFormat ? ` (${sensors.depthFormat})` : ''} · 특징점 ${sensors.points}`,
       `바닥 ${meters(this.floor.y)} · 맞은 점 ${hit ? `${meters(hit.position.y)} (위 ${hit.normal.y.toFixed(2)})` : '없음'}`,
-      `판정 ${this.phase}${this.spot ? ` · ${this.spot.level}` : ''} · 원 r ${this.ringRadius.toFixed(2)}`,
-      `둘레 r ${this.spotCheck.radius.toFixed(2)} · ${describeSpot(this.spotReport)}`,
+      `판정 ${this.phase}${this.blockedBy ? ` (${this.blockedBy})` : ''}${this.spot ? ` · ${this.spot.level}` : ''} · 원 r ${this.ringRadius.toFixed(2)}`,
+      `거리 바닥 hit ${meters(hit ? distance(camera, hit.position) : null)} · 특징점 hit ${meters(centerPointHit ? distance(camera, centerPointHit.position) : null)}`,
+      `가운데 ${describeOcclusion(occlusion)}`,
+      `둘레 r ${this.spotCheck.radius.toFixed(2)} · 광선 ${describeSpot(this.spotReport)} · 깊이 ${describeCounts(this.perimeter)}`,
     ]
     if (this.placed) {
       const { position, yaw } = this.placed
@@ -180,11 +248,31 @@ export class PlacementController {
   }
 }
 
-const meters = (value: number | null) => (value === null ? '-' : value.toFixed(3))
-const describeSpot = (report: SpotReport | null) => {
-  if (!report) return '검사 안 함'
-  if (report.unavailable) return '검사 못 함 (광선을 못 만듦)'
-  if (!report.fresh) return '광선 만드는 중'
-  return `빈 곳 ${report.clear} · 장애물 ${report.obstacles} · 모름 ${report.unknown}`
-}
+const distance = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
+const meters = (value: number | null) => (value === null ? '-' : value.toFixed(2))
+const signed = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}`
 const degrees = (radians: number) => Math.round((radians * 180) / Math.PI)
+
+const BASIS_LABEL = { depth: '깊이', points: '특징점', none: '판정 안 함' } as const
+
+function describeOcclusion(result: OcclusionResult | null) {
+  if (!result) return '-'
+  if (result.basis === 'none') return '근거 없음 (깊이·특징점 둘 다 못 씀) → 막지 않음'
+  const verdict = result.occluded ? '가림' : '안 가림'
+  const measuredLabel = result.basis === 'depth' ? '실제(축)' : '특징점'
+  const floorLabel = result.basis === 'depth' ? '바닥(축)' : '바닥(광선)'
+  const detail = result.gap === null ? '' : ` · 차이 ${signed(result.gap)} / 여유 ${meters(result.margin)}`
+  return `근거 ${BASIS_LABEL[result.basis]} → ${verdict} · ${measuredLabel} ${meters(result.measured)} · ${floorLabel} ${meters(result.floorDistance)}${detail}`
+}
+
+function describeSpot(report: SpotReport | null) {
+  if (!report) return '안 함'
+  if (report.unavailable) return '못 함'
+  if (!report.fresh) return '만드는 중'
+  return `빈 곳 ${report.clear}·장애물 ${report.obstacles}·모름 ${report.unknown}`
+}
+
+function describeCounts(counts: DepthCounts | null) {
+  if (!counts) return '안 함'
+  return `빈 곳 ${counts.clear}·장애물 ${counts.obstacles}·모름 ${counts.unknown}`
+}

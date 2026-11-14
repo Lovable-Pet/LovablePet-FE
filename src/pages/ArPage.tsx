@@ -45,10 +45,12 @@ const isTouchDevice = () => window.matchMedia('(pointer: coarse)').matches
 const TAP_SLOP_PX = 8
 
 /** AR 에서 개를 놓기 전 위 안내 문구 */
-function placementHint({ phase, manual }: ArPlacement) {
+function placementHint({ phase, manual, blockedBy }: ArPlacement) {
   // model-viewer 기본 흐름(직접 놓기를 못 할 때)은 바닥을 찾으면 스스로 놓인다
   if (!manual) return '바닥을 천천히 비춰 주세요. 바닥을 찾으면 유기견이 놓여요'
   if (phase === 'placeable') return '원을 원하는 곳에 맞추고 화면을 탭하세요'
+  // 면으로 인식되지 않은 책상·문 너머 바닥을 겨눈 때
+  if (phase === 'blocked' && blockedBy === 'occluded') return '앞에 물건이 있어요. 빈 바닥을 비춰 주세요'
   if (phase === 'blocked') return '여기에는 놓을 수 없어요'
   return '휴대폰을 천천히 움직여 바닥을 비춰 주세요'
 }
