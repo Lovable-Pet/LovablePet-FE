@@ -23,11 +23,16 @@ import { viewForward } from './viewProjection'
  */
 export type PlacementPhase = 'preparing' | 'searching' | 'placeable' | 'blocked' | 'placed'
 
-/** moveSteps: 원 단계에서 깊이가 3초 넘게 안 맞음 → 한두 걸음 옆으로 움직이라는 안내 */
-export type PlacementNotice = 'moveSteps'
+/**
+ * moveSteps: 원 단계에서 깊이가 3초 넘게 안 맞음 → 한두 걸음 옆으로 움직이라는 안내 ·
+ * tiltDown: 준비 단계에서 추적·이동은 됐는데 바닥이 2초 넘게 안 보임 (벽·옷만 비춤) → 아래로 기울이라는 안내
+ */
+export type PlacementNotice = 'moveSteps' | 'tiltDown'
 
 /** 원 단계에서 깊이 안 맞음이 이만큼(ms) 이어지면 옆으로 움직이라고 안내한다 */
 export const DEPTH_DRIFT_NOTICE_MS = 3000
+/** 준비 단계에서 추적·이동이 된 뒤 바닥(가운데 광선이 맞은 바닥 높이의 수평면)이 이만큼(ms) 넘게 안 보이면 아래로 기울이라고 안내한다 */
+export const FLOOR_UNSEEN_NOTICE_MS = 2000
 
 /**
  * 놓을 수 없는 까닭.
@@ -141,6 +146,8 @@ export class PlacementController {
   private lastLevel: SurfaceLevel | null = null
   /** 마지막 프레임 시각 (ms) */
   private lastTime = 0
+  /** 가운데 광선이 바닥에 마지막으로 맞은 시각 (ms). 첫 프레임부터 센다 */
+  private floorSeenAt: number | null = null
   private placed: { position: Vec3; yaw: number } | null = null
   private reported: PlacementSnapshot | null = null
   private lastDebugAt = -Infinity
@@ -242,6 +249,7 @@ export class PlacementController {
     const level = centerHit && isHorizontal(centerHit.normal) ? this.floor.classify(centerHit.position.y) : null
     this.lastLevel = level
     const freshHit = centerHit && level !== null && level !== 'lower' ? centerHit : null
+    if (this.floorSeenAt === null || (freshHit && level === 'floor')) this.floorSeenAt = time
     if (freshHit && level) {
       this.spot = { center: freshHit.position, level, seenAt: time }
     } else if (this.spot && time - this.spot.seenAt > LOST_GRACE_MS) {
@@ -342,7 +350,9 @@ export class PlacementController {
       // 추적·이동은 됐는데 바닥 층이 없으면 지금의 '바닥 못 찾음' 안내
       this.phase = readiness.moving && !readiness.floor ? 'searching' : 'preparing'
       this.blockedBy = null
-      this.notice = null
+      // 추적·이동은 됐는데 바닥이 2초 넘게 안 보이면 (벽·옷만 비추는 중) 아래로 기울이라고 안내한다
+      const floorUnseen = this.floorSeenAt !== null && time - this.floorSeenAt > FLOOR_UNSEEN_NOTICE_MS
+      this.notice = readiness.moving && floorUnseen ? 'tiltDown' : null
       this.report()
       return
     }
@@ -409,7 +419,7 @@ export class PlacementController {
     const lines = [
       `센서 깊이 ${sensors.depth}${sensors.depthFormat ? ` (${sensors.depthFormat})` : ''} · 특징점 ${sensors.points}`,
       `깊이 보정 ${describeCalibration(this.calibrationReport, sensors)}`,
-      `준비 ${describeReadiness(this.readinessReport)}`,
+      `준비 ${describeReadiness(this.readinessReport)}${describeFloorUnseen(this.floorSeenAt, time)}`,
       `개 ${meters(size.x)}×${meters(size.y)}×${meters(size.z)} · 원 r ${meters(this.ringRadius)} · 둘레 r ${meters(this.spotCheck.radius)}`,
       `바닥 ${describeFloor(this.floor.status(), time)}`,
       `맞은 점 ${hit ? `${height(hit.position.y)} (위 ${hit.normal.y.toFixed(2)}) · ${describeHitUse(hit, camera)}` : '없음'}`,
@@ -513,6 +523,12 @@ function describeReadiness(report: ReadinessReport | null) {
     ` · b 이동 ${report.moved.toFixed(2)}/${READY_MOVE_M.toFixed(2)}m ${mark(report.moved >= READY_MOVE_M)}` +
     ` · c 바닥 층 ${mark(report.floor)} · d 깊이 보정 ${depth}`
   )
+}
+
+/** 준비 줄 끝: 바닥이 0.5초 넘게 안 보이면 그 시간 (2초 넘으면 아래로 기울이라는 안내가 나온다) */
+function describeFloorUnseen(floorSeenAt: number | null, now: number) {
+  if (floorSeenAt === null || now - floorSeenAt < 500) return ''
+  return ` · 바닥 안 보임 ${((now - floorSeenAt) / 1000).toFixed(1)}/${FLOOR_UNSEEN_NOTICE_MS / 1000}s`
 }
 
 /** 깊이 보정: r=0.74 (안 맞음 → 특징점 사용) · 둘레 같이 어긋남 7/8 · 특징점 일치 · 2.3초째 */

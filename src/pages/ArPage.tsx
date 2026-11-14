@@ -65,8 +65,10 @@ function useLongActive(active: boolean) {
 function placementHint({ phase, manual, blockedBy, notice }: ArPlacement) {
   // model-viewer 기본 흐름(직접 놓기를 못 할 때)은 바닥을 찾으면 스스로 놓인다
   if (!manual) return '바닥을 천천히 비춰 주세요. 바닥을 찾으면 유기견이 놓여요'
+  // 준비 단계에서 움직이기는 했는데 바닥이 계속 안 보일 때 (벽·옷만 비춤)
+  if (notice === 'tiltDown') return '바닥이 보이게 휴대폰을 아래로 기울여 주세요'
   // 준비 단계: 추적·바닥·깊이가 맞춰질 때까지 원을 보이지 않는다
-  if (phase === 'preparing') return '휴대폰을 들고 천천히 좌우로 움직여 주세요'
+  if (phase === 'preparing') return '휴대폰으로 바닥을 비추면서 천천히 좌우로 움직여 주세요'
   // 원 단계에서 깊이가 계속 안 맞으면 자리를 옮기도록
   if (notice === 'moveSteps') return '휴대폰을 들고 한두 걸음 옆으로 움직여 주세요'
   if (phase === 'placeable') return '원을 원하는 곳에 맞추고 화면을 탭하세요'
@@ -400,7 +402,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
               잘 안 되면 AR을 닫았다가 다시 열어 주세요
             </p>
           )}
-          {arLocked && placement.phase === 'preparing' && <MoveSideways />}
+          {arLocked && placement.phase === 'preparing' && placement.notice !== 'tiltDown' && <MoveSideways />}
           {isLikelyPuppy(pet.birthYear) && (
             <p className="flex max-w-[340px] gap-1.5 rounded-input bg-dark-notice px-3 py-2 text-label text-dark-notice-ink">
               <AlertCircle className="mt-0.5 size-4 shrink-0 text-measure" strokeWidth={2} aria-hidden />
