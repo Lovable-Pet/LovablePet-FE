@@ -6,8 +6,11 @@ import type { ModelViewerElement } from '@google/model-viewer'
 //
 // - 자세(루프): standing 서기, sitting 앉기, lying 엎드리기
 // - 전환(1회): sit_down, stand_up, lie_down, get_up. 앞 루프의 첫 프레임에서 시작해 뒤 루프의 첫 프레임에서 끝난다
-// - 묘기(1회): rollover(엎드린 채), play_dead·bark·tail_wag(서서), shake(앉아서, 루프)
+// - 묘기(1회): rollover(엎드린 채), play_dead·bark·tail_wag·head_tilt(서서), shake(앉아서, 루프)
 // - 클립이 idle, tail_wag 뿐인 템플릿은 명령 없이 탭 반응만 쓴다
+// - 반응(1회, 서 있을 때만, 명령이 진행 중이면 무시):
+//   개 탭은 head_tilt(갸우뚱)가 있으면 갸우뚱, 없으면 서버 tapAnimation → tail_wag.
+//   '꼬리 흔들기' 칩은 늘 tail_wag. 음성 명령을 못 알아들으면 head_tilt 가 있을 때만 갸우뚱
 
 export type Pose = 'stand' | 'sit' | 'down'
 
@@ -20,8 +23,10 @@ const MOVES: Record<string, [Pose, Pose]> = {
   lie_down: ['stand', 'down'],
   get_up: ['down', 'stand'],
 }
+/** 갸우뚱. 탭과 음성 실패 반응. standing 첫 프레임에서 시작해 정확히 그 프레임에서 끝난다 */
+const HEAD_TILT = 'head_tilt'
 /** 루프의 첫 프레임에서 정확히 끝나는 클립. 이어지는 루프로 바로 넘긴다 (섞으면 시작 자세가 비친다) */
-const ENDS_ON_LOOP = new Set([...Object.keys(MOVES), 'rollover'])
+const ENDS_ON_LOOP = new Set([...Object.keys(MOVES), 'rollover', HEAD_TILT])
 /**
  * 루프끼리 바꿀 때의 크로스페이드. 1회 클립이 끝나면 model-viewer 가 paused 가 되고, 다음 재생에서
  * stopAllAction 을 먼저 불러(ModelScene.playAnimation) 1회 클립 뒤에는 실제로는 섞이지 않고 바로 넘어간다.
@@ -32,7 +37,7 @@ const FADE_MS = 300
 /** 명령이 쓰는 클립. 하나라도 없으면 명령을 보여 주지 않는다 */
 const COMMAND_CLIPS = [...Object.values(LOOPS), ...Object.keys(MOVES), 'shake', 'rollover', 'bark', 'play_dead']
 
-type Step = ['to', Pose] | ['play', string, number?] | ['hold', string] | ['tap']
+type Step = ['to', Pose] | ['play', string, number?] | ['hold', string] | ['react', string]
 
 export const COMMANDS = [
   { id: 'sit', label: '앉아', steps: [['to', 'sit']] },
@@ -49,7 +54,12 @@ export type CommandId = (typeof COMMANDS)[number]['id']
 export class DogAnimator {
   private readonly mv: ModelViewerElement
   private readonly onPose: (pose: Pose) => void
+  /** 개 탭 */
   private readonly tapClip: string
+  /** '꼬리 흔들기' 칩 */
+  private readonly wagClip: string
+  /** 음성 명령을 못 알아들었을 때. head_tilt 가 없으면 '' (아무것도 안 한다) */
+  private readonly puzzledClip: string
   private pose: Pose = 'stand'
   /** 새 명령이 들어오면 늘어난다. 진행 중이던 명령은 자기 번호가 아니면 멈춘다 */
   private run = 0
@@ -58,6 +68,8 @@ export class DogAnimator {
   private pending = 0
   private disposed = false
   readonly hasCommands: boolean
+  /** 개를 탭하면 갸우뚱하는지 (안내 문구용) */
+  readonly tapIsHeadTilt: boolean
   /** 대기 루프. 진도 템플릿은 standing, 다른 템플릿은 idle */
   private readonly idleClip: string
 
@@ -67,7 +79,14 @@ export class DogAnimator {
     const clips = new Set(mv.availableAnimations)
     this.hasCommands = COMMAND_CLIPS.every((clip) => clips.has(clip))
     this.idleClip = clips.has('standing') ? 'standing' : clips.has('idle') ? 'idle' : (mv.availableAnimations[0] ?? '')
-    this.tapClip = clips.has(options.tapAnimation) ? options.tapAnimation : clips.has('tail_wag') ? 'tail_wag' : ''
+    const hasHeadTilt = clips.has(HEAD_TILT)
+    // 탭은 서버 tapAnimation 보다 head_tilt 를 먼저 본다. 지금 저장된 펫과 목업은 모두 tapAnimation 이 tail_wag 이고,
+    // AI 저장소도 head_tilt 가 있는 템플릿은 탭을 head_tilt 로 주도록 바뀐다
+    const serverTapClip = clips.has(options.tapAnimation) ? options.tapAnimation : clips.has('tail_wag') ? 'tail_wag' : ''
+    this.tapClip = hasHeadTilt ? HEAD_TILT : serverTapClip
+    this.wagClip = clips.has('tail_wag') ? 'tail_wag' : ''
+    this.puzzledClip = hasHeadTilt ? HEAD_TILT : ''
+    this.tapIsHeadTilt = this.tapClip === HEAD_TILT
     // model-viewer 는 timeScale 을 mixer 와 action 양쪽에 넣고(ModelScene.animationTimeScale, playAnimation)
     // three.js 가 둘을 곱한다. 제곱근을 넣어야 실제 배속이 playbackRate 가 된다
     const rate = options.playbackRate > 0 ? options.playbackRate : 1
@@ -88,14 +107,30 @@ export class DogAnimator {
     this.enqueue(command.steps)
   }
 
-  /**
-   * 탭 반응. 서 있을 때만 (꼬리 흔들기 클립은 서기 자세라 앉거나 엎드린 채 틀면 튄다).
-   * 자세는 전환 클립이 끝나야 바뀌므로 누른 순간이 아니라 차례가 왔을 때 다시 본다 (perform 의 'tap')
-   */
+  /** 개 탭. head_tilt 가 있으면 갸우뚱, 없으면 서버 tapAnimation → tail_wag */
   tap() {
-    // 명령이 진행 중이면 무시한다. 받으면 대기 중인 명령이 취소되는데, 차례가 와도 서 있지 않으면 탭도 버려져 둘 다 사라진다
-    if (!this.tapClip || this.pending > 0) return
-    this.enqueue([['tap']])
+    this.react(this.tapClip)
+  }
+
+  /** '꼬리 흔들기' 칩. 늘 tail_wag */
+  wag() {
+    this.react(this.wagClip)
+  }
+
+  /** 음성 명령을 못 알아들었을 때. head_tilt 가 있으면 갸우뚱, 없으면 아무것도 안 한다 (문구는 음성 쪽에서 띄운다) */
+  puzzled() {
+    this.react(this.puzzledClip)
+  }
+
+  /**
+   * 반응(탭·칩·음성 실패). 서 있을 때만 (tail_wag·head_tilt 는 서기 자세라 앉거나 엎드린 채 틀면 튄다).
+   * 자세는 전환 클립이 끝나야 바뀌므로 누른 순간이 아니라 차례가 왔을 때 다시 본다 (perform 의 'react')
+   */
+  private react(clip: string) {
+    // 명령(반응 포함)이 진행 중이면 무시한다. 받으면 대기 중인 명령이 취소되는데,
+    // 차례가 와도 서 있지 않으면 반응도 버려져 둘 다 사라진다
+    if (!clip || this.pending > 0) return
+    this.enqueue([['react', clip]])
   }
 
   private enqueue(steps: readonly Step[]) {
@@ -163,10 +198,10 @@ export class DogAnimator {
     if (mine !== this.run || this.disposed) return
     let last: string | null = null
     for (const step of steps) {
-      if (step[0] === 'tap') {
+      if (step[0] === 'react') {
         if (this.pose !== 'stand') return
-        if (!(await this.once(this.tapClip))) return
-        last = this.tapClip
+        if (!(await this.once(step[1]))) return
+        last = step[1]
         continue
       }
       if (step[0] === 'hold') {

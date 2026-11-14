@@ -6,6 +6,8 @@ import { matchVoiceCommand } from './voiceWords'
 // 마이크 버튼으로 말해서 명령한다 (Web Speech API).
 // - 한 번 누르면 한 번 듣고 끝난다 (continuous 를 쓰지 않는다). 듣는 중에 다시 누르면 멈춘다
 // - 말하는 중간 결과(interimResults)에서 단어가 잡히면 바로 명령하고 듣기를 멈춘다
+// - 들린 말에서 명령을 못 찾으면 '알아듣지 못했어요' 를 띄우고 onMiss 를 부른다 (한 번 들을 때 한 번).
+//   중간 결과, 권한 거부·시작 실패 같은 오류, 아무 말도 안 들린 때는 부르지 않는다
 // - 안드로이드 Chrome 의 음성 인식은 구글 서버를 거쳐 인터넷이 필요하다
 // - 아이폰 Quick Look AR 은 페이지 밖에서 돌아 음성이 안 된다 (화면 안 3D 에서만)
 
@@ -88,7 +90,16 @@ function useMicPermission() {
   return state
 }
 
-export function useVoiceCommand({ inAr, onCommand }: { inAr: boolean; onCommand: (id: CommandId) => void }) {
+export function useVoiceCommand({
+  inAr,
+  onCommand,
+  onMiss,
+}: {
+  inAr: boolean
+  onCommand: (id: CommandId) => void
+  /** 들린 말에서 명령을 못 찾았을 때 */
+  onMiss?: () => void
+}) {
   const [supported] = useState(() => getRecognition() !== undefined && (VOICE_ON_IOS || !isIos()))
   const [listening, setListening] = useState(false)
   /** 듣는 중에 들린 말 (중간 결과) */
@@ -97,9 +108,9 @@ export function useVoiceCommand({ inAr, onCommand }: { inAr: boolean; onCommand:
   const permission = useMicPermission()
   const recognitionRef = useRef<Recognition | null>(null)
   // 듣는 동안 바뀔 수 있는 값은 콜백 안에서 최신 값으로 읽는다
-  const latest = useRef({ inAr, onCommand, permission })
+  const latest = useRef({ inAr, onCommand, onMiss, permission })
   useEffect(() => {
-    latest.current = { inAr, onCommand, permission }
+    latest.current = { inAr, onCommand, onMiss, permission }
   })
 
   useEffect(() => () => recognitionRef.current?.abort(), [])
@@ -143,6 +154,7 @@ export function useVoiceCommand({ inAr, onCommand }: { inAr: boolean; onCommand:
         show(`“${text}” → ${labelOf(command)}${others}`)
       } else {
         show(`“${text}” · 알아듣지 못했어요${others}`)
+        if (text) latest.current.onMiss?.()
       }
     }
     recognition.onerror = (event) => {
@@ -158,7 +170,10 @@ export function useVoiceCommand({ inAr, onCommand }: { inAr: boolean; onCommand:
       setListening(false)
       setHeard('')
       // 최종 결과 없이 끝났는데 들린 말이 있었으면 (말하다 버튼을 다시 누른 때 등) 보여 준다
-      if (!done && lastText) show(`“${lastText}” · 알아듣지 못했어요`)
+      if (!done && lastText) {
+        show(`“${lastText}” · 알아듣지 못했어요`)
+        latest.current.onMiss?.()
+      }
     }
 
     try {

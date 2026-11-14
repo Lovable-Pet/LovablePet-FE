@@ -119,6 +119,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const [arStatus, setArStatus] = useState<ArStatus>('not-presenting')
   const [arFailed, setArFailed] = useState(false)
   const [hasCommands, setHasCommands] = useState(false)
+  const [tapIsHeadTilt, setTapIsHeadTilt] = useState(false)
   const [pose, setPose] = useState<Pose>('stand')
   const [activeCommand, setActiveCommand] = useState<CommandId | null>(null)
 
@@ -153,6 +154,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
       })
       animatorRef.current = animator
       setHasCommands(animator.hasCommands)
+      setTapIsHeadTilt(animator.tapIsHeadTilt)
     }
     // 'webglcontextlost' 도 error 로 오지만 렌더러가 스스로 복구한다. 파일을 못 받았을 때만 실패로 본다
     const onError = (event: Event) => {
@@ -195,10 +197,20 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     animatorRef.current?.command(commandId)
   }
 
+  /** 개 탭. head_tilt 가 있으면 갸우뚱, 없으면 꼬리 흔들기 */
   const tapReaction = () => {
     setActiveCommand(null)
     animatorRef.current?.tap()
   }
+
+  /** '꼬리 흔들기' 칩. 늘 꼬리 흔들기 */
+  const wagReaction = () => {
+    setActiveCommand(null)
+    animatorRef.current?.wag()
+  }
+
+  /** 음성 명령을 못 알아들었을 때. head_tilt 가 있으면 갸우뚱 ('알아듣지 못했어요' 문구는 마이크 버튼이 띄운다) */
+  const puzzledReaction = () => animatorRef.current?.puzzled()
 
   // 개를 누른 채 3초 → 짖기. 그 뒤 손을 떼도 탭 반응은 내지 않는다 (onPointerUp)
   const dogHold = useLongPress<ReactPointerEvent>({
@@ -211,7 +223,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     onLongPress: () => runCommand('bark'),
   })
   // AR 안에서 개를 직접 누를 수 없을 때 대신: 꼬리 흔들기 칩을 3초 누르면 짖기
-  const tapChipHold = useLongPress<ReactPointerEvent>({
+  const wagChipHold = useLongPress<ReactPointerEvent>({
     enabled: hasCommands && inAr,
     slopPx: TAP_SLOP_PX,
     canStart: (event) => !(event.target as Element).closest('button')?.disabled,
@@ -324,7 +336,9 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                 ? `${POSE_LABEL[pose]} · 명령을 눌러 보세요`
                 : inAr
                   ? '아래 버튼을 누르면 꼬리를 흔들어요'
-                  : '유기견을 탭하면 꼬리를 흔들어요'}
+                  : tapIsHeadTilt
+                    ? '유기견을 탭하면 고개를 갸우뚱해요'
+                    : '유기견을 탭하면 꼬리를 흔들어요'}
           </p>
           {isLikelyPuppy(pet.birthYear) && (
             <p className="flex max-w-[340px] gap-1.5 rounded-input bg-dark-notice px-3 py-2 text-label text-dark-notice-ink">
@@ -342,15 +356,15 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         <div
           ref={bottomOverlayRef}
           className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col gap-3 px-4 pb-[calc(20px+env(safe-area-inset-bottom))]">
-          {hasCommands && <VoiceCommandButton inAr={inAr} onCommand={runCommand} />}
+          {hasCommands && <VoiceCommandButton inAr={inAr} onCommand={runCommand} onMiss={puzzledReaction} />}
           <CommandBar
             hasCommands={hasCommands}
             pose={pose}
             active={activeCommand}
             disabled={!loaded}
             onCommand={runCommand}
-            onTap={tapReaction}
-            tapHold={tapChipHold.handlers}
+            onWag={wagReaction}
+            wagHold={wagChipHold.handlers}
           />
 
           {!inAr && (
@@ -395,7 +409,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
             ))}
         </div>
 
-        <HoldRing at={dogHold.press ?? tapChipHold.press} durationMs={LONG_PRESS_MS} />
+        <HoldRing at={dogHold.press ?? wagChipHold.press} durationMs={LONG_PRESS_MS} />
         {import.meta.env.DEV && <ArHitDebug mvRef={mvRef} arStatus={arStatus} />}
       </model-viewer>
 
@@ -415,24 +429,25 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   )
 }
 
-/** 명령 버튼. 진도처럼 클립이 다 있는 모델만 명령을 보이고, 아니면 탭 반응 버튼 하나만 */
+/** 명령 버튼. 진도처럼 클립이 다 있는 모델만 명령을 보이고, 아니면 꼬리 흔들기 칩 하나만 */
 function CommandBar({
   hasCommands,
   pose,
   active,
   disabled,
   onCommand,
-  onTap,
-  tapHold,
+  onWag,
+  wagHold,
 }: {
   hasCommands: boolean
   pose: Pose
   active: CommandId | null
   disabled: boolean
   onCommand: (id: CommandId) => void
-  onTap: () => void
+  /** 꼬리 흔들기 칩. 개 탭과 달리 갸우뚱이 있어도 늘 꼬리를 흔든다 */
+  onWag: () => void
   /** 꼬리 흔들기 칩을 길게 누를 때 */
-  tapHold: LongPressHandlers<ReactPointerEvent>
+  wagHold: LongPressHandlers<ReactPointerEvent>
 }) {
   return (
     <div role="group" aria-label="유기견에게 명령하기" className="pointer-events-auto -mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none]">
@@ -448,8 +463,8 @@ function CommandBar({
           </ChipButton>
         ))}
       {/* 꼬리 흔들기는 서 있을 때만 자연스럽다. AR 에서는 3초 누르면 짖는다 */}
-      <span className="contents" {...tapHold}>
-        <ChipButton highlighted={false} disabled={disabled || pose !== 'stand'} onClick={onTap}>
+      <span className="contents" {...wagHold}>
+        <ChipButton highlighted={false} disabled={disabled || pose !== 'stand'} onClick={onWag}>
           꼬리 흔들기
         </ChipButton>
       </span>
