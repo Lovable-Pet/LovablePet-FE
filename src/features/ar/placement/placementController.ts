@@ -2,7 +2,7 @@ import type { ArStage, StageFrame } from './arStage'
 import { yawToward } from './facing'
 import { FloorEstimate, isHorizontal, type SurfaceLevel } from './floorEstimate'
 import { CenterOcclusion, samplePerimeterDepth, type OcclusionResult } from './occlusion'
-import { PerimeterVote, type PerimeterReport } from './perimeterVote'
+import { PerimeterVote, type DirectionReport, type PerimeterReport } from './perimeterVote'
 import { SpotCheck, type SpotReport } from './spotCheck'
 import { distanceXZ, type SurfaceHit, type Vec3 } from './types'
 
@@ -38,6 +38,33 @@ export interface PlacementControllerOptions {
 const LOST_GRACE_MS = 250
 /** 디버그 글을 고치는 간격 (ms) */
 const DEBUG_INTERVAL_MS = 200
+/** 디버그: 막힌 근거를 이만큼(ms) 동안 센다 */
+const DEBUG_STATS_MS = 3000
+
+/** 디버그: 최근 몇 초 동안 근거마다 막힌 프레임 수 */
+class RecentCounts {
+  private readonly windowMs: number
+  private readonly events: { time: number; reason: BlockReason }[] = []
+
+  constructor(windowMs: number) {
+    this.windowMs = windowMs
+  }
+
+  add(time: number, reason: BlockReason) {
+    this.events.push({ time, reason })
+  }
+
+  counts(now: number): Record<BlockReason, number> {
+    while (this.events.length && now - this.events[0].time > this.windowMs) this.events.shift()
+    const counts: Record<BlockReason, number> = { occluded: 0, obstacle: 0, raised: 0 }
+    for (const { reason } of this.events) counts[reason]++
+    return counts
+  }
+
+  clear() {
+    this.events.length = 0
+  }
+}
 
 interface Spot {
   /** 원 중심 = 가운데 광선이 맞은 점 */
@@ -52,7 +79,8 @@ interface Spot {
  *    - 바닥보다 5cm 넘게 높은 면
  *    - 바닥 hit 앞에 실제 물체가 있음 (CenterOcclusion: 깊이 센서 → 특징점 → 판정 안 함)
  *    - 둘레에 장애물이 확인됨 (SpotCheck 광선 + samplePerimeterDepth 깊이 → PerimeterVote: 2곳 이상 · 3프레임 연속)
- * 2. place(): 놓을 수 있을 때만 원 중심·바닥 높이에 개를 놓고, 앞쪽이 휴대폰을 향하게 한다. 그 뒤 방향은 고정
+ * 2. place(): 놓을 수 있을 때만 원 중심·바닥 높이에 개를 놓고, 앞쪽이 휴대폰을 향하게 한다. 그 뒤 방향은 고정.
+ *    place({ force: true }) 는 막혀 있어도 놓는다 (디버그 확인용, 부르는 쪽이 ?debug 에서만 쓴다)
  * 3. replace(): 개를 숨기고 1 로 돌아간다
  */
 export class PlacementController {
@@ -64,9 +92,11 @@ export class PlacementController {
   private readonly spotCheck: SpotCheck
   private readonly centerOcclusion = new CenterOcclusion()
   private readonly perimeterVote = new PerimeterVote()
+  private readonly blockStats = new RecentCounts(DEBUG_STATS_MS)
   private spotReport: SpotReport | null = null
   private occlusion: OcclusionResult | null = null
   private perimeter: PerimeterReport | null = null
+  private forced = false
   private phase: PlacementPhase = 'searching'
   private blockedBy: BlockReason | null = null
   private spot: Spot | null = null
@@ -96,12 +126,16 @@ export class PlacementController {
     this.report()
   }
 
-  /** 화면 탭. 놓을 수 있을 때만 놓고 true */
-  place(): boolean {
+  /** 화면 탭. 놓을 수 있을 때만 놓고 true. force 면 빨간 원(막힘)에서도 원 자리에 놓는다 (디버그 확인용) */
+  place({ force = false }: { force?: boolean } = {}): boolean {
     const { spot } = this
     const floorY = this.floor.y
-    if (this.stopped || this.phase !== 'placeable' || !spot || floorY === null) return false
-    const position = { x: spot.center.x, y: floorY, z: spot.center.z }
+    const allowed = this.phase === 'placeable' || (force && this.phase === 'blocked')
+    if (this.stopped || !allowed || !spot || floorY === null) return false
+    // 높은 면에서 강제로 놓으면 원이 있는 그 면 높이에 둔다
+    const y = spot.level === 'raised' ? spot.center.y : floorY
+    const position = { x: spot.center.x, y, z: spot.center.z }
+    this.forced = this.phase === 'blocked'
     // 앞쪽이 휴대폰(바닥에 투영한 점)을 향하게. 놓은 뒤에는 다시 계산하지 않아 카메라를 따라 돌지 않는다
     const yaw = this.camera ? yawToward(position, this.camera) : 0
     this.stage.setRing(this.options.onDebug ? { center: position, radius: this.ringRadius, tone: 'marker' } : null)
@@ -182,6 +216,11 @@ export class PlacementController {
     const raised = this.spot?.level === 'raised'
     const occluded = !!this.spot && !!this.occlusion?.occluded
     const obstacle = !!this.perimeter?.blocked
+    if (this.options.onDebug) {
+      if (raised) this.blockStats.add(time, 'raised')
+      if (occluded) this.blockStats.add(time, 'occluded')
+      if (obstacle) this.blockStats.add(time, 'obstacle')
+    }
     const blockedBy: BlockReason | null = !this.spot
       ? null
       : raised
@@ -205,6 +244,7 @@ export class PlacementController {
     this.spotCheck.idle()
     this.perimeterVote.reset()
     this.centerOcclusion.reset()
+    this.blockStats.clear()
     this.spotReport = null
     this.perimeter = null
     this.occlusion = null
@@ -235,19 +275,27 @@ export class PlacementController {
     this.lastDebugAt = time
     const hit = this.lastHit
     const occlusion = this.occlusion
+    const size = this.stage.dogSize
     const lines = [
       `센서 깊이 ${sensors.depth}${sensors.depthFormat ? ` (${sensors.depthFormat})` : ''} · 특징점 ${sensors.points}`,
+      `개 ${meters(size.x)}×${meters(size.y)}×${meters(size.z)} · 원 r ${meters(this.ringRadius)} · 둘레 r ${meters(this.spotCheck.radius)}`,
       `바닥 ${meters(this.floor.y)} · 맞은 점 ${hit ? `${meters(hit.position.y)} (위 ${hit.normal.y.toFixed(2)})` : '없음'}`,
-      `판정 ${this.phase}${this.blockedBy ? ` (${this.blockedBy})` : ''}${this.spot ? ` · ${this.spot.level}` : ''} · 원 r ${this.ringRadius.toFixed(2)}`,
-      `거리 바닥 hit ${meters(hit ? distance(camera, hit.position) : null)} · 특징점 hit ${meters(centerPointHit ? distance(camera, centerPointHit.position) : null)}`,
-      `가운데 ${describeOcclusion(occlusion)}`,
-      `둘레 r ${this.spotCheck.radius.toFixed(2)} · 광선 ${describeSpot(this.spotReport)} · 확정 ${this.perimeter ? `${this.perimeter.confirmed}/8` : '-'}`,
+      `판정 ${this.phase}${this.blockedBy ? ` (${this.blockedBy})` : ''}${this.spot ? ` · ${this.spot.level}` : ''}`,
     ]
     if (this.placed) {
       const { position, yaw } = this.placed
       const foot = this.stage.dogFootCenter()
       lines.push(
-        `yaw ${degrees(yaw)}° · 지금 폰 쪽 ${degrees(yawToward(position, camera))}° · 발밑-원 ${foot ? `${(distanceXZ(foot, position) * 100).toFixed(1)}cm` : '?'}`,
+        `${this.forced ? '강제로 놓음 · ' : ''}yaw ${degrees(yaw)}° · 지금 폰 쪽 ${degrees(yawToward(position, camera))}° · 발밑-원 ${foot ? `${(distanceXZ(foot, position) * 100).toFixed(1)}cm` : '?'}`,
+      )
+    } else {
+      const stats = this.blockStats.counts(time)
+      lines.push(
+        `최근 3초 막힌 프레임: 가운데 가림 ${stats.occluded} · 둘레 장애물 ${stats.obstacle} · 높은 면 ${stats.raised}`,
+        `거리 바닥 hit ${meters(hit ? distance(camera, hit.position) : null)} · 특징점 hit ${meters(centerPointHit ? distance(camera, centerPointHit.position) : null)}`,
+        `가운데 ${describeOcclusion(occlusion)}`,
+        `둘레 광선 ${describeSpot(this.spotReport)} · 확정 ${this.perimeter ? `${this.perimeter.confirmed}/8` : '-'}`,
+        ...describeDirections(this.perimeter),
       )
     }
     onDebug(lines)
@@ -278,3 +326,25 @@ function describeSpot(report: SpotReport | null) {
   return `빈 곳 ${report.clear}·장애물 ${report.obstacles}·모름 ${report.unknown}`
 }
 
+const STATE_LABEL = { floor: '바닥', obstacle: '장애물', unknown: '모름' } as const
+const REASON_LABEL = { offscreen: '화면 밖', feet: '발밑', close: '가까움', nodata: '값 없음' } as const
+
+/**
+ * 둘레 8곳: 번호:합친 상태, 깊이 차이(실제 − 둘레 점)와 깊이가 모름인 까닭, 광선이 장애물이면 '광선',
+ * 장애물이 이어진 프레임 수. 두 줄. 예) 3:바닥 깊이-1.83 가까움 · 2:장애물 깊이-0.30 ×4
+ */
+function describeDirections(report: PerimeterReport | null): string[] {
+  if (!report) return ['둘레 방향 -']
+  const one = (direction: DirectionReport, index: number) => {
+    const parts = [`${index}:${STATE_LABEL[direction.state]}`]
+    if (direction.gap !== null || direction.reason) {
+      parts.push(`깊이${direction.gap !== null ? signed(direction.gap) : ''}${direction.reason ? ` ${REASON_LABEL[direction.reason]}` : ''}`)
+    }
+    if (direction.probe === 'blocked') parts.push('광선')
+    if (direction.streak > 0) parts.push(`×${direction.streak}`)
+    return parts.join(' ')
+  }
+  const items = report.directions.map(one)
+  const half = Math.ceil(items.length / 2)
+  return [`둘레 ${items.slice(0, half).join(' · ')}`, `둘레 ${items.slice(half).join(' · ')}`]
+}

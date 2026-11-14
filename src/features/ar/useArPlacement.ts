@@ -18,7 +18,7 @@ export interface ArPlacement {
   blockedBy: BlockReason | null
   /** ?debug 일 때 바닥 높이·맞은 점·판정·yaw */
   debugLines: string[]
-  /** 화면 탭. 놓을 수 있을 때만 놓고 true */
+  /** 화면 탭. 놓을 수 있을 때만 놓고 true (?debug 에서는 빨간 원을 두 번 탭하면 강제로 놓는다) */
   place: () => boolean
   /** 다시 놓기 */
   replace: () => void
@@ -30,6 +30,9 @@ interface PlacementState {
   floorKnown: boolean
   blockedBy: BlockReason | null
 }
+
+/** ?debug 강제 놓기: 빨간 원에서 이 시간(ms) 안에 두 번 탭 */
+const FORCE_DOUBLE_TAP_MS = 400
 
 const OFF: PlacementState = { phase: 'off', manual: false, floorKnown: false, blockedBy: null }
 
@@ -109,7 +112,21 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
     }
   }, [mvRef])
 
-  const place = useCallback(() => controllerRef.current?.place() ?? false, [])
+  // ?debug 에서만: 빨간 원에서 두 번 탭하면 강제로 놓는다 (판정과 상관없이 놓인 모습을 보려고)
+  const lastBlockedTapRef = useRef(0)
+  const place = useCallback(() => {
+    const controller = controllerRef.current
+    if (!controller) return false
+    if (controller.place()) return true
+    if (!debugRef.current) return false
+    const now = performance.now()
+    if (now - lastBlockedTapRef.current < FORCE_DOUBLE_TAP_MS) {
+      lastBlockedTapRef.current = 0
+      return controller.place({ force: true })
+    }
+    lastBlockedTapRef.current = now
+    return false
+  }, [])
   const replace = useCallback(() => controllerRef.current?.replace(), [])
 
   return { ...state, debugLines, place, replace }
