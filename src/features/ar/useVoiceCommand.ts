@@ -92,10 +92,13 @@ function useMicPermission() {
 
 export function useVoiceCommand({
   inAr,
+  disabled = false,
   onCommand,
   onMiss,
 }: {
   inAr: boolean
+  /** 막혔는지 (AR 에서 개를 놓기 전). 듣는 중에 막히면 결과 없이 조용히 멈춘다 */
+  disabled?: boolean
   onCommand: (id: CommandId) => void
   /** 들린 말에서 명령을 못 찾았을 때 */
   onMiss?: () => void
@@ -113,7 +116,14 @@ export function useVoiceCommand({
     latest.current = { inAr, onCommand, onMiss, permission }
   })
 
+  /** 듣는 중인 것을 결과·안내 없이 멈춘다 */
+  const silenceRef = useRef<(() => void) | null>(null)
+
   useEffect(() => () => recognitionRef.current?.abort(), [])
+
+  useEffect(() => {
+    if (disabled) silenceRef.current?.()
+  }, [disabled])
 
   const toggle = useCallback(() => {
     if (recognitionRef.current) {
@@ -166,7 +176,10 @@ export function useVoiceCommand({
       show(blockedInAr ? AR_PERMISSION_TEXT : (ERROR_TEXT[event.error] ?? '음성 인식이 멈췄어요. 다시 눌러 주세요'))
     }
     recognition.onend = () => {
-      if (recognitionRef.current === recognition) recognitionRef.current = null
+      if (recognitionRef.current === recognition) {
+        recognitionRef.current = null
+        silenceRef.current = null
+      }
       setListening(false)
       setHeard('')
       // 최종 결과 없이 끝났는데 들린 말이 있었으면 (말하다 버튼을 다시 누른 때 등) 보여 준다
@@ -183,6 +196,12 @@ export function useVoiceCommand({
       return
     }
     recognitionRef.current = recognition
+    silenceRef.current = () => {
+      // onerror('aborted')·onend 가 결과나 '알아듣지 못했어요' 를 내지 않게
+      done = true
+      lastText = ''
+      recognition.abort()
+    }
     setHeard('')
     setListening(true)
   }, [show])

@@ -16,9 +16,18 @@ const describe = (target: EventTarget | null, mv: Element) => {
  * (ArPage 에서 import.meta.env.DEV 일 때만 그려 배포 파일에는 들어가지 않는다. 예: /pets/201/ar?debug).
  * WebXR 화면에서 누르면 pointer 이벤트가 어디에 도착하는지(AR 중에는 '→ touch-layer', 화면 안 3D 는 '→ mv'),
  * positionAndNormalFromPoint 가 그 자리에서 개를 맞히는지(hit/miss)를 보인다.
- * AR 안에서 model-viewer 는 XR 카메라와 window.screen 크기로 계산한다
+ * AR 안에서 model-viewer 는 XR 카메라와 window.screen 크기로 계산한다.
+ * placement 에는 AR 배치 상태(바닥 높이·맞은 점·판정·yaw)를 받아 위에 보인다
  */
-export function ArHitDebug({ mvRef, arStatus }: { mvRef: RefObject<ModelViewerElement | null>; arStatus: string }) {
+export function ArHitDebug({
+  mvRef,
+  arStatus,
+  placement = [],
+}: {
+  mvRef: RefObject<ModelViewerElement | null>
+  arStatus: string
+  placement?: readonly string[]
+}) {
   const [searchParams] = useSearchParams()
   const enabled = searchParams.has('debug')
   const [lines, setLines] = useState<string[]>([])
@@ -49,6 +58,7 @@ export function ArHitDebug({ mvRef, arStatus }: { mvRef: RefObject<ModelViewerEl
   return (
     <pre className="pointer-events-none absolute top-[38%] left-2 max-w-[calc(100%-16px)] rounded-md bg-black/65 px-2 py-1.5 font-mono text-[10px] leading-snug whitespace-pre-wrap text-lime-300">
       {`[dev] ${arStatus} · screen ${window.screen.width}x${window.screen.height} · inner ${window.innerWidth}x${window.innerHeight}\n`}
+      {placement.length > 0 && `${placement.join('\n')}\n`}
       {lines.length ? lines.join('\n') : '화면을 눌러 보세요'}
     </pre>
   )

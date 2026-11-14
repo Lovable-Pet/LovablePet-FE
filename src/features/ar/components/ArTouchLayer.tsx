@@ -9,7 +9,8 @@ import { HoldRing } from './HoldRing'
  *   화면 밀기(회전)·두 손가락 비틀기(회전)가 모두 안 된다 (model-viewer 에 이동·회전을 끄는 공개 설정이 없다)
  * - 뒤에 오는 오버레이(명령 칩·마이크)는 이 층 위에 그려져 그대로 눌린다.
  *   model-viewer 의 AR 닫기 버튼은 그림자 DOM 에서 슬롯보다 뒤에 있어 이 층이 가리지 않는다
- * - 개 탭(갸우뚱이 있으면 갸우뚱, 없으면 꼬리 흔들기)과 3초 누르기(짖기)는 이 층에서 받아
+ * - 개를 놓기 전에는 화면 어디를 탭해도 onPlaceTap (바닥 원 자리에 놓기)
+ * - 놓은 뒤 개 탭(갸우뚱이 있으면 갸우뚱, 없으면 꼬리 흔들기)과 3초 누르기(짖기)는 이 층에서 받아
  *   positionAndNormalFromPoint 로 개를 맞혔는지 본다
  * 화면 안 3D 에서는 그리지 않아 카메라 돌리기는 그대로다
  */
@@ -21,10 +22,11 @@ export function ArTouchLayer({
   mvRef,
   onTap,
   onLongPress,
+  onPlaceTap,
 }: {
   /** AR 중인지 */
   active: boolean
-  /** 개가 바닥에 놓였는지. 그 전에는 개를 눌러도 반응하지 않는다 (막기만 한다) */
+  /** 개가 바닥에 놓였는지. 그 전에는 개 탭·누르기에 반응하지 않고, 탭은 onPlaceTap 으로 간다 */
   dogReady: boolean
   /** 명령 클립이 있는 모델인지 (3초 누르기 → 짖기) */
   holdEnabled: boolean
@@ -33,6 +35,8 @@ export function ArTouchLayer({
   mvRef: RefObject<ModelViewerElement | null>
   onTap: () => void
   onLongPress: () => void
+  /** 개를 놓기 전 화면 탭 */
+  onPlaceTap?: () => void
 }) {
   const layerRef = useRef<HTMLDivElement>(null)
   /** 첫 손가락이 닿은 곳. 다른 손가락이 닿으면 탭이 아니다 */
@@ -68,9 +72,10 @@ export function ArTouchLayer({
     const start = tapStart.current
     if (start?.pointerId !== event.pointerId) return
     tapStart.current = null
-    if (longPressed || !dogReady) return
+    if (longPressed) return
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > slopPx) return
-    if (hitsDog(event)) onTap()
+    if (!dogReady) onPlaceTap?.()
+    else if (hitsDog(event)) onTap()
   }
   const onPointerCancel = () => {
     hold.handlers.onPointerCancel()
