@@ -25,8 +25,16 @@ export const LAYER_JOIN_M = 0.06
 export const LAYER_SEPARATION_M = 0.08
 /** 층 높이 = 그 층을 마지막으로 본 때부터 이만큼(ms) 안의 hit 높이 중앙값 (서서히 움직이는 높이를 따라간다) */
 export const LAYER_HEIGHT_MS = 2500
-/** 층을 이만큼(ms) 다시 못 보면 후보에서 뺀다 */
+/**
+ * 층을 이만큼(ms) 다시 못 보면 후보에서 뺀다. 단, 지금 살아 있는 층이 모두 그보다 높고(책상만 보는 중)
+ * 그 높은 층들이 WIDE_LAYER_SPREAD_M 보다 좁으면 빼지 않는다 (책상을 오래 봐도 바닥이 남는다)
+ */
 export const LAYER_EXPIRE_MS = 5000
+/**
+ * 높은 층의 가로 퍼짐이 이만큼(m)을 넘으면 가구가 아니라 위로 어긋난 바닥일 수 있다고 보고,
+ * 그보다 낮은 옛 층에 5초 만료를 그대로 적용한다
+ */
+export const WIDE_LAYER_SPREAD_M = 1.5
 /** 지금 바닥보다 낮은 다른 층이 이만큼(ms) 이어져야 바닥을 바꾼다 */
 export const FLOOR_SWITCH_HOLD_MS = 1000
 /** 정리(prune): 최근 이만큼(ms) 안에 다시 보지 못한 칸은 버린다 */
@@ -100,6 +108,8 @@ export interface FloorLayer {
   hits: number
   firstSeen: number
   lastSeen: number
+  /** 가로 퍼짐: 층에 든 hit 들의 x·z 범위 대각선 (m) */
+  spread: number
 }
 
 export interface FloorStatus {
@@ -141,7 +151,8 @@ const median = (values: number[]): number => {
  *    hit 20개 이상 · 0.5초 이상 · 가로 0.4m 이상 퍼진 칸만 후보로 본다 (한 번 튄·좁은 반사는 못 든다)
  * 2. 후보 칸끼리 6cm 안이면 같은 바닥 층으로 잇고, 층 높이끼리 8cm 안이면 합친다.
  *    층 높이는 최근 2.5초 hit 의 중앙값이라 ARCore 높이가 서서히 움직여도 따라간다
- * 3. 5초 동안 다시 안 보인 층은 뺀다. 남은 층 중 가장 낮은 층이 바닥 (다른 층으로 바꿀 때는 1초 기다린다)
+ * 3. 5초 동안 다시 안 보인 층은 뺀다. 단 지금 살아 있는 층이 모두 더 높고 1.5m 보다 좁으면(책상만 보는 중) 남긴다.
+ *    남은 층 중 가장 낮은 층이 바닥 (다른 층으로 바꿀 때는 1초 기다린다)
  * 4. 후보가 없으면(처음 몇 초) 지금 맞은 수평면을 임시 바닥으로 쓴다 (처음부터 책상만 비추면 책상이 바닥이 된다)
  */
 export class FloorEstimate {
@@ -154,6 +165,11 @@ export class FloorEstimate {
   private lastHorizontalY: number | null = null
   private lastUse: HitUse = 'none'
   private raisedLatched = false
+  /**
+   * 책상만 보는 동안 남겨 둔 옛 바닥 층의 칸. 이 칸의 hit 은 15초가 지나도 버리지 않는다.
+   * 그 층이 바닥인 동안은 다시 보여도 계속 남긴다 (돌아왔을 때 옛 hit 이 한꺼번에 빠져 바닥이 흔들리지 않게)
+   */
+  private heldKeys = new Set<number>()
   private now = 0
 
   /**
@@ -168,10 +184,11 @@ export class FloorEstimate {
       const { x, y, z } = hit.position
       this.samples.push({ time, x, y, z, key: Math.floor(y / FLOOR_BIN_M) })
     }
+    // 15초 지난 hit 은 버린다. 책상만 보는 동안 남겨 둔 바닥 층의 hit 은 그대로 둔다 (그래야 바닥 층이 남는다)
     const before = time - FLOOR_WINDOW_MS
-    let expired = 0
-    while (expired < this.samples.length && this.samples[expired].time < before) expired++
-    if (expired) this.samples.splice(0, expired)
+    if (this.samples.length && this.samples[0].time < before) {
+      this.samples = this.samples.filter((sample) => sample.time >= before || this.heldKeys.has(sample.key))
+    }
     this.rebuild(time)
     this.choose(time)
   }
@@ -232,6 +249,7 @@ export class FloorEstimate {
     this.lastHorizontalY = null
     this.lastUse = 'none'
     this.raisedLatched = false
+    this.heldKeys.clear()
   }
 
   /** 최근 FLOOR_RECONFIRM_MS 안에 다시 보지 못한 칸의 hit 을 버린다 */
@@ -294,7 +312,7 @@ export class FloorEstimate {
     this.layers = this.buildLayers(time)
   }
 
-  /** 후보 칸 → 바닥 층. 6cm 안으로 잇고, 5초 넘게 안 보인 층은 빼고, 높이가 8cm 안인 층은 합친다 */
+  /** 후보 칸 → 바닥 층. 6cm 안으로 잇고, 5초 넘게 안 보인 층은 (책상만 보는 중이 아니면) 빼고, 높이가 8cm 안인 층은 합친다 */
   private buildLayers(time: number): FloorLayer[] {
     const candidates = [...this.bins.values()].filter((bin) => bin.candidate).sort((a, b) => a.y - b.y)
     const chains: FloorBin[][] = []
@@ -303,7 +321,16 @@ export class FloorEstimate {
       if (chain && bin.y - chain[chain.length - 1].y <= LAYER_JOIN_M) chain.push(bin)
       else chains.push([bin])
     }
-    let layers = chains.map((bins) => this.toLayer(bins)).filter((layer) => time - layer.lastSeen <= LAYER_EXPIRE_MS)
+    const all = chains.map((bins) => this.toLayer(bins))
+    const alive = all.filter((layer) => time - layer.lastSeen <= LAYER_EXPIRE_MS)
+    // 오래 안 본 층이라도, 살아 있는 층이 모두 이보다 높고 좁으면(책상·침대만 보는 중, 또는 아무 면도 안 보는 중) 남긴다
+    const held = all.filter(
+      (layer) =>
+        time - layer.lastSeen > LAYER_EXPIRE_MS &&
+        alive.every((other) => other.y - layer.y > LAYER_SEPARATION_M && other.spread <= WIDE_LAYER_SPREAD_M),
+    )
+    for (const layer of held) for (const bin of layer.bins) this.heldKeys.add(bin.key)
+    let layers = [...alive, ...held].sort((a, b) => a.y - b.y)
     // 층 높이가 8cm 안으로 붙어 있으면 한 층이다
     for (let merged = true; merged; ) {
       merged = false
@@ -321,11 +348,22 @@ export class FloorEstimate {
   private toLayer(bins: FloorBin[]): FloorLayer {
     const keys = new Set(bins.map((bin) => bin.key))
     const lastSeen = Math.max(...bins.map((bin) => bin.lastSeen))
-    const recent = this.samples
-      .filter((sample) => keys.has(sample.key) && sample.time >= lastSeen - LAYER_HEIGHT_MS)
-      .map((sample) => sample.y)
+    const recent: number[] = []
+    let minX = Infinity
+    let maxX = -Infinity
+    let minZ = Infinity
+    let maxZ = -Infinity
+    for (const sample of this.samples) {
+      if (!keys.has(sample.key)) continue
+      if (sample.time >= lastSeen - LAYER_HEIGHT_MS) recent.push(sample.y)
+      minX = Math.min(minX, sample.x)
+      maxX = Math.max(maxX, sample.x)
+      minZ = Math.min(minZ, sample.z)
+      maxZ = Math.max(maxZ, sample.z)
+    }
     return {
       y: median(recent),
+      spread: Math.hypot(maxX - minX, maxZ - minZ),
       bins,
       hits: bins.reduce((sum, bin) => sum + bin.hits, 0),
       firstSeen: Math.min(...bins.map((bin) => bin.firstSeen)),
@@ -334,6 +372,13 @@ export class FloorEstimate {
   }
 
   private choose(time: number) {
+    this.pickFloor(time)
+    // 남겨 둔 칸은 지금 바닥 층의 것만 둔다 (바닥이 다른 층으로 바뀌면 옛 hit 은 15초 창에 맡긴다)
+    const floorKeys = new Set(this.currentLayer()?.bins.map((bin) => bin.key))
+    for (const key of this.heldKeys) if (!floorKeys.has(key)) this.heldKeys.delete(key)
+  }
+
+  private pickFloor(time: number) {
     const lowest = this.layers[0] ?? null
     if (!lowest) {
       this.currentY = null

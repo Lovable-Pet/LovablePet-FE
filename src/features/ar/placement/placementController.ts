@@ -379,7 +379,7 @@ function describeLayers(status: FloorStatus, now: number) {
   return status.layers
     .map(
       (layer) =>
-        `${height(layer.y)}[${layer.bins.map((bin) => height(bin.y)).join(',')}] ${secondsAgo(now, layer.lastSeen)}초 전${layer === status.layer ? '★' : ''}`,
+        `${height(layer.y)}[${layer.bins.map((bin) => height(bin.y)).join(',')}] 퍼짐 ${layer.spread.toFixed(1)}m ${secondsAgo(now, layer.lastSeen)}초 전${layer === status.layer ? '★' : ''}`,
     )
     .join(' · ')
 }
