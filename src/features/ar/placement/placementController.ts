@@ -14,7 +14,7 @@ import { INNER_RING_FRACTIONS, InnerVote, innerSlot, sampleInnerDepth, type Inne
 import { CenterOcclusion, centerDepthRatio, floorGridRatios, samplePerimeterDepth, type OcclusionResult } from './occlusion'
 import { PerimeterVote, type DirectionReport, type PerimeterReport } from './perimeterVote'
 import { READY_DEPTH_TIMEOUT_MS, READY_MOVE_M, READY_TRACKING_MS, Readiness, type ReadinessReport } from './readiness'
-import { SpotCheck, type SpotReport } from './spotCheck'
+import { SpotCheck, type ProbeBlock, type SpotReport } from './spotCheck'
 import { distanceXZ, type SurfaceHit, type Vec3 } from './types'
 import { viewForward } from './viewProjection'
 
@@ -116,6 +116,7 @@ interface Spot {
  *    - 바닥 hit 앞에 실제 물체가 있음 (CenterOcclusion: 깊이 센서 → 특징점 → 판정 안 함)
  *      깊이는 DepthCalibration 이 맞음으로 본 동안만 쓴다 (화면 전체가 같은 비율로 어긋나면 특징점으로 대신)
  *    - 둘레에 장애물이 확인됨 (SpotCheck 광선 + samplePerimeterDepth 깊이 → PerimeterVote: 3프레임 연속 2곳 이상, 또는 한 곳 10프레임 연속)
+ *      깊이를 믿는 동안 그 방향 깊이가 바닥이면 광선 막힘은 무시한다 (세션에 남은 잘못된 ARCore 평면)
  *    - 원 안쪽에 장애물이 확인됨 (깊이를 믿을 때만, 세 겹 × 2cm 간격 방향 → InnerVote: 이웃 2개 이상 5프레임 연속, 또는 하나 10프레임 연속)
  * 2. place(): 놓을 수 있을 때만 원 중심·바닥 높이에 개를 놓고, 앞쪽이 휴대폰을 향하게 한다. 그 뒤 방향은 고정.
  *    place({ force: true }) 는 막혀 있어도 놓는다 (디버그 확인용, 부르는 쪽이 ?debug 에서만 쓴다)
@@ -474,8 +475,8 @@ export class PlacementController {
         `최근 3초 막힌 프레임: 가운데 가림 ${stats.occluded} · 둘레 장애물 ${stats.obstacle} · 안쪽 장애물 ${stats.inner} · 높은 면 ${stats.raised}`,
         `거리 바닥 hit ${meters(hit ? distance(camera, hit.position) : null)} · 특징점 hit ${meters(centerPointHit ? distance(camera, centerPointHit.position) : null)}`,
         `가운데 ${describeOcclusion(occlusion)}`,
-        `둘레 광선 ${describeSpot(this.spotReport)} · 확정 ${this.perimeter ? `${this.perimeter.confirmed}/8 · 지속 ${this.perimeter.persistent}` : '-'}`,
-        ...describeDirections(this.perimeter),
+        `둘레 광선 ${describeSpot(this.spotReport)}${this.perimeter?.probeIgnored ? ` · 깊이 바닥이라 무시 ${this.perimeter.probeIgnored}방향` : ''} · 확정 ${this.perimeter ? `${this.perimeter.confirmed}/8 · 지속 ${this.perimeter.persistent}` : '-'}`,
+        ...describeDirections(this.perimeter, this.spotReport),
         ...describeInner(this.inner),
       )
     }
@@ -635,18 +636,28 @@ function describeSpot(report: SpotReport | null) {
 const STATE_LABEL = { floor: '바닥', obstacle: '장애물', unknown: '모름' } as const
 const REASON_LABEL = { offscreen: '화면 밖', feet: '발밑', close: '가까움', nodata: '값 없음' } as const
 
+/** 광선이 막힌 까닭: 아래 +0.12 (위→아래 광선이 바닥보다 12cm 높은 면) · 아래 기움 · 옆 0.21m (원 중심에서 수직면까지) */
+function describeProbeBlock(block: ProbeBlock) {
+  if (block.kind === 'side') return `옆 ${block.distance.toFixed(2)}m`
+  return block.rise === null ? '아래 기움' : `아래 ${signed(block.rise)}`
+}
+
 /**
- * 둘레 8곳: 번호:합친 상태, 깊이 차이(실제 − 둘레 점)와 깊이가 모름인 까닭, 광선이 장애물이면 '광선',
- * 장애물이 이어진 프레임 수. 두 줄. 예) 3:바닥 깊이-1.83 가까움 · 2:장애물 깊이-0.30 ×4
+ * 둘레 8곳: 번호:합친 상태, 깊이 차이(실제 − 둘레 점)와 깊이가 모름인 까닭, 광선이 장애물이면 '광선(까닭)'
+ * (믿는 깊이가 바닥이라 세지 않았으면 '무시'), 장애물이 이어진 프레임 수. 두 줄.
+ * 예) 3:바닥 깊이-1.83 가까움 · 2:장애물 깊이-0.30 광선(옆 0.21m) ×4 · 4:바닥 깊이+0.11 광선(아래 +0.12) 무시
  */
-function describeDirections(report: PerimeterReport | null): string[] {
+function describeDirections(report: PerimeterReport | null, spot: SpotReport | null): string[] {
   if (!report) return ['둘레 방향 -']
   const one = (direction: DirectionReport, index: number) => {
     const parts = [`${index}:${STATE_LABEL[direction.state]}`]
     if (direction.gap !== null || direction.reason) {
       parts.push(`깊이${direction.gap !== null ? signed(direction.gap) : ''}${direction.reason ? ` ${REASON_LABEL[direction.reason]}` : ''}`)
     }
-    if (direction.probe === 'blocked') parts.push('광선')
+    if (direction.probe === 'blocked') {
+      const blocks = spot?.fresh ? spot.blocks[index] : []
+      parts.push(`광선${blocks.length ? `(${blocks.map(describeProbeBlock).join(', ')})` : ''}${direction.probeIgnored ? ' 무시' : ''}`)
+    }
     if (direction.streak > 0) parts.push(`×${direction.streak}`)
     return parts.join(' ')
   }

@@ -41,6 +41,13 @@ export interface Probe {
 /** clear: 비었음 · blocked: 장애물 · unknown: 아무것도 안 맞음 (아직 모름) */
 export type ProbeVerdict = 'clear' | 'blocked' | 'unknown'
 
+/**
+ * 광선이 막힌 까닭 (디버그).
+ * down: 위→아래 광선이 바닥이 아닌 면을 맞힘. rise = 맞은 면 높이 − 바닥 (m), 기운 면이면 null ·
+ * side: 옆 광선이 원 중심에서 distance(m) 에 수직면을 맞힘
+ */
+export type ProbeBlock = { kind: 'down'; rise: number | null } | { kind: 'side'; distance: number }
+
 export interface SpotReport {
   /** 지금 원 자리의 결과인지. 광선을 다시 만드는 중이거나 못 만들면 false (막지 않는다) */
   fresh: boolean
@@ -51,6 +58,8 @@ export interface SpotReport {
   unknown: number
   /** 방향마다 (위→아래·옆 광선을 합쳐) 장애물이 하나라도 있으면 blocked, 빈 곳이 있으면 clear. 길이 SPOT_DIRECTIONS */
   directions: ProbeVerdict[]
+  /** 방향마다 막힌 광선의 까닭 (디버그). 길이 SPOT_DIRECTIONS */
+  blocks: ProbeBlock[][]
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
@@ -99,6 +108,12 @@ export function judgeProbe(probe: Probe, hit: SurfaceHit | null, floorY: number)
   return isHorizontal(hit.normal) ? 'clear' : 'blocked'
 }
 
+/** 막힌 광선의 까닭 (judgeProbe 가 blocked 일 때) */
+export function probeBlock(probe: Probe, hit: SurfaceHit, floorY: number): ProbeBlock {
+  if (probe.kind === 'down') return { kind: 'down', rise: isHorizontal(hit.normal) ? hit.position.y - floorY : null }
+  return { kind: 'side', distance: distanceXZ(hit.position, probe.ray.origin) }
+}
+
 const notFresh = (unavailable: boolean): SpotReport => ({
   fresh: false,
   unavailable,
@@ -106,6 +121,7 @@ const notFresh = (unavailable: boolean): SpotReport => ({
   obstacles: 0,
   unknown: 0,
   directions: Array.from({ length: SPOT_DIRECTIONS }, () => 'unknown'),
+  blocks: Array.from({ length: SPOT_DIRECTIONS }, () => []),
 })
 
 /**
@@ -144,15 +160,18 @@ export class SpotCheck {
     let obstacles = 0
     let unknown = 0
     const directions: ProbeVerdict[] = Array.from({ length: SPOT_DIRECTIONS }, () => 'unknown')
+    const blocks: ProbeBlock[][] = Array.from({ length: SPOT_DIRECTIONS }, () => [])
     active.probes.forEach((probe, index) => {
-      const verdict = judgeProbe(probe, hits[index] ?? null, floorY)
+      const hit = hits[index] ?? null
+      const verdict = judgeProbe(probe, hit, floorY)
       if (verdict === 'clear') clear++
       else if (verdict === 'blocked') obstacles++
       else unknown++
+      if (verdict === 'blocked' && hit) blocks[probe.direction].push(probeBlock(probe, hit, floorY))
       const before = directions[probe.direction]
       if (verdict === 'blocked' || (verdict === 'clear' && before === 'unknown')) directions[probe.direction] = verdict
     })
-    return { fresh: true, unavailable: false, clear, obstacles, unknown, directions }
+    return { fresh: true, unavailable: false, clear, obstacles, unknown, directions, blocks }
   }
 
   /** 원이 없거나 바닥이 아니거나 놓은 뒤: 광선을 끝낸다 */
