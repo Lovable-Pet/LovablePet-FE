@@ -1,8 +1,8 @@
 import '@google/model-viewer'
 import type { ModelViewerElement } from '@google/model-viewer'
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { AlertCircle, Box, Camera, ChevronLeft, ChevronRight, Ruler, Smartphone, X } from 'lucide-react'
-import { Link, useParams } from 'react-router'
+import { AlertCircle, Box, Camera, ChevronLeft, ChevronRight, RotateCcw, Ruler, Smartphone, X } from 'lucide-react'
+import { Link, useParams, useSearchParams } from 'react-router'
 import { ApiError } from '../apis/apiError'
 import type { PetDetail, PetModelView } from '../apis/dto/pet.dto'
 import { resolveModelUrl } from '../apis/pet'
@@ -11,12 +11,13 @@ import { buttonStyles } from '../components/Button/buttonStyles'
 import { StateView } from '../components/StateView/StateView'
 import { cn } from '../components/utils/cn'
 import { PUPPY_NOTICE, SEX_LABEL } from '../constants/pet'
-import { ArFloorGate } from '../features/ar/components/ArFloorGate'
+import { ArFloorHint } from '../features/ar/components/ArFloorHint'
 import { ArHitDebug } from '../features/ar/components/ArHitDebug'
 import { ArTouchLayer } from '../features/ar/components/ArTouchLayer'
 import { HoldRing } from '../features/ar/components/HoldRing'
 import { VoiceCommandButton } from '../features/ar/components/VoiceCommandButton'
 import { COMMANDS, DogAnimator, POSE_LABEL, type CommandId, type Pose } from '../features/ar/dogAnimator'
+import { useArPlacement, type ArPlacement } from '../features/ar/useArPlacement'
 import { LONG_PRESS_MS, useLongPress, type LongPressHandlers } from '../features/ar/useLongPress'
 import { PetPhoto } from '../features/pet/components/PetPhoto'
 import { usePetDetail } from '../features/pet/queries'
@@ -27,7 +28,8 @@ import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 // /pets/:petId/ar — 캔버스 06 AR 시작 안내 → 07·08 실제 크기로 놓기
 //
 // model-viewer 가 기기에 맞는 AR을 고른다 (ar-modes 순서대로)
-// - 안드로이드 Chrome: WebXR. 이 페이지 안에서 카메라가 열려 아래 오버레이(명령 버튼)가 그대로 보인다
+// - 안드로이드 Chrome: WebXR. 이 페이지 안에서 카메라가 열려 아래 오버레이(명령 버튼)가 그대로 보인다.
+//   바닥 원을 보고 탭한 자리에 사용자를 바라보게 놓는다 (useArPlacement). 놓기 전에는 명령·음성·개 탭을 막는다
 // - WebXR 이 안 되는 안드로이드: Scene Viewer 앱으로 넘어간다 (명령·탭 반응 없음)
 // - 아이폰: Quick Look 으로 USDZ 를 연다. USDZ 에는 대기 루프 하나만 있어 명령·탭 반응이 안 된다
 // - AR 이 안 되는 기기(데스크톱 등): 화면 안 3D 로 보여 준다. 명령·탭 반응은 된다
@@ -41,6 +43,41 @@ const isTouchDevice = () => window.matchMedia('(pointer: coarse)').matches
 
 /** 탭과 드래그(카메라 돌리기)를 가르는 거리 */
 const TAP_SLOP_PX = 8
+
+/** 배치 전 빨강(놓을 수 없음)이 이만큼(ms) 넘게 이어지면 다시 열어 보라는 줄을 더한다 */
+const STUCK_HINT_MS = 10_000
+
+/** active 가 STUCK_HINT_MS 넘게 이어졌는지 (중간에 풀리면 처음부터) */
+function useLongActive(active: boolean) {
+  const [long, setLong] = useState(false)
+  useEffect(() => {
+    if (!active) return
+    const timer = setTimeout(() => setLong(true), STUCK_HINT_MS)
+    return () => {
+      clearTimeout(timer)
+      setLong(false)
+    }
+  }, [active])
+  return active && long
+}
+
+/** AR 에서 개를 놓기 전 위 안내 문구 */
+function placementHint({ phase, manual, blockedBy, notice }: ArPlacement) {
+  // model-viewer 기본 흐름(직접 놓기를 못 할 때)은 바닥을 찾으면 스스로 놓인다
+  if (!manual) return '바닥을 천천히 비춰 주세요. 바닥을 찾으면 유기견이 놓여요'
+  // 준비 단계에서 움직이기는 했는데 바닥이 계속 안 보일 때 (벽·옷만 비춤)
+  if (notice === 'tiltDown') return '바닥이 보이게 휴대폰을 아래로 기울여 주세요'
+  // 준비 단계: 추적·바닥·깊이가 맞춰질 때까지 원을 보이지 않는다
+  if (phase === 'preparing') return '휴대폰으로 바닥을 비추면서 천천히 좌우로 움직여 주세요'
+  // 원 단계에서 깊이가 계속 안 맞으면 자리를 옮기도록
+  if (notice === 'moveSteps') return '휴대폰을 들고 한두 걸음 옆으로 움직여 주세요'
+  if (phase === 'placeable') return '원을 원하는 곳에 맞추고 화면을 탭하세요'
+  // 면으로 인식되지 않은 책상·문 너머 바닥을 겨눈 때
+  if (phase === 'blocked' && blockedBy === 'occluded') return '앞에 물건이 있어요. 빈 바닥을 비춰 주세요'
+  if (phase === 'blocked') return '여기에는 놓을 수 없어요'
+  // 기울이기만 하면 ARCore 가 바닥을 잘 못 찾는다. 위치를 옮기도록 안내한다
+  return '휴대폰을 들고 천천히 옆으로 움직이며 바닥을 비춰 주세요'
+}
 
 export function ArPage() {
   const { petId } = useParams()
@@ -110,6 +147,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   }, [model.behavior])
   const animatorRef = useRef<DogAnimator | null>(null)
   const pointerStart = useRef<{ x: number; y: number } | null>(null)
+  const [searchParams] = useSearchParams()
 
   const [showGuide, setShowGuide] = useState(true)
   const [progress, setProgress] = useState(0)
@@ -125,6 +163,18 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
 
   const withersCm = toWithersCm(model.withersM)
   const inAr = arStatus === 'session-started' || arStatus === 'object-placed'
+  /** 개발 모드에서 주소에 ?debug 를 붙였을 때 (배포 파일에는 들어가지 않는다) */
+  const debug = import.meta.env.DEV && searchParams.has('debug')
+  const placement = useArPlacement(mvRef, { debug })
+  /** AR 에서 개가 바닥에 놓였는지 */
+  const dogReady = inAr && placement.phase === 'placed'
+  /** AR 에서 개를 놓기 전: 명령 칩·음성·개 탭·3초 누르기를 막는다 */
+  const arLocked = inAr && !dogReady
+  const canReplace = dogReady && placement.manual
+  /** ?debug: 바닥 추정을 처음부터 다시 (잘못 잡힌 바닥 확인용) */
+  const showFloorReset = debug && inAr && placement.manual
+  /** 배치 전 빨강이 10초 넘게 이어짐 → '닫았다가 다시 열어 주세요' 한 줄 더 (바닥·깊이 상태는 건드리지 않는다) */
+  const stuck = useLongActive(arLocked && placement.manual && placement.phase === 'blocked')
 
   useEffect(() => {
     const mv = mvRef.current
@@ -212,6 +262,12 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   /** 음성 명령을 못 알아들었을 때. head_tilt 가 있으면 갸우뚱 ('알아듣지 못했어요' 문구는 마이크 버튼이 띄운다) */
   const puzzledReaction = () => animatorRef.current?.puzzled()
 
+  /** 다시 놓기: 개를 숨기고 바닥 원으로 돌아간다 */
+  const replaceDog = () => {
+    setActiveCommand(null)
+    placement.replace()
+  }
+
   // 개를 누른 채 3초 → 짖기. 그 뒤 손을 떼도 탭 반응은 내지 않는다 (onPointerUp)
   const dogHold = useLongPress<ReactPointerEvent>({
     enabled: hasCommands,
@@ -224,7 +280,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   })
   // AR 안에서 개를 직접 누를 수 없을 때 대신: 꼬리 흔들기 칩을 3초 누르면 짖기
   const wagChipHold = useLongPress<ReactPointerEvent>({
-    enabled: hasCommands && inAr,
+    enabled: hasCommands && dogReady,
     slopPx: TAP_SLOP_PX,
     canStart: (event) => !(event.target as Element).closest('button')?.disabled,
     onLongPress: () => runCommand('bark'),
@@ -295,16 +351,17 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         <span slot="progress-bar" hidden />
 
         {/* 아래는 WebXR 화면에도 그대로 겹쳐 보인다 (model-viewer 의 DOM overlay) */}
-        {/* AR: 바닥에 내려앉을 때까지 개를 숨기고, 이동·회전 터치를 막는다. 오버레이보다 앞에 둬야 칩·버튼이 위에 온다 */}
-        <ArFloorGate mvRef={mvRef} />
+        {/* AR: 놓기 전 탭은 바닥 원 자리에 놓기, 놓은 뒤에는 개 탭. 이동·회전 터치는 막는다. 오버레이보다 앞에 둬야 칩·버튼이 위에 온다 */}
+        <ArFloorHint active={inAr && placement.phase === 'searching' && !placement.floorKnown} />
         <ArTouchLayer
           active={inAr}
-          dogReady={arStatus === 'object-placed'}
+          dogReady={dogReady}
           holdEnabled={hasCommands}
           slopPx={TAP_SLOP_PX}
           mvRef={mvRef}
           onTap={tapReaction}
           onLongPress={() => runCommand('bark')}
+          onPlaceTap={placement.place}
         />
         <div
           ref={topOverlayRef}
@@ -330,8 +387,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
             <span className="size-11" aria-hidden />
           </div>
           <p aria-live="polite" className="text-center text-body text-on-dark [text-shadow:0_1px_3px_rgb(0_0_0/0.6)]">
-            {arStatus === 'session-started'
-              ? '바닥을 천천히 비춰 주세요. 바닥을 찾으면 유기견이 놓여요'
+            {arLocked
+              ? placementHint(placement)
               : hasCommands
                 ? `${POSE_LABEL[pose]} · 명령을 눌러 보세요`
                 : inAr
@@ -340,6 +397,12 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                     ? '유기견을 탭하면 고개를 갸우뚱해요'
                     : '유기견을 탭하면 꼬리를 흔들어요'}
           </p>
+          {stuck && (
+            <p className="text-center text-label text-on-dark-secondary [text-shadow:0_1px_3px_rgb(0_0_0/0.6)]">
+              잘 안 되면 AR을 닫았다가 다시 열어 주세요
+            </p>
+          )}
+          {arLocked && placement.phase === 'preparing' && placement.notice !== 'tiltDown' && <MoveSideways />}
           {isLikelyPuppy(pet.birthYear) && (
             <p className="flex max-w-[340px] gap-1.5 rounded-input bg-dark-notice px-3 py-2 text-label text-dark-notice-ink">
               <AlertCircle className="mt-0.5 size-4 shrink-0 text-measure" strokeWidth={2} aria-hidden />
@@ -356,12 +419,39 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         <div
           ref={bottomOverlayRef}
           className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col gap-3 px-4 pb-[calc(20px+env(safe-area-inset-bottom))]">
-          {hasCommands && <VoiceCommandButton inAr={inAr} onCommand={runCommand} onMiss={puzzledReaction} />}
+          {(hasCommands || canReplace || showFloorReset) && (
+            <div className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                {hasCommands && (
+                  <VoiceCommandButton inAr={inAr} disabled={arLocked} onCommand={runCommand} onMiss={puzzledReaction} />
+                )}
+              </div>
+              {showFloorReset && (
+                <button
+                  type="button"
+                  onClick={placement.resetFloor}
+                  className="pointer-events-auto h-9 shrink-0 rounded-full bg-black/65 px-3 font-mono text-[11px] text-lime-300 active:scale-97"
+                >
+                  [dev] 바닥 다시 찾기
+                </button>
+              )}
+              {canReplace && (
+                <button
+                  type="button"
+                  onClick={replaceDog}
+                  className="pointer-events-auto flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-black/55 px-4 text-body font-semibold text-white transition active:scale-97"
+                >
+                  <RotateCcw className="size-4" strokeWidth={2.2} aria-hidden />
+                  다시 놓기
+                </button>
+              )}
+            </div>
+          )}
           <CommandBar
             hasCommands={hasCommands}
             pose={pose}
             active={activeCommand}
-            disabled={!loaded}
+            disabled={!loaded || arLocked}
             onCommand={runCommand}
             onWag={wagReaction}
             wagHold={wagChipHold.handlers}
@@ -410,7 +500,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         </div>
 
         <HoldRing at={dogHold.press ?? wagChipHold.press} durationMs={LONG_PRESS_MS} />
-        {import.meta.env.DEV && <ArHitDebug mvRef={mvRef} arStatus={arStatus} />}
+        {import.meta.env.DEV && <ArHitDebug mvRef={mvRef} arStatus={arStatus} placement={placement.debug} />}
       </model-viewer>
 
       {showGuide && (
@@ -625,6 +715,17 @@ function ArGuide({
               : '이 기기에서는 AR을 열 수 없어요. 휴대폰으로 열어 주세요'}
         </p>
       </div>
+    </div>
+  )
+}
+
+/** 준비 단계: 휴대폰을 좌우로 움직이라는 표시 */
+function MoveSideways() {
+  return (
+    <div aria-hidden className="flex items-center gap-1.5 text-on-dark [filter:drop-shadow(0_1px_2px_rgb(0_0_0/0.6))]">
+      <ChevronLeft className="size-5" strokeWidth={2.2} />
+      <Smartphone className="size-7 motion-safe:animate-sway" strokeWidth={1.8} />
+      <ChevronRight className="size-5" strokeWidth={2.2} />
     </div>
   )
 }

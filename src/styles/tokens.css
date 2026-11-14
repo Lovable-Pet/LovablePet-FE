@@ -151,6 +151,8 @@
   --animate-sheet-up: sheet-up 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
   --animate-modal-in: modal-in 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
   --animate-toast-in: toast-in 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  /* AR 준비 단계: 휴대폰을 좌우로 움직이라는 표시 */
+  --animate-sway: sway 1.6s ease-in-out infinite;
 
   /* 목록 아이템: 아래에서 12px 올라오며 나타난다 */
   @keyframes rise-in {
@@ -179,6 +181,15 @@
     from {
       opacity: 0;
       transform: translateY(8px);
+    }
+  }
+  @keyframes sway {
+    0%,
+    100% {
+      transform: translateX(-14px);
+    }
+    50% {
+      transform: translateX(14px);
     }
   }
 }

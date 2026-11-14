@@ -10,15 +10,18 @@ import { useVoiceCommand } from '../useVoiceCommand'
  */
 export function VoiceCommandButton({
   inAr,
+  disabled = false,
   onCommand,
   onMiss,
 }: {
   inAr: boolean
+  /** AR 에서 개를 놓기 전. 누를 수 없고, 듣는 중이었으면 조용히 멈춘다 */
+  disabled?: boolean
   onCommand: (id: CommandId) => void
   /** 들린 말에서 명령을 못 찾았을 때 ('알아듣지 못했어요' 문구는 여기서 띄운다) */
   onMiss?: () => void
 }) {
-  const { supported, listening, heard, flash, toggle } = useVoiceCommand({ inAr, onCommand, onMiss })
+  const { supported, listening, heard, flash, toggle } = useVoiceCommand({ inAr, disabled, onCommand, onMiss })
   if (!supported) return null
 
   const bubble = listening ? (heard ? `“${heard}”` : '듣고 있어요…') : flash?.text
@@ -28,10 +31,11 @@ export function VoiceCommandButton({
       <button
         type="button"
         onClick={toggle}
+        disabled={disabled}
         aria-label="말로 명령하기"
         aria-pressed={listening}
         className={cn(
-          'pointer-events-auto relative flex size-11 shrink-0 items-center justify-center rounded-full transition active:scale-97',
+          'pointer-events-auto relative flex size-11 shrink-0 items-center justify-center rounded-full transition active:scale-97 disabled:opacity-45',
           listening ? 'bg-measure text-ink' : 'bg-black/55 text-white',
         )}
       >
