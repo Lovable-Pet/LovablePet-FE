@@ -9,7 +9,8 @@ import { HoldRing } from './HoldRing'
  *   화면 밀기(회전)·두 손가락 비틀기(회전)가 모두 안 된다 (model-viewer 에 이동·회전을 끄는 공개 설정이 없다)
  * - 뒤에 오는 오버레이(명령 칩·마이크)는 이 층 위에 그려져 그대로 눌린다.
  *   model-viewer 의 AR 닫기 버튼은 그림자 DOM 에서 슬롯보다 뒤에 있어 이 층이 가리지 않는다
- * - 개 탭(꼬리 흔들기)과 3초 누르기(짖기)는 이 층에서 받아 positionAndNormalFromPoint 로 개를 맞혔는지 본다
+ * - 개 탭(갸우뚱이 있으면 갸우뚱, 없으면 꼬리 흔들기)과 3초 누르기(짖기)는 이 층에서 받아
+ *   positionAndNormalFromPoint 로 개를 맞혔는지 본다
  * 화면 안 3D 에서는 그리지 않아 카메라 돌리기는 그대로다
  */
 export function ArTouchLayer({
