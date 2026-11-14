@@ -1,7 +1,13 @@
 import type { ModelViewerElement } from '@google/model-viewer'
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { ModelViewerArStage } from './modelViewerArStage'
-import { PlacementController, type BlockReason, type PlacementDebug, type PlacementPhase } from './placement/placementController'
+import {
+  PlacementController,
+  type BlockReason,
+  type PlacementDebug,
+  type PlacementNotice,
+  type PlacementPhase,
+} from './placement/placementController'
 import { requestDepthWithArSessions } from './xrDepthRequest'
 
 export interface ArPlacement {
@@ -16,6 +22,8 @@ export interface ArPlacement {
   floorKnown: boolean
   /** blocked 일 때 까닭 (occluded: 바닥 앞에 실제 물체) */
   blockedBy: BlockReason | null
+  /** 안내를 바꿔 보일 때 (moveSteps: 한두 걸음 옆으로) */
+  notice: PlacementNotice | null
   /** ?debug 일 때 바닥 높이·맞은 점·판정·yaw. 아니면 null */
   debug: PlacementDebug | null
   /** 화면 탭. 놓을 수 있을 때만 놓고 true (?debug 에서는 빨간 원을 두 번 탭하면 강제로 놓는다) */
@@ -31,12 +39,13 @@ interface PlacementState {
   manual: boolean
   floorKnown: boolean
   blockedBy: BlockReason | null
+  notice: PlacementNotice | null
 }
 
 /** ?debug 강제 놓기: 빨간 원에서 이 시간(ms) 안에 두 번 탭 */
 const FORCE_DOUBLE_TAP_MS = 400
 
-const OFF: PlacementState = { phase: 'off', manual: false, floorKnown: false, blockedBy: null }
+const OFF: PlacementState = { phase: 'off', manual: false, floorKnown: false, blockedBy: null, notice: null }
 
 /**
  * WebXR(안드로이드 Chrome) AR 에서 개를 사용자가 놓을 때까지 숨기고, 바닥 원을 보이다가 탭하면 놓는다.
@@ -72,6 +81,7 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
         manual: false,
         floorKnown: false,
         blockedBy: null,
+        notice: null,
       })
     }
 
@@ -88,7 +98,8 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
           return
         }
         const controller = new PlacementController(stage, {
-          onChange: ({ phase, floorKnown, blockedBy }) => setState({ phase, manual: true, floorKnown, blockedBy }),
+          onChange: ({ phase, floorKnown, blockedBy, notice }) =>
+            setState({ phase, manual: true, floorKnown, blockedBy, notice }),
           onUnavailable: (reason) => {
             if (import.meta.env.DEV) console.warn('[ar] 직접 놓기를 못 해 자동 착지로 둔다:', reason)
             if (controllerRef.current === controller) fallBack()

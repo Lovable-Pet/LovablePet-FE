@@ -59,6 +59,8 @@ interface XrRigidTransform {
 }
 interface XrPose {
   transform: XrRigidTransform
+  /** 위치를 추적하지 못해 추정한 값이면 true */
+  emulatedPosition?: boolean
 }
 interface XrView {
   transform: XrRigidTransform
@@ -380,6 +382,7 @@ export class ModelViewerArStage implements ArStage {
         onFrame({
           time,
           camera: { x, y, z },
+          tracking: !pose.emulatedPosition,
           view: { viewMatrix: view.transform.inverse.matrix, projectionMatrix: view.projectionMatrix },
           centerHit: this.centerSource ? firstHit(frame, this.centerSource, space) : null,
           centerPointHit: this.pointSource ? firstHit(frame, this.pointSource, space) : null,

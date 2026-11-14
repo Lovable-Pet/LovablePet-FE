@@ -12,13 +12,22 @@ import {
 } from './floorEstimate'
 import { CenterOcclusion, centerDepthRatio, floorGridRatios, samplePerimeterDepth, type OcclusionResult } from './occlusion'
 import { PerimeterVote, type DirectionReport, type PerimeterReport } from './perimeterVote'
+import { READY_DEPTH_TIMEOUT_MS, READY_MOVE_M, READY_TRACKING_MS, Readiness, type ReadinessReport } from './readiness'
 import { SpotCheck, type SpotReport } from './spotCheck'
 import { distanceXZ, type SurfaceHit, type Vec3 } from './types'
+import { viewForward } from './viewProjection'
 
 /**
+ * preparing: 준비 단계 (휴대폰을 좌우로 움직여 추적·바닥·깊이를 맞추는 중, 원 숨김) ·
  * searching: 바닥 못 찾음 (원 숨김) · placeable: 놓을 수 있음 · blocked: 놓을 수 없음 · placed: 놓았음
  */
-export type PlacementPhase = 'searching' | 'placeable' | 'blocked' | 'placed'
+export type PlacementPhase = 'preparing' | 'searching' | 'placeable' | 'blocked' | 'placed'
+
+/** moveSteps: 원 단계에서 깊이가 3초 넘게 안 맞음 → 한두 걸음 옆으로 움직이라는 안내 */
+export type PlacementNotice = 'moveSteps'
+
+/** 원 단계에서 깊이 안 맞음이 이만큼(ms) 이어지면 옆으로 움직이라고 안내한다 */
+export const DEPTH_DRIFT_NOTICE_MS = 3000
 
 /**
  * 놓을 수 없는 까닭.
@@ -32,6 +41,8 @@ export interface PlacementSnapshot {
   floorKnown: boolean
   /** blocked 일 때 까닭 */
   blockedBy: BlockReason | null
+  /** 안내를 바꿔 보일 때 */
+  notice: PlacementNotice | null
 }
 
 export interface PlacementControllerOptions {
@@ -118,7 +129,10 @@ export class PlacementController {
   private occlusion: OcclusionResult | null = null
   private perimeter: PerimeterReport | null = null
   private forced = false
-  private phase: PlacementPhase = 'searching'
+  private phase: PlacementPhase = 'preparing'
+  private notice: PlacementNotice | null = null
+  private readonly readiness = new Readiness()
+  private readinessReport: ReadinessReport | null = null
   private blockedBy: BlockReason | null = null
   private spot: Spot | null = null
   private camera: Vec3 | null = null
@@ -312,12 +326,36 @@ export class PlacementController {
           : obstacle
             ? 'obstacle'
             : null
+    // 준비 단계: 추적·이동·바닥 층·깊이 보정이 될 때까지 원을 보이지 않는다
+    const readiness = this.readiness.update({
+      time,
+      tracking: frame.tracking,
+      camera: frame.camera,
+      forward: viewForward(frame.view),
+      floorConfirmed: this.floor.y !== null && !this.floor.provisional,
+      depthSensor: depthOn,
+      depthOk: this.calibrationReport?.state === 'ok',
+    })
+    this.readinessReport = readiness
+    if (!readiness.ready) {
+      this.stage.setRing(null)
+      // 추적·이동은 됐는데 바닥 층이 없으면 지금의 '바닥 못 찾음' 안내
+      this.phase = readiness.moving && !readiness.floor ? 'searching' : 'preparing'
+      this.blockedBy = null
+      this.notice = null
+      this.report()
+      return
+    }
+
     const phase: PlacementPhase = !this.spot ? 'searching' : blockedBy ? 'blocked' : 'placeable'
     this.stage.setRing(
       this.spot && { center: this.spot.center, radius: this.ringRadius, tone: phase === 'placeable' ? 'ok' : 'blocked' },
     )
     this.phase = phase
     this.blockedBy = blockedBy
+    // 원 단계에서 깊이가 3초 넘게 안 맞으면 한두 걸음 옆으로 움직이라고 안내한다 (판정은 이미 특징점으로 내려가 있다)
+    const drifting = this.calibrationReport?.state === 'bad' && this.calibrationReport.stateMs >= DEPTH_DRIFT_NOTICE_MS
+    this.notice = drifting ? 'moveSteps' : null
     this.report()
   }
 
@@ -345,13 +383,15 @@ export class PlacementController {
       phase: this.phase,
       floorKnown: this.floor.y !== null,
       blockedBy: this.blockedBy,
+      notice: this.notice,
     }
     const last = this.reported
     if (
       last &&
       last.phase === snapshot.phase &&
       last.floorKnown === snapshot.floorKnown &&
-      last.blockedBy === snapshot.blockedBy
+      last.blockedBy === snapshot.blockedBy &&
+      last.notice === snapshot.notice
     ) {
       return
     }
@@ -369,6 +409,7 @@ export class PlacementController {
     const lines = [
       `센서 깊이 ${sensors.depth}${sensors.depthFormat ? ` (${sensors.depthFormat})` : ''} · 특징점 ${sensors.points}`,
       `깊이 보정 ${describeCalibration(this.calibrationReport, sensors)}`,
+      `준비 ${describeReadiness(this.readinessReport)}`,
       `개 ${meters(size.x)}×${meters(size.y)}×${meters(size.z)} · 원 r ${meters(this.ringRadius)} · 둘레 r ${meters(this.spotCheck.radius)}`,
       `바닥 ${describeFloor(this.floor.status(), time)}`,
       `맞은 점 ${hit ? `${height(hit.position.y)} (위 ${hit.normal.y.toFixed(2)}) · ${describeHitUse(hit, camera)}` : '없음'}`,
@@ -454,6 +495,25 @@ const signed = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}`
 const degrees = (radians: number) => Math.round((radians * 180) / Math.PI)
 
 const BASIS_LABEL = { depth: '깊이', points: '특징점', none: '판정 안 함' } as const
+
+const mark = (ok: boolean) => (ok ? '됨' : '안 됨')
+
+/** 준비 조건: a 추적 1.2s 됨 · b 이동 0.24/0.30m 안 됨 · c 바닥 층 됨 · d 깊이 보정 기다림 5.1/8s */
+function describeReadiness(report: ReadinessReport | null) {
+  if (!report) return '-'
+  const depth = {
+    ok: '됨',
+    skipped: '건너뜀 (깊이 센서 없음)',
+    timeout: '8초 지나 깊이 없이 진행',
+    waiting: `안 됨 ${(report.elapsedMs / 1000).toFixed(1)}/${READY_DEPTH_TIMEOUT_MS / 1000}s`,
+  }[report.depth]
+  const head = report.ready ? '끝 · ' : ''
+  return (
+    `${head}a 추적 ${(report.trackingMs / 1000).toFixed(1)}s ${mark(report.trackingMs >= READY_TRACKING_MS)}` +
+    ` · b 이동 ${report.moved.toFixed(2)}/${READY_MOVE_M.toFixed(2)}m ${mark(report.moved >= READY_MOVE_M)}` +
+    ` · c 바닥 층 ${mark(report.floor)} · d 깊이 보정 ${depth}`
+  )
+}
 
 /** 깊이 보정: r=0.74 (안 맞음 → 특징점 사용) · 둘레 같이 어긋남 7/8 · 특징점 일치 · 2.3초째 */
 function describeCalibration(report: CalibrationReport | null, sensors: StageSensors) {

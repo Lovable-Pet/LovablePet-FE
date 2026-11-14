@@ -9,6 +9,8 @@ export interface StageFrame {
   time: number
   /** 휴대폰(카메라) 위치 */
   camera: Vec3
+  /** 추적이 정상인지 (뷰어 포즈가 있고 위치가 추정값(emulatedPosition)이 아님) */
+  tracking: boolean
   /** 카메라 행렬 (기준 공간의 점을 화면에 투영할 때 쓴다) */
   view: StageView
   /** 화면 가운데 광선이 처음 맞은 면. 아무것도 안 맞았으면 null */
