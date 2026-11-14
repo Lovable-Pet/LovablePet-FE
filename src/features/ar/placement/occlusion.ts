@@ -1,7 +1,7 @@
 import type { DepthSampler, StageSensors, StageView } from './arStage'
 import { SPOT_DIRECTIONS } from './spotCheck'
 import { distanceXZ, type Vec3 } from './types'
-import { isOnScreen, projectToView } from './viewProjection'
+import { isOnScreen, projectToView, viewForward } from './viewProjection'
 
 // 가림 판정: 바닥 광선이 실제로 처음 닿는 면이 바닥인가.
 // hit-test 는 ARCore 가 면으로 인식한 것만 맞힌다. 아직 인식하지 못한 책상·문은 광선이 통과해 뒤쪽 바닥에 맞고,
@@ -60,6 +60,50 @@ export function medianDepth(depth: DepthSampler, u: number, v: number, size: num
   return median(values)
 }
 
+/**
+ * 화면 가운데 바닥 hit 자리의 깊이 비율 r = 실제 거리(깊이, 정면 축) / 바닥 hit 까지 거리(정면 축).
+ * 깊이 센서가 맞으면 빈 바닥에서 1 근처다. 값이 없거나 화면 밖이면 null
+ */
+export function centerDepthRatio(floorHit: Vec3, view: StageView, depth: DepthSampler | null): number | null {
+  if (!depth) return null
+  const projected = projectToView(floorHit, view)
+  if (!projected || !isOnScreen(projected)) return null
+  const measured = medianDepth(depth, projected.u, projected.v, CENTER_SAMPLE)
+  return measured === null ? null : measured / projected.depth
+}
+
+/** 화면 격자: 카메라 앞 바닥의 이 거리(m)들과 */
+const GRID_DISTANCES_M = [1.0, 1.4, 1.9, 2.5]
+/** … 거리에 대한 좌우 비율들 (화면 가로 안에 들게 작게) */
+const GRID_SIDES = [-0.2, -0.1, 0, 0.1, 0.2]
+
+/**
+ * 화면 여러 곳의 바닥 깊이 비율 r = 실제 거리 / 바닥 점까지 거리 (정면 축).
+ * 카메라 앞 바닥(바닥 높이)의 격자 점을 화면에 투영해 잰다. 화면 밖·값 없음·발밑은 뺀다.
+ * 깊이 센서가 화면 전체에서 같은 비율로 어긋났는지(센서 문제) 진짜 물체가 일부만 가렸는지 가를 때 쓴다
+ */
+export function floorGridRatios(camera: Vec3, floorY: number, view: StageView, depth: DepthSampler | null): number[] {
+  if (!depth) return []
+  const forward = viewForward(view)
+  const length = Math.hypot(forward.x, forward.z)
+  if (length === 0) return []
+  const fx = forward.x / length
+  const fz = forward.z / length
+  const ratios: number[] = []
+  for (const distance of GRID_DISTANCES_M) {
+    for (const side of GRID_SIDES) {
+      const lateral = distance * side
+      const point = { x: camera.x + fx * distance - fz * lateral, y: floorY, z: camera.z + fz * distance + fx * lateral }
+      if (distanceXZ(point, camera) < CAMERA_FOOT_RADIUS_M) continue
+      const projected = projectToView(point, view)
+      if (!projected || !isOnScreen(projected)) continue
+      const measured = medianDepth(depth, projected.u, projected.v, PERIMETER_SAMPLE)
+      if (measured !== null) ratios.push(measured / projected.depth)
+    }
+  }
+  return ratios
+}
+
 /** 최근 size 개 값의 중앙값. null(값 없음)은 자리만 차지하고 계산에서 빠진다 */
 export class RecentMedian {
   private readonly size: number
@@ -106,6 +150,8 @@ export interface CenterOcclusionInput {
   /** 같은 광선이 맞은 특징점 */
   pointHit: Vec3 | null
   sensors: StageSensors
+  /** 깊이를 믿을 수 있는지 (DepthCalibration 이 맞음으로 본 때). 아니면 깊이 대신 특징점으로 판정한다 */
+  depthTrusted: boolean
 }
 
 const NO_JUDGEMENT: OcclusionResult = {
@@ -123,7 +169,7 @@ export class CenterOcclusion {
   private pointBlockedAt = -Infinity
 
   update(input: CenterOcclusionInput): OcclusionResult {
-    if (input.sensors.depth === 'on') {
+    if (input.sensors.depth === 'on' && input.depthTrusted) {
       const result = this.byDepth(input)
       if (result) return result
     }
@@ -169,6 +215,8 @@ export interface PerimeterSample {
   state: PerimeterState
   /** 실제 거리 − 둘레 점까지 거리 (정면 축, m). 음수면 둘레 점 앞에 무언가 있다. 못 쟀으면 null */
   gap: number | null
+  /** 실제 거리 / 둘레 점까지 거리 (정면 축). 깊이 보정 검사에 쓴다. 발밑 자리도 잰다. 못 쟀으면 null */
+  ratio: number | null
   reason: UnknownReason | null
 }
 
@@ -189,14 +237,15 @@ export function samplePerimeterDepth(
   return Array.from({ length: SPOT_DIRECTIONS }, (_, index): PerimeterSample => {
     const angle = (index / SPOT_DIRECTIONS) * Math.PI * 2
     const point = { x: center.x + Math.sin(angle) * radius, y: floorY, z: center.z + Math.cos(angle) * radius }
-    if (distanceXZ(point, camera) < CAMERA_FOOT_RADIUS_M) return { state: 'unknown', gap: null, reason: 'feet' }
     const projected = projectToView(point, view)
-    if (!projected || !isOnScreen(projected)) return { state: 'unknown', gap: null, reason: 'offscreen' }
+    if (!projected || !isOnScreen(projected)) return { state: 'unknown', gap: null, ratio: null, reason: 'offscreen' }
     const measured = depth ? medianDepth(depth, projected.u, projected.v, PERIMETER_SAMPLE) : null
-    if (measured === null) return { state: 'unknown', gap: null, reason: 'nodata' }
+    const ratio = measured === null ? null : measured / projected.depth
+    if (distanceXZ(point, camera) < CAMERA_FOOT_RADIUS_M) return { state: 'unknown', gap: null, ratio, reason: 'feet' }
+    if (measured === null) return { state: 'unknown', gap: null, ratio, reason: 'nodata' }
     const gap = measured - projected.depth
-    if (gap >= -depthMargin(projected.depth)) return { state: 'floor', gap, reason: null }
-    if (-gap < PERIMETER_MAX_GAP_M) return { state: 'obstacle', gap, reason: null }
-    return { state: 'unknown', gap, reason: 'close' }
+    if (gap >= -depthMargin(projected.depth)) return { state: 'floor', gap, ratio, reason: null }
+    if (-gap < PERIMETER_MAX_GAP_M) return { state: 'obstacle', gap, ratio, reason: null }
+    return { state: 'unknown', gap, ratio, reason: 'close' }
   })
 }

@@ -28,3 +28,14 @@ export function projectToView(point: Vec3, view: StageView): ScreenPoint | null 
 }
 
 export const isOnScreen = ({ u, v }: ScreenPoint) => u >= 0 && u <= 1 && v >= 0 && v <= 1
+
+/** 카메라가 바라보는 방향 (기준 공간, 단위 벡터). 카메라 공간 -z 축 */
+export function viewForward(view: StageView): Vec3 {
+  const m = view.viewMatrix
+  // 기준 → 카메라 회전의 세 번째 행이 카메라 z 축 (기준 공간)
+  const x = -m[2]
+  const y = -m[6]
+  const z = -m[10]
+  const length = Math.hypot(x, y, z)
+  return length > 0 ? { x: x / length, y: y / length, z: z / length } : { x: 0, y: 0, z: -1 }
+}

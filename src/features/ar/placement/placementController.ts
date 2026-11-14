@@ -1,4 +1,5 @@
-import type { ArStage, StageFrame } from './arStage'
+import type { ArStage, StageFrame, StageSensors } from './arStage'
+import { DepthCalibration, type CalibrationReport } from './depthCalibration'
 import { yawToward } from './facing'
 import {
   FLOOR_SWITCH_HOLD_MS,
@@ -9,7 +10,7 @@ import {
   type FloorStatus,
   type SurfaceLevel,
 } from './floorEstimate'
-import { CenterOcclusion, samplePerimeterDepth, type OcclusionResult } from './occlusion'
+import { CenterOcclusion, centerDepthRatio, floorGridRatios, samplePerimeterDepth, type OcclusionResult } from './occlusion'
 import { PerimeterVote, type DirectionReport, type PerimeterReport } from './perimeterVote'
 import { SpotCheck, type SpotReport } from './spotCheck'
 import { distanceXZ, type SurfaceHit, type Vec3 } from './types'
@@ -93,6 +94,7 @@ interface Spot {
  * 1. 개를 숨기고, 매 프레임 화면 가운데 광선이 맞은 수평면에 원을 눕힌다. 놓을 수 없는 때:
  *    - 바닥 층보다 8cm 넘게 높은 면 (6cm 아래로 와야 풀림)
  *    - 바닥 hit 앞에 실제 물체가 있음 (CenterOcclusion: 깊이 센서 → 특징점 → 판정 안 함)
+ *      깊이는 DepthCalibration 이 맞음으로 본 동안만 쓴다 (화면 전체가 같은 비율로 어긋나면 특징점으로 대신)
  *    - 둘레에 장애물이 확인됨 (SpotCheck 광선 + samplePerimeterDepth 깊이 → PerimeterVote: 3프레임 연속 2곳 이상, 또는 한 곳 10프레임 연속)
  * 2. place(): 놓을 수 있을 때만 원 중심·바닥 높이에 개를 놓고, 앞쪽이 휴대폰을 향하게 한다. 그 뒤 방향은 고정.
  *    place({ force: true }) 는 막혀 있어도 놓는다 (디버그 확인용, 부르는 쪽이 ?debug 에서만 쓴다)
@@ -107,6 +109,10 @@ export class PlacementController {
   private readonly spotCheck: SpotCheck
   private readonly centerOcclusion = new CenterOcclusion()
   private readonly perimeterVote = new PerimeterVote()
+  private readonly calibration = new DepthCalibration()
+  private calibrationReport: CalibrationReport | null = null
+  /** 깊이 판정(가운데 가림·둘레 깊이 장애물)을 쓰는 중인지 */
+  private depthTrusted = false
   private readonly blockStats = new RecentCounts(DEBUG_STATS_MS)
   private spotReport: SpotReport | null = null
   private occlusion: OcclusionResult | null = null
@@ -221,18 +227,9 @@ export class PlacementController {
     // 믿을 수 없는 높이에 개를 놓지 않는다
     const level = centerHit && isHorizontal(centerHit.normal) ? this.floor.classify(centerHit.position.y) : null
     this.lastLevel = level
-    if (centerHit && level !== null && level !== 'lower') {
-      this.spot = { center: centerHit.position, level, seenAt: time }
-      // hit-test 는 인식한 면만 맞힌다. 그 바닥이 실제로 처음 닿는 면인지 본다
-      this.occlusion = this.centerOcclusion.update({
-        time,
-        camera: frame.camera,
-        view: frame.view,
-        floorHit: centerHit.position,
-        depth: frame.depth,
-        pointHit: frame.centerPointHit?.position ?? null,
-        sensors: frame.sensors,
-      })
+    const freshHit = centerHit && level !== null && level !== 'lower' ? centerHit : null
+    if (freshHit && level) {
+      this.spot = { center: freshHit.position, level, seenAt: time }
     } else if (this.spot && time - this.spot.seenAt > LOST_GRACE_MS) {
       this.spot = null
       this.occlusion = null
@@ -240,14 +237,57 @@ export class PlacementController {
     }
 
     const floorY = this.spot && this.spot.level !== 'raised' ? this.surfaceY(this.spot) : null
+    const depthOn = frame.sensors.depth === 'on'
+    // 둘레 깊이: 둘레 장애물 판정과 깊이 보정 검사 둘 다에 쓴다
+    const perimeterDepth =
+      this.spot && floorY !== null && depthOn
+        ? samplePerimeterDepth(this.spot.center, floorY, this.spotCheck.radius, frame.camera, frame.view, frame.depth)
+        : null
+
+    // 깊이 보정 검사: 가운데가 확정 바닥 층에 맞았을 때 r = 깊이 / 바닥 hit 을 모은다
+    const onFloorLayer = freshHit !== null && level === 'floor' && !this.floor.provisional
+    this.calibrationReport = depthOn
+      ? this.calibration.update({
+          time,
+          centerRatio: onFloorLayer ? centerDepthRatio(freshHit.position, frame.view, frame.depth) : null,
+          perimeterRatios: perimeterDepth?.map((sample) => sample.ratio) ?? [],
+          gridRatios: onFloorLayer && floorY !== null ? floorGridRatios(frame.camera, floorY, frame.view, frame.depth) : [],
+          pointRatio:
+            onFloorLayer && frame.centerPointHit
+              ? distance(frame.camera, frame.centerPointHit.position) / distance(frame.camera, freshHit.position)
+              : null,
+        })
+      : null
+    const depthTrusted = depthOn && this.calibrationReport?.state === 'ok'
+    if (depthTrusted !== this.depthTrusted) {
+      // 깊이를 쓰다 말다 할 때 옛 기록을 버린다
+      this.depthTrusted = depthTrusted
+      this.centerOcclusion.reset()
+      this.perimeterVote.reset()
+    }
+
+    // hit-test 는 인식한 면만 맞힌다. 그 바닥이 실제로 처음 닿는 면인지 본다
+    if (freshHit) {
+      this.occlusion = this.centerOcclusion.update({
+        time,
+        camera: frame.camera,
+        view: frame.view,
+        floorHit: freshHit.position,
+        depth: frame.depth,
+        pointHit: frame.centerPointHit?.position ?? null,
+        sensors: frame.sensors,
+        depthTrusted,
+      })
+    }
+
     if (this.spot && floorY !== null) {
       const { center } = this.spot
       this.spotReport = this.spotCheck.update(center, floorY)
-      const depth =
-        frame.sensors.depth === 'on'
-          ? samplePerimeterDepth(center, floorY, this.spotCheck.radius, frame.camera, frame.view, frame.depth)
-          : null
-      this.perimeter = this.perimeterVote.update(center, this.spotReport.fresh ? this.spotReport.directions : null, depth)
+      this.perimeter = this.perimeterVote.update(
+        center,
+        this.spotReport.fresh ? this.spotReport.directions : null,
+        depthTrusted ? perimeterDepth : null,
+      )
     } else {
       this.spotCheck.idle()
       this.perimeterVote.reset()
@@ -328,6 +368,7 @@ export class PlacementController {
     const size = this.stage.dogSize
     const lines = [
       `센서 깊이 ${sensors.depth}${sensors.depthFormat ? ` (${sensors.depthFormat})` : ''} · 특징점 ${sensors.points}`,
+      `깊이 보정 ${describeCalibration(this.calibrationReport, sensors)}`,
       `개 ${meters(size.x)}×${meters(size.y)}×${meters(size.z)} · 원 r ${meters(this.ringRadius)} · 둘레 r ${meters(this.spotCheck.radius)}`,
       `바닥 ${describeFloor(this.floor.status(), time)}`,
       `맞은 점 ${hit ? `${height(hit.position.y)} (위 ${hit.normal.y.toFixed(2)}) · ${describeHitUse(hit, camera)}` : '없음'}`,
@@ -413,6 +454,14 @@ const signed = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}`
 const degrees = (radians: number) => Math.round((radians * 180) / Math.PI)
 
 const BASIS_LABEL = { depth: '깊이', points: '특징점', none: '판정 안 함' } as const
+
+/** 깊이 보정: r=0.74 (안 맞음 → 특징점 사용) · 둘레 같이 어긋남 7/8 · 특징점 일치 · 2.3초째 */
+function describeCalibration(report: CalibrationReport | null, sensors: StageSensors) {
+  if (sensors.depth !== 'on' || !report) return '깊이 센서 없음 → 특징점 사용'
+  const verdict = report.state === 'ok' ? '맞음 → 깊이 사용' : report.state === 'bad' ? '안 맞음 → 특징점 사용' : '아직 모름 → 특징점 사용'
+  const point = report.pointAgree === null ? '특징점 없음' : report.pointAgree ? '특징점 일치' : '특징점 불일치'
+  return `r=${report.ratio === null ? '-' : report.ratio.toFixed(2)} (${verdict}) · 둘레 같이 어긋남 ${report.similar ?? '-'}/8 · 화면 ${report.gridSimilar === null ? '-' : `${Math.round(report.gridSimilar * 100)}%`} · ${point} · ${(report.stateMs / 1000).toFixed(1)}초째`
+}
 
 function describeOcclusion(result: OcclusionResult | null) {
   if (!result) return '-'
