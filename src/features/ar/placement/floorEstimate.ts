@@ -35,26 +35,32 @@ export const isHorizontal = (normal: Vec3) => normal.y >= HORIZONTAL_MIN_UP
  */
 export type HitUse = 'used' | 'far' | 'grazing' | 'notHorizontal' | 'none'
 
-/** hit 을 바닥 추정에 쓸 수 있는지 (카메라 위치 기준) */
-export function floorHitUse(hit: SurfaceHit | null, camera: Vec3): HitUse {
-  if (!hit) return 'none'
-  if (!isHorizontal(hit.normal)) return 'notHorizontal'
+/** 카메라에서 hit 까지 수평 거리(m)와 광선이 면에 맞는 각도(°, 광선과 면 사이. 90° 는 수직으로 내려다봄) */
+export function hitGeometry(hit: SurfaceHit, camera: Vec3): { distance: number; grazingDeg: number } {
   const dx = hit.position.x - camera.x
   const dy = hit.position.y - camera.y
   const dz = hit.position.z - camera.z
-  if (Math.hypot(dx, dz) > FLOOR_MAX_DISTANCE_M) return 'far'
   const length = Math.hypot(dx, dy, dz)
   const { normal } = hit
   const normalLength = Math.hypot(normal.x, normal.y, normal.z) || 1
   // 광선과 면 사이 각도 = 90° − 광선과 법선 사이 각도
   const sine = Math.abs(dx * normal.x + dy * normal.y + dz * normal.z) / (length * normalLength || 1)
-  if ((Math.asin(Math.min(1, sine)) * 180) / Math.PI < FLOOR_MIN_GRAZING_DEG) return 'grazing'
+  return { distance: Math.hypot(dx, dz), grazingDeg: (Math.asin(Math.min(1, sine)) * 180) / Math.PI }
+}
+
+/** hit 을 바닥 추정에 쓸 수 있는지 (카메라 위치 기준) */
+export function floorHitUse(hit: SurfaceHit | null, camera: Vec3): HitUse {
+  if (!hit) return 'none'
+  if (!isHorizontal(hit.normal)) return 'notHorizontal'
+  const { distance, grazingDeg } = hitGeometry(hit, camera)
+  if (distance > FLOOR_MAX_DISTANCE_M) return 'far'
+  if (grazingDeg < FLOOR_MIN_GRAZING_DEG) return 'grazing'
   return 'used'
 }
 
 /**
  * floor: 바닥 높이 · raised: 바닥보다 5cm 넘게 높음 (책상·소파) ·
- * lower: 바닥보다 5cm 넘게 낮음 (아직 바닥으로 확정되지 않은 더 낮은 면. 그 면 높이에 놓는다)
+ * lower: 바닥보다 5cm 넘게 낮음 (아직 바닥으로 확정되지 않은 더 낮은 면. 원 자리로 쓰지 않는다)
  */
 export type SurfaceLevel = 'floor' | 'raised' | 'lower'
 

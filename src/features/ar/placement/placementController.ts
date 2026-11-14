@@ -1,6 +1,14 @@
 import type { ArStage, StageFrame } from './arStage'
 import { yawToward } from './facing'
-import { FloorEstimate, isHorizontal, type SurfaceLevel } from './floorEstimate'
+import {
+  FLOOR_SWITCH_HOLD_MS,
+  FloorEstimate,
+  floorHitUse,
+  hitGeometry,
+  isHorizontal,
+  type FloorStatus,
+  type SurfaceLevel,
+} from './floorEstimate'
 import { CenterOcclusion, samplePerimeterDepth, type OcclusionResult } from './occlusion'
 import { PerimeterVote, type DirectionReport, type PerimeterReport } from './perimeterVote'
 import { SpotCheck, type SpotReport } from './spotCheck'
@@ -294,7 +302,9 @@ export class PlacementController {
     const lines = [
       `센서 깊이 ${sensors.depth}${sensors.depthFormat ? ` (${sensors.depthFormat})` : ''} · 특징점 ${sensors.points}`,
       `개 ${meters(size.x)}×${meters(size.y)}×${meters(size.z)} · 원 r ${meters(this.ringRadius)} · 둘레 r ${meters(this.spotCheck.radius)}`,
-      `바닥 ${meters(this.floor.y)}${this.floor.provisional ? ' (임시)' : ''} · 맞은 점 ${hit ? `${meters(hit.position.y)} (위 ${hit.normal.y.toFixed(2)})` : '없음'}`,
+      `바닥 ${describeFloor(this.floor.status(), time)}`,
+      `맞은 점 ${hit ? `${height(hit.position.y)} (위 ${hit.normal.y.toFixed(2)}) · ${describeHitUse(hit, camera)}` : '없음'}`,
+      `높이 분포 ${describeBins(this.floor.status())}`,
       `판정 ${this.phase}${this.blockedBy ? ` (${this.blockedBy})` : ''} · 맞은 면 ${this.lastLevel ?? '-'}${this.lastLevel === 'lower' ? ' (바닥보다 낮아 무시)' : ''}`,
     ]
     if (this.placed) {
@@ -319,6 +329,37 @@ export class PlacementController {
 
 const distance = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 const meters = (value: number | null) => (value === null ? '-' : value.toFixed(2))
+const height = (value: number) => value.toFixed(3)
+const secondsAgo = (now: number, then: number) => ((now - then) / 1000).toFixed(1)
+
+/** 바닥 추정값이 어떻게 정해졌는지: 높이, hit 수, 가로 퍼짐, 처음·마지막으로 본 시각, 바꿀 후보 */
+function describeFloor(status: FloorStatus, now: number) {
+  if (status.y === null) return '- (아직 수평면 없음)'
+  if (status.provisional || !status.bin) return `${height(status.y)} (임시: 후보 없음, 지금 맞은 수평면)`
+  const { bin, pending } = status
+  const next = pending
+    ? ` · 바꿀 후보 ${height(pending.bin.y)} ${(pending.heldMs / 1000).toFixed(1)}/${(FLOOR_SWITCH_HOLD_MS / 1000).toFixed(1)}초`
+    : ''
+  return `${height(bin.y)} (hit ${bin.hits} · 퍼짐 ${bin.spread.toFixed(2)}m · 처음 ${secondsAgo(now, bin.firstSeen)}초 전 · 마지막 ${secondsAgo(now, bin.lastSeen)}초 전)${next}`
+}
+
+/** 지금 가운데 hit 을 바닥 추정에 썼는지, 안 썼으면 왜 */
+function describeHitUse(hit: SurfaceHit, camera: Vec3) {
+  const use = floorHitUse(hit, camera)
+  if (use === 'used') return '추정에 씀'
+  if (use === 'notHorizontal') return '수평면 아님'
+  const { distance, grazingDeg } = hitGeometry(hit, camera)
+  if (use === 'far') return `추정 안 씀: 멀다 ${distance.toFixed(1)}m`
+  return `추정 안 씀: 비스듬하다 ${Math.round(grazingDeg)}°`
+}
+
+/** 높이별(2cm 칸) 수평 hit 수 위 3개. ✓ 바닥 후보 조건을 채움 · ★ 지금 바닥 */
+function describeBins(status: FloorStatus) {
+  if (!status.top.length) return '-'
+  return status.top
+    .map((bin) => `${height(bin.y)}:${bin.hits}${bin.candidate ? '✓' : ''}${bin.key === status.bin?.key ? '★' : ''}`)
+    .join(' · ')
+}
 const signed = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}`
 const degrees = (radians: number) => Math.round((radians * 180) / Math.PI)
 
