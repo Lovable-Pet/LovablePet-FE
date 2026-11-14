@@ -140,12 +140,16 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
 
   const withersCm = toWithersCm(model.withersM)
   const inAr = arStatus === 'session-started' || arStatus === 'object-placed'
-  const placement = useArPlacement(mvRef, { debug: import.meta.env.DEV && searchParams.has('debug') })
+  /** 개발 모드에서 주소에 ?debug 를 붙였을 때 (배포 파일에는 들어가지 않는다) */
+  const debug = import.meta.env.DEV && searchParams.has('debug')
+  const placement = useArPlacement(mvRef, { debug })
   /** AR 에서 개가 바닥에 놓였는지 */
   const dogReady = inAr && placement.phase === 'placed'
   /** AR 에서 개를 놓기 전: 명령 칩·음성·개 탭·3초 누르기를 막는다 */
   const arLocked = inAr && !dogReady
   const canReplace = dogReady && placement.manual
+  /** ?debug: 바닥 추정을 처음부터 다시 (잘못 잡힌 바닥 확인용) */
+  const showFloorReset = debug && inAr && placement.manual
 
   useEffect(() => {
     const mv = mvRef.current
@@ -384,13 +388,22 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         <div
           ref={bottomOverlayRef}
           className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col gap-3 px-4 pb-[calc(20px+env(safe-area-inset-bottom))]">
-          {(hasCommands || canReplace) && (
+          {(hasCommands || canReplace || showFloorReset) && (
             <div className="flex items-center gap-2">
               <div className="min-w-0 flex-1">
                 {hasCommands && (
                   <VoiceCommandButton inAr={inAr} disabled={arLocked} onCommand={runCommand} onMiss={puzzledReaction} />
                 )}
               </div>
+              {showFloorReset && (
+                <button
+                  type="button"
+                  onClick={placement.resetFloor}
+                  className="pointer-events-auto h-9 shrink-0 rounded-full bg-black/65 px-3 font-mono text-[11px] text-lime-300 active:scale-97"
+                >
+                  [dev] 바닥 다시 찾기
+                </button>
+              )}
               {canReplace && (
                 <button
                   type="button"

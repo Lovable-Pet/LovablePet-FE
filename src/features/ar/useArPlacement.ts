@@ -22,6 +22,8 @@ export interface ArPlacement {
   place: () => boolean
   /** 다시 놓기 */
   replace: () => void
+  /** 바닥 다시 찾기 (?debug 버튼): 바닥 추정을 처음부터 */
+  resetFloor: () => void
 }
 
 interface PlacementState {
@@ -128,6 +130,7 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
     return false
   }, [])
   const replace = useCallback(() => controllerRef.current?.replace(), [])
+  const resetFloor = useCallback(() => controllerRef.current?.resetFloor(), [])
 
-  return { ...state, debugLines, place, replace }
+  return { ...state, debugLines, place, replace, resetFloor }
 }

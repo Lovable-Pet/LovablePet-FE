@@ -113,6 +113,8 @@ export class PlacementController {
   private lastHit: SurfaceHit | null = null
   /** 마지막 가운데 hit 이 바닥에 견줘 어디인지 (수평면이 아니면 null) */
   private lastLevel: SurfaceLevel | null = null
+  /** 마지막 프레임 시각 (ms) */
+  private lastTime = 0
   private placed: { position: Vec3; yaw: number } | null = null
   private reported: PlacementSnapshot | null = null
   private lastDebugAt = -Infinity
@@ -157,14 +159,32 @@ export class PlacementController {
     return true
   }
 
-  /** 다시 놓기: 개를 숨기고 원 모드로 돌아간다. 다시 놓으면 그때 휴대폰 위치를 바라본다 */
+  /**
+   * 다시 놓기: 개를 숨기고 원 모드로 돌아간다. 다시 놓으면 그때 휴대폰 위치를 바라본다.
+   * 최근 3초 안에 다시 보지 못한 바닥 후보는 정리한다 (좌표가 어긋나 남은 옛 바닥 높이)
+   */
   replace() {
     if (this.stopped || this.phase !== 'placed') return
     this.stage.hideDog()
     this.stage.setRing(null)
+    this.floor.prune(this.lastTime)
     this.placed = null
     this.spot = null
     this.phase = 'searching'
+    this.report()
+  }
+
+  /** 바닥 다시 찾기 (디버그): 바닥 추정을 처음부터. 놓기 전이면 원 모드도 처음부터 */
+  resetFloor() {
+    if (this.stopped) return
+    this.floor.reset()
+    if (this.phase === 'placed') return
+    this.spot = null
+    this.lastLevel = null
+    this.clearChecks()
+    this.stage.setRing(null)
+    this.phase = 'searching'
+    this.blockedBy = null
     this.report()
   }
 
@@ -180,6 +200,7 @@ export class PlacementController {
     if (this.stopped) return
     this.camera = frame.camera
     this.lastHit = frame.centerHit
+    this.lastTime = frame.time
     // 놓은 뒤에도 바닥 추정은 이어 간다 (다시 놓을 때 쓴다)
     this.floor.update(frame.time, frame.centerHit, frame.camera)
     if (this.phase !== 'placed') this.track(frame)
