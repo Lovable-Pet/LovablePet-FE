@@ -9,8 +9,42 @@ export interface StageFrame {
   time: number
   /** 휴대폰(카메라) 위치 */
   camera: Vec3
+  /** 카메라 행렬 (기준 공간의 점을 화면에 투영할 때 쓴다) */
+  view: StageView
   /** 화면 가운데 광선이 처음 맞은 면. 아무것도 안 맞았으면 null */
   centerHit: SurfaceHit | null
+  /** 이번 프레임 깊이. 깊이 센서를 못 쓰거나 이번 프레임 값이 없으면 null. onFrame 안에서만 읽는다 */
+  depth: DepthSampler | null
+  /** 이 세션에서 쓸 수 있는 보조 센서 */
+  sensors: StageSensors
+}
+
+export interface StageView {
+  /** 기준 공간 → 카메라 공간 (열 우선 4x4). 카메라 공간은 -z 가 정면 */
+  viewMatrix: ArrayLike<number>
+  /** 카메라 공간 → 클립 공간 (열 우선 4x4) */
+  projectionMatrix: ArrayLike<number>
+}
+
+/** 깊이 센서의 한 프레임 */
+export interface DepthSampler {
+  /** 깊이 버퍼 크기 (픽셀). 표본 간격을 정할 때 쓴다 */
+  readonly width: number
+  readonly height: number
+  /**
+   * 화면 좌표(0~1, 왼쪽 위가 원점, u 는 오른쪽·v 는 아래로 커진다)에서 실제 물체까지 거리 (m).
+   * 카메라 정면 축으로 잰 거리다 (광선 길이가 아니다). 값이 없으면 null
+   */
+  at(u: number, v: number): number | null
+}
+
+/** pending: 아직 모름 · on: 쓸 수 있음 · off: 없음(기기·브라우저가 안 됨, 거부됨) */
+export type SensorState = 'pending' | 'on' | 'off'
+
+export interface StageSensors {
+  depth: SensorState
+  /** 깊이 형식 (디버그). 예: 'cpu-optimized · luminance-alpha' */
+  depthFormat: string | null
 }
 
 /** ok: 놓을 수 있음 · blocked: 놓을 수 없음 · marker: 디버그용, 놓은 자리 표시 */

@@ -2,6 +2,7 @@ import type { ModelViewerElement } from '@google/model-viewer'
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { ModelViewerArStage } from './modelViewerArStage'
 import { PlacementController, type PlacementPhase } from './placement/placementController'
+import { requestDepthWithArSessions } from './xrDepthRequest'
 
 export interface ArPlacement {
   /** off: AR 밖 (화면 안 3D, 아이폰 Quick Look 포함) */
@@ -42,6 +43,9 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
   useEffect(() => {
     debugRef.current = debug
   }, [debug])
+
+  // AR 세션을 열 때 깊이 센서도 요청한다 (이 화면에 있는 동안만)
+  useEffect(() => requestDepthWithArSessions(), [])
 
   useEffect(() => {
     const mv = mvRef.current

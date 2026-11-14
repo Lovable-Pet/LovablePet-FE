@@ -1,7 +1,17 @@
 import type { ModelViewerElement } from '@google/model-viewer'
 import { CircleGeometry, DoubleSide, Group, Mesh, MeshBasicMaterial, RingGeometry, type BufferGeometry } from 'three'
-import type { ArStage, ProbeSet, RingPose, RingTone, StageFrame } from './placement/arStage'
+import type {
+  ArStage,
+  DepthSampler,
+  ProbeSet,
+  RingPose,
+  RingTone,
+  SensorState,
+  StageFrame,
+  StageSensors,
+} from './placement/arStage'
 import type { Ray, SurfaceHit, Vec3 } from './placement/types'
+import { enabledFeaturesOf } from './xrDepthRequest'
 
 // model-viewer 내부를 쓰는 곳은 이 파일 하나다 (배치 로직의 ArStage 를 채우는 어댑터).
 // @google/model-viewer 4.1.0 · three 0.172.0 소스 기준 (package.json 에 고정).
@@ -42,8 +52,20 @@ const RING_COLORS: Record<RingTone, number> = {
 
 // ── WebXR (TypeScript DOM 타입에 없다). 여기서 쓰는 것만 ──
 type XrSpace = object
+interface XrRigidTransform {
+  position: DOMPointReadOnly
+  matrix: Float32Array
+  inverse: { matrix: Float32Array }
+}
 interface XrPose {
-  transform: { position: DOMPointReadOnly; matrix: Float32Array }
+  transform: XrRigidTransform
+}
+interface XrView {
+  transform: XrRigidTransform
+  projectionMatrix: Float32Array
+}
+interface XrViewerPose extends XrPose {
+  views: readonly XrView[]
 }
 interface XrHitTestResult {
   getPose(space: XrSpace): XrPose | null | undefined
@@ -51,9 +73,18 @@ interface XrHitTestResult {
 interface XrHitTestSource {
   cancel(): void
 }
+/** 깊이 (usage 'cpu-optimized'). 그 프레임 콜백 안에서만 읽힌다 */
+interface XrCpuDepthInformation {
+  width: number
+  height: number
+  /** x·y 는 화면 좌표 0~1 (왼쪽 위 원점). 밖이면 RangeError */
+  getDepthInMeters(x: number, y: number): number
+}
 interface XrFrame {
-  getViewerPose(space: XrSpace): XrPose | null | undefined
+  getViewerPose(space: XrSpace): XrViewerPose | null | undefined
   getHitTestResults(source: XrHitTestSource): readonly XrHitTestResult[]
+  /** depth-sensing 이 켜지지 않았으면 예외 */
+  getDepthInformation?(view: XrView): XrCpuDepthInformation | null | undefined
 }
 /** 광선. origin 은 w 1, direction 은 w 0 */
 type XrRayConstructor = new (origin: DOMPointInit, direction: DOMPointInit) => object
@@ -62,6 +93,9 @@ interface XrSession {
   requestHitTestSource?(options: { space: XrSpace; offsetRay?: unknown }): Promise<XrHitTestSource>
   requestAnimationFrame(callback: (time: number, frame: XrFrame) => void): number
   cancelAnimationFrame(handle: number): void
+  /** depth-sensing 이 켜지지 않았으면 읽을 때 예외 */
+  readonly depthUsage?: string
+  readonly depthDataFormat?: string
 }
 
 // ── model-viewer 내부 모양 ──
@@ -179,6 +213,39 @@ function readSymbol(object: object, description: string): unknown {
   return undefined
 }
 
+/**
+ * 세션이 깊이를 CPU 로 주는지. enabledFeatures 가 없는 브라우저는 depthUsage 를 읽어 본다 (꺼져 있으면 예외).
+ * 이 세션의 enabledFeatures 는 three 에게 depth-sensing 을 숨긴 목록이라 실제 목록(enabledFeaturesOf)을 본다
+ */
+function readDepthSupport(session: XrSession): { state: SensorState; format: string | null } {
+  const features = enabledFeaturesOf(session)
+  if (features && !features.includes('depth-sensing')) return { state: 'off', format: null }
+  try {
+    const usage = session.depthUsage
+    if (usage !== 'cpu-optimized') return { state: 'off', format: usage ?? null }
+    return { state: 'on', format: `${usage} · ${session.depthDataFormat ?? '?'}` }
+  } catch {
+    return { state: 'off', format: null }
+  }
+}
+
+function toDepthSampler(info: XrCpuDepthInformation): DepthSampler {
+  return {
+    width: info.width,
+    height: info.height,
+    at: (u, v) => {
+      if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) return null
+      try {
+        const meters = info.getDepthInMeters(u, v)
+        // 0 은 값 없음
+        return meters > 0 && Number.isFinite(meters) ? meters : null
+      } catch {
+        return null
+      }
+    },
+  }
+}
+
 function cancelQuietly(source: XrHitTestSource) {
   try {
     source.cancel()
@@ -214,6 +281,7 @@ export class ModelViewerArStage implements ArStage {
   /** 지금 도는 XR 프레임. 프레임 콜백 밖에서는 null (hit-test 결과는 프레임 안에서만 읽힌다) */
   private frame: XrFrame | null = null
   private readonly probeSets = new Set<ProbeSet>()
+  private readonly sensors: StageSensors = { depth: 'pending', depthFormat: null }
   private ring: RingObject | null = null
   private dogPlaced = false
   private fadeTimer: ReturnType<typeof setInterval> | undefined
@@ -266,6 +334,11 @@ export class ModelViewerArStage implements ArStage {
         if (!this.disposed) onUnavailable(error instanceof Error ? error.message : String(error))
       })
 
+    // 깊이 센서는 세션을 열 때 정해진다 (xrDepthRequest.ts 가 요청을 더한다)
+    const depth = readDepthSupport(session)
+    this.sensors.depth = depth.state
+    this.sensors.depthFormat = depth.format
+
     // three.js 의 XR 루프(model-viewer 가 그린다)보다 나중에 등록돼 같은 프레임에서 그 뒤에 돈다.
     // 여기서 옮긴 원은 다음 프레임에 그려진다 (원은 바닥에 붙어 있어 한 프레임 늦어도 티가 안 난다)
     const loop = (time: number, frame: XrFrame) => {
@@ -274,14 +347,19 @@ export class ModelViewerArStage implements ArStage {
       // 놓은 뒤에 model-viewer 의 첫 바닥 hit-test 가 늦게 생겼으면 끝낸다 (맞으면 개 높이를 바꿔 버린다)
       if (this.dogPlaced && this.ar.initialHitSource) this.stopInitialHitTest()
       const pose = frame.getViewerPose(space)
-      if (!pose) return
+      // 휴대폰 AR 은 화면이 하나다 (view 하나)
+      const view = pose?.views[0]
+      if (!pose || !view) return
       const { x, y, z } = pose.transform.position
       this.frame = frame
       try {
         onFrame({
           time,
           camera: { x, y, z },
+          view: { viewMatrix: view.transform.inverse.matrix, projectionMatrix: view.projectionMatrix },
           centerHit: this.centerSource ? firstHit(frame, this.centerSource, space) : null,
+          depth: this.readDepth(frame, view),
+          sensors: this.sensors,
         })
       } finally {
         this.frame = null
@@ -400,6 +478,19 @@ export class ModelViewerArStage implements ArStage {
     this.removeRing()
     this.stopFade()
     this.scene.target.visible = true
+  }
+
+  /** 이번 프레임 깊이. 읽다가 예외가 나면 이 세션에서는 깊이를 끈다 */
+  private readDepth(frame: XrFrame, view: XrView): DepthSampler | null {
+    if (this.sensors.depth !== 'on' || !frame.getDepthInformation) return null
+    try {
+      const info = frame.getDepthInformation(view)
+      return info ? toDepthSampler(info) : null
+    } catch (error) {
+      if (import.meta.env.DEV) console.warn('[ar] 깊이를 읽지 못해 끈다:', error)
+      this.sensors.depth = 'off'
+      return null
+    }
   }
 
   /**
