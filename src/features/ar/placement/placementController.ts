@@ -91,7 +91,7 @@ interface Spot {
 /**
  * AR 배치 흐름. 렌더러는 ArStage 로만 만진다.
  * 1. 개를 숨기고, 매 프레임 화면 가운데 광선이 맞은 수평면에 원을 눕힌다. 놓을 수 없는 때:
- *    - 바닥보다 5cm 넘게 높은 면
+ *    - 바닥 층보다 8cm 넘게 높은 면 (6cm 아래로 와야 풀림)
  *    - 바닥 hit 앞에 실제 물체가 있음 (CenterOcclusion: 깊이 센서 → 특징점 → 판정 안 함)
  *    - 둘레에 장애물이 확인됨 (SpotCheck 광선 + samplePerimeterDepth 깊이 → PerimeterVote: 3프레임 연속 2곳 이상, 또는 한 곳 10프레임 연속)
  * 2. place(): 놓을 수 있을 때만 원 중심·바닥 높이에 개를 놓고, 앞쪽이 휴대폰을 향하게 한다. 그 뒤 방향은 고정.
@@ -216,10 +216,10 @@ export class PlacementController {
   private track(frame: StageFrame) {
     const { time, centerHit } = frame
     // 수평면만 쓴다. 벽 등을 맞히면 놓친 것과 같다.
-    // 확정된 바닥보다 5cm 넘게 낮은 면도 놓친 것으로 본다: 광택 바닥의 반사로 잠깐 잡힌 가짜 면이면 원이 그대로 있고,
+    // 확정된 바닥 층보다 8cm 넘게 낮은 면도 놓친 것으로 본다: 광택 바닥의 반사로 잠깐 잡힌 가짜 면이면 원이 그대로 있고,
     // 정말 더 낮은 바닥(좌표가 내려앉음, 책상을 먼저 본 경우)이면 바닥 추정이 그 높이로 바뀔 때(약 2초)까지 '바닥 찾는 중'이다.
     // 믿을 수 없는 높이에 개를 놓지 않는다
-    const level = centerHit && isHorizontal(centerHit.normal) ? this.floor.levelOf(centerHit.position.y) : null
+    const level = centerHit && isHorizontal(centerHit.normal) ? this.floor.classify(centerHit.position.y) : null
     this.lastLevel = level
     if (centerHit && level !== null && level !== 'lower') {
       this.spot = { center: centerHit.position, level, seenAt: time }
@@ -331,7 +331,8 @@ export class PlacementController {
       `개 ${meters(size.x)}×${meters(size.y)}×${meters(size.z)} · 원 r ${meters(this.ringRadius)} · 둘레 r ${meters(this.spotCheck.radius)}`,
       `바닥 ${describeFloor(this.floor.status(), time)}`,
       `맞은 점 ${hit ? `${height(hit.position.y)} (위 ${hit.normal.y.toFixed(2)}) · ${describeHitUse(hit, camera)}` : '없음'}`,
-      `높이 분포 ${describeBins(this.floor.status())}`,
+      `바닥 층 ${describeLayers(this.floor.status(), time)}`,
+      `${describeRaisedLine(this.floor.status())} · 높이 분포 ${describeBins(this.floor.status())}`,
       `판정 ${this.phase}${this.blockedBy ? ` (${this.blockedBy})` : ''} · 맞은 면 ${this.lastLevel ?? '-'}${this.lastLevel === 'lower' ? ' (바닥보다 낮아 무시)' : ''}`,
     ]
     if (this.placed) {
@@ -364,12 +365,30 @@ const secondsAgo = (now: number, then: number) => ((now - then) / 1000).toFixed(
 /** 바닥 추정값이 어떻게 정해졌는지: 높이, hit 수, 가로 퍼짐, 처음·마지막으로 본 시각, 바꿀 후보 */
 function describeFloor(status: FloorStatus, now: number) {
   if (status.y === null) return '- (아직 수평면 없음)'
-  if (status.provisional || !status.bin) return `${height(status.y)} (임시: 후보 없음, 지금 맞은 수평면)`
-  const { bin, pending } = status
+  if (status.provisional || !status.layer) return `${height(status.y)} (임시: 후보 없음, 지금 맞은 수평면)`
+  const { layer, pending } = status
   const next = pending
-    ? ` · 바꿀 후보 ${height(pending.bin.y)} ${(pending.heldMs / 1000).toFixed(1)}/${(FLOOR_SWITCH_HOLD_MS / 1000).toFixed(1)}초`
+    ? ` · 바꿀 층 ${height(pending.layer.y)} ${(pending.heldMs / 1000).toFixed(1)}/${(FLOOR_SWITCH_HOLD_MS / 1000).toFixed(1)}초`
     : ''
-  return `${height(bin.y)} (hit ${bin.hits} · 퍼짐 ${bin.spread.toFixed(2)}m · 처음 ${secondsAgo(now, bin.firstSeen)}초 전 · 마지막 ${secondsAgo(now, bin.lastSeen)}초 전)${next}`
+  return `${height(layer.y)} (층 · 최근 2.5초 중앙값 · 칸 ${layer.bins.length}개 · hit ${layer.hits} · 처음 ${secondsAgo(now, layer.firstSeen)}초 전 · 마지막 ${secondsAgo(now, layer.lastSeen)}초 전)${next}`
+}
+
+/** 바닥 층 목록 (낮은 것부터): 층 높이 [묶인 칸 높이] 마지막으로 본 때. ★ 지금 바닥 */
+function describeLayers(status: FloorStatus, now: number) {
+  if (!status.layers.length) return '-'
+  return status.layers
+    .map(
+      (layer) =>
+        `${height(layer.y)}[${layer.bins.map((bin) => height(bin.y)).join(',')}] ${secondsAgo(now, layer.lastSeen)}초 전${layer === status.layer ? '★' : ''}`,
+    )
+    .join(' · ')
+}
+
+/** raised 기준선: 바닥 층 + 8cm 를 넘으면 raised, + 6cm 아래로 와야 풀림 */
+function describeRaisedLine(status: FloorStatus) {
+  if (!status.raised) return 'raised 기준 - (임시 바닥)'
+  const { enterY, exitY, latched } = status.raised
+  return `raised 기준 >${height(enterY)} · 풀림 <${height(exitY)} · 지금 ${latched ? 'raised' : '아님'}`
 }
 
 /** 지금 가운데 hit 을 바닥 추정에 썼는지, 안 썼으면 왜 */
@@ -382,11 +401,12 @@ function describeHitUse(hit: SurfaceHit, camera: Vec3) {
   return `추정 안 씀: 비스듬하다 ${Math.round(grazingDeg)}°`
 }
 
-/** 높이별(2cm 칸) 수평 hit 수 위 3개. ✓ 바닥 후보 조건을 채움 · ★ 지금 바닥 */
+/** 높이별(2cm 칸) 수평 hit 수 위 3개. ✓ 바닥 후보 조건을 채움 · ★ 지금 바닥 층에 묶임 */
 function describeBins(status: FloorStatus) {
   if (!status.top.length) return '-'
+  const inFloor = new Set(status.layer?.bins.map((bin) => bin.key))
   return status.top
-    .map((bin) => `${height(bin.y)}:${bin.hits}${bin.candidate ? '✓' : ''}${bin.key === status.bin?.key ? '★' : ''}`)
+    .map((bin) => `${height(bin.y)}:${bin.hits}${bin.candidate ? '✓' : ''}${inFloor.has(bin.key) ? '★' : ''}`)
     .join(' · ')
 }
 const signed = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}`

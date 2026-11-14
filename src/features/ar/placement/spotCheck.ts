@@ -1,10 +1,10 @@
 import type { ProbeSet } from './arStage'
-import { isHorizontal, RAISED_TOLERANCE_M } from './floorEstimate'
+import { isHorizontal, RAISED_ENTER_M } from './floorEstimate'
 import { distanceXZ, type Ray, type SurfaceHit, type Vec3 } from './types'
 
 // 자리 검사 (장애물 1차). 원 둘레 8곳이 원 중심과 같은 바닥인지, 둘레 안에 벽·소파 옆면 같은 수직면이 없는지 본다.
 // - 위→아래 광선 8개: 둘레 위 (개 키 + 10cm) 에서 내려 처음 맞은 면이 바닥 높이의 수평면이어야 한다.
-//   5cm 넘게 높은 면(소파 방석·침대·낮은 탁자)이나 기운 면이면 막힘. 개보다 높은 식탁 아래는 막지 않는다
+//   8cm 넘게 높은 면(소파 방석·침대·낮은 탁자)이나 기운 면이면 막힘. 개보다 높은 식탁 아래는 막지 않는다
 // - 옆 광선 8개: 원 중심, 개 키 절반 높이에서 바깥으로. 둘레 반지름 안에서 수직면(벽·가구 옆면)을 맞히면 막힘
 //   (위→아래 광선은 벽과 나란해서 벽을 맞히지 못한다)
 // - 아무것도 안 맞은 곳(아직 비춰 보지 않은 곳)은 막지 않는다. 확인된 장애물이 있을 때만 막는다
@@ -90,7 +90,8 @@ export function judgeProbe(probe: Probe, hit: SurfaceHit | null, floorY: number)
   if (!hit) return 'unknown'
   if (probe.kind === 'down') {
     if (!isHorizontal(hit.normal)) return 'blocked'
-    return Math.abs(hit.position.y - floorY) > RAISED_TOLERANCE_M ? 'blocked' : 'clear'
+    // 바닥 판정과 같은 8cm (ARCore 바닥 높이가 몇 cm 흔들려도 같은 바닥으로 본다)
+    return Math.abs(hit.position.y - floorY) > RAISED_ENTER_M ? 'blocked' : 'clear'
   }
   const { origin } = probe.ray
   const distance = Math.hypot(hit.position.x - origin.x, hit.position.y - origin.y, hit.position.z - origin.z)
