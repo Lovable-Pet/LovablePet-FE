@@ -1,7 +1,8 @@
 import type { ArStage, StageFrame } from './arStage'
 import { yawToward } from './facing'
 import { FloorEstimate, isHorizontal, type SurfaceLevel } from './floorEstimate'
-import { CenterOcclusion, PerimeterDepth, type DepthCounts, type OcclusionResult } from './occlusion'
+import { CenterOcclusion, samplePerimeterDepth, type OcclusionResult } from './occlusion'
+import { PerimeterVote, type PerimeterReport } from './perimeterVote'
 import { SpotCheck, type SpotReport } from './spotCheck'
 import { distanceXZ, type SurfaceHit, type Vec3 } from './types'
 
@@ -50,7 +51,7 @@ interface Spot {
  * 1. 개를 숨기고, 매 프레임 화면 가운데 광선이 맞은 수평면에 원을 눕힌다. 놓을 수 없는 때:
  *    - 바닥보다 5cm 넘게 높은 면
  *    - 바닥 hit 앞에 실제 물체가 있음 (CenterOcclusion: 깊이 센서 → 특징점 → 판정 안 함)
- *    - 둘레에 장애물이 확인됨 (SpotCheck 광선, PerimeterDepth 깊이)
+ *    - 둘레에 장애물이 확인됨 (SpotCheck 광선 + samplePerimeterDepth 깊이 → PerimeterVote: 2곳 이상 · 3프레임 연속)
  * 2. place(): 놓을 수 있을 때만 원 중심·바닥 높이에 개를 놓고, 앞쪽이 휴대폰을 향하게 한다. 그 뒤 방향은 고정
  * 3. replace(): 개를 숨기고 1 로 돌아간다
  */
@@ -62,10 +63,10 @@ export class PlacementController {
   private readonly floor = new FloorEstimate()
   private readonly spotCheck: SpotCheck
   private readonly centerOcclusion = new CenterOcclusion()
-  private readonly perimeterDepth = new PerimeterDepth()
+  private readonly perimeterVote = new PerimeterVote()
   private spotReport: SpotReport | null = null
   private occlusion: OcclusionResult | null = null
-  private perimeter: DepthCounts | null = null
+  private perimeter: PerimeterReport | null = null
   private phase: PlacementPhase = 'searching'
   private blockedBy: BlockReason | null = null
   private spot: Spot | null = null
@@ -164,25 +165,30 @@ export class PlacementController {
 
     const floorY = this.floor.y
     if (this.spot?.level === 'floor' && floorY !== null) {
-      this.spotReport = this.spotCheck.update(this.spot.center, floorY)
-      this.perimeter =
+      const { center } = this.spot
+      this.spotReport = this.spotCheck.update(center, floorY)
+      const depth =
         frame.sensors.depth === 'on'
-          ? this.perimeterDepth.update(this.spot.center, floorY, this.spotCheck.radius, frame.view, frame.depth)
+          ? samplePerimeterDepth(center, floorY, this.spotCheck.radius, frame.camera, frame.view, frame.depth)
           : null
+      this.perimeter = this.perimeterVote.update(center, this.spotReport.fresh ? this.spotReport.directions : null, depth)
     } else {
       this.spotCheck.idle()
-      this.perimeterDepth.reset()
+      this.perimeterVote.reset()
       this.spotReport = null
       this.perimeter = null
     }
 
+    const raised = this.spot?.level === 'raised'
+    const occluded = !!this.spot && !!this.occlusion?.occluded
+    const obstacle = !!this.perimeter?.blocked
     const blockedBy: BlockReason | null = !this.spot
       ? null
-      : this.spot.level === 'raised'
+      : raised
         ? 'raised'
-        : this.occlusion?.occluded
+        : occluded
           ? 'occluded'
-          : this.spotReport?.blocked || (this.perimeter?.obstacles ?? 0) > 0
+          : obstacle
             ? 'obstacle'
             : null
     const phase: PlacementPhase = !this.spot ? 'searching' : blockedBy ? 'blocked' : 'placeable'
@@ -197,7 +203,7 @@ export class PlacementController {
   /** 놓았을 때: 검사를 멈추고 기록을 버린다 */
   private clearChecks() {
     this.spotCheck.idle()
-    this.perimeterDepth.reset()
+    this.perimeterVote.reset()
     this.centerOcclusion.reset()
     this.spotReport = null
     this.perimeter = null
@@ -235,7 +241,7 @@ export class PlacementController {
       `판정 ${this.phase}${this.blockedBy ? ` (${this.blockedBy})` : ''}${this.spot ? ` · ${this.spot.level}` : ''} · 원 r ${this.ringRadius.toFixed(2)}`,
       `거리 바닥 hit ${meters(hit ? distance(camera, hit.position) : null)} · 특징점 hit ${meters(centerPointHit ? distance(camera, centerPointHit.position) : null)}`,
       `가운데 ${describeOcclusion(occlusion)}`,
-      `둘레 r ${this.spotCheck.radius.toFixed(2)} · 광선 ${describeSpot(this.spotReport)} · 깊이 ${describeCounts(this.perimeter)}`,
+      `둘레 r ${this.spotCheck.radius.toFixed(2)} · 광선 ${describeSpot(this.spotReport)} · 확정 ${this.perimeter ? `${this.perimeter.confirmed}/8` : '-'}`,
     ]
     if (this.placed) {
       const { position, yaw } = this.placed
@@ -272,7 +278,3 @@ function describeSpot(report: SpotReport | null) {
   return `빈 곳 ${report.clear}·장애물 ${report.obstacles}·모름 ${report.unknown}`
 }
 
-function describeCounts(counts: DepthCounts | null) {
-  if (!counts) return '안 함'
-  return `빈 곳 ${counts.clear}·장애물 ${counts.obstacles}·모름 ${counts.unknown}`
-}

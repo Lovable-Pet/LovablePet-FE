@@ -8,6 +8,7 @@ import { distanceXZ, type Ray, type SurfaceHit, type Vec3 } from './types'
 // - 옆 광선 8개: 원 중심, 개 키 절반 높이에서 바깥으로. 둘레 반지름 안에서 수직면(벽·가구 옆면)을 맞히면 막힘
 //   (위→아래 광선은 벽과 나란해서 벽을 맞히지 못한다)
 // - 아무것도 안 맞은 곳(아직 비춰 보지 않은 곳)은 막지 않는다. 확인된 장애물이 있을 때만 막는다
+// 여기서는 방향마다 판정만 내고, 막을지는 PerimeterVote 가 깊이 검사와 합쳐 정한다 (2곳 이상 · 3프레임 연속)
 
 /** 둘레에서 볼 방향 수 */
 export const SPOT_DIRECTIONS = 8
@@ -15,8 +16,11 @@ export const SPOT_DIRECTIONS = 8
 export const PROBE_REBUILD_M = 0.1
 /** 바닥 높이가 이만큼(m) 넘게 바뀌어도 다시 만든다 */
 const PROBE_FLOOR_SHIFT_M = 0.02
-/** 구르기·빵(옆으로 눕기)에서 다리가 몸 옆으로 나오는 길이 = 개 키 × 이 값 */
-const LYING_LEG_RATIO = 0.4
+/**
+ * 둘레 반지름 = 몸길이 절반 + 개 키 × 이 값. 구르기·빵(옆으로 눕기)에서 다리가 몸 옆으로 나오는 여유.
+ * 0.4 는 큰 개에서 둘레가 1m 가까이 나가 휴대폰을 든 사람의 발까지 닿아 0.2 로 줄였다
+ */
+export const ACTION_HEIGHT_RATIO = 0.2
 /** 위→아래 광선을 개 키보다 이만큼(m) 위에서 쏜다 */
 const DOWN_PROBE_CLEARANCE_M = 0.1
 /** 옆 광선 높이 범위 (m). 개 키의 절반을 쓴다 */
@@ -27,6 +31,8 @@ export type ProbeKind = 'down' | 'side'
 
 export interface Probe {
   kind: ProbeKind
+  /** 둘레 방향 번호 (0 ~ SPOT_DIRECTIONS-1, 각도 = 번호 / 방향 수 × 360°) */
+  direction: number
   ray: Ray
   /** 옆 광선: 이 거리(m) 안에서 맞으면 막힘 */
   reach: number
@@ -36,8 +42,6 @@ export interface Probe {
 export type ProbeVerdict = 'clear' | 'blocked' | 'unknown'
 
 export interface SpotReport {
-  /** 확인된 장애물이 있으면 true */
-  blocked: boolean
   /** 지금 원 자리의 결과인지. 광선을 다시 만드는 중이거나 못 만들면 false (막지 않는다) */
   fresh: boolean
   /** 광선을 만들 수 없어 자리 검사를 못 함 */
@@ -45,13 +49,15 @@ export interface SpotReport {
   clear: number
   obstacles: number
   unknown: number
+  /** 방향마다 (위→아래·옆 광선을 합쳐) 장애물이 하나라도 있으면 blocked, 빈 곳이 있으면 clear. 길이 SPOT_DIRECTIONS */
+  directions: ProbeVerdict[]
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
 /** 개가 구르기·빵을 해도 닿는 반지름 (m): 몸길이의 절반 + 옆으로 누웠을 때 다리 */
 export function actionRadius(size: Vec3): number {
-  return Math.max(size.x, size.z) / 2 + LYING_LEG_RATIO * size.y
+  return Math.max(size.x, size.z) / 2 + ACTION_HEIGHT_RATIO * size.y
 }
 
 /** 원 중심·바닥 높이·개 크기로 광선 16개 (방향마다 위→아래, 옆) */
@@ -66,11 +72,13 @@ export function buildProbes(center: Vec3, floorY: number, size: Vec3): Probe[] {
     const dz = Math.cos(angle)
     probes.push({
       kind: 'down',
+      direction: index,
       reach: Infinity,
       ray: { origin: { x: center.x + dx * radius, y: top, z: center.z + dz * radius }, direction: { x: 0, y: -1, z: 0 } },
     })
     probes.push({
       kind: 'side',
+      direction: index,
       reach: radius,
       ray: { origin: { x: center.x, y: sideY, z: center.z }, direction: { x: dx, y: 0, z: dz } },
     })
@@ -91,12 +99,12 @@ export function judgeProbe(probe: Probe, hit: SurfaceHit | null, floorY: number)
 }
 
 const notFresh = (unavailable: boolean): SpotReport => ({
-  blocked: false,
   fresh: false,
   unavailable,
   clear: 0,
   obstacles: 0,
   unknown: 0,
+  directions: Array.from({ length: SPOT_DIRECTIONS }, () => 'unknown'),
 })
 
 /**
@@ -134,13 +142,16 @@ export class SpotCheck {
     let clear = 0
     let obstacles = 0
     let unknown = 0
+    const directions: ProbeVerdict[] = Array.from({ length: SPOT_DIRECTIONS }, () => 'unknown')
     active.probes.forEach((probe, index) => {
       const verdict = judgeProbe(probe, hits[index] ?? null, floorY)
       if (verdict === 'clear') clear++
       else if (verdict === 'blocked') obstacles++
       else unknown++
+      const before = directions[probe.direction]
+      if (verdict === 'blocked' || (verdict === 'clear' && before === 'unknown')) directions[probe.direction] = verdict
     })
-    return { blocked: obstacles > 0, fresh: true, unavailable: false, clear, obstacles, unknown }
+    return { fresh: true, unavailable: false, clear, obstacles, unknown, directions }
   }
 
   /** 원이 없거나 바닥이 아니거나 놓은 뒤: 광선을 끝낸다 */

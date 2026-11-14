@@ -20,13 +20,18 @@ export const pointMargin = (floorDistance: number) => 0.1 + 0.05 * floorDistance
 const CENTER_SAMPLE = 5
 /** 둘레 점 표본 n×n */
 const PERIMETER_SAMPLE = 3
-/** 흔들림 줄이기: 최근 몇 프레임 차이의 중앙값을 쓴다 */
+/** 흔들림 줄이기: 가운데는 최근 몇 프레임 차이의 중앙값을 쓴다 (둘레는 PerimeterVote 가 연속 프레임으로 거른다) */
 const CENTER_HISTORY = 5
-const PERIMETER_HISTORY = 3
 /** 특징점은 프레임마다 맞았다 안 맞았다 한다. 한 번 앞에 잡히면 이만큼(ms) 가림을 유지한다 */
 const POINT_HOLD_MS = 300
-/** 원이 한 번에 이만큼(m) 넘게 옮겨지면 둘레 기록을 버린다 */
-const PERIMETER_JUMP_M = 0.1
+/**
+ * 둘레 점보다 이만큼(m) 넘게 앞에 있는 것은 장애물로 세지 않는다 (모름).
+ * 둘레 바로 옆의 가구는 이 안에 들고, 그보다 훨씬 앞은 휴대폰을 든 사람의 손·발·다리처럼 카메라 가까이에 있는 것이다.
+ * 가운데 판정에는 상한을 두지 않는다 (책상·문은 바닥 hit 보다 훨씬 앞에 있을 수 있다)
+ */
+export const PERIMETER_MAX_GAP_M = 0.6
+/** 카메라를 바닥에 투영한 점에서 이만큼(m) 안의 둘레 점은 보지 않는다 (모름). 사람의 발이 있는 자리 */
+export const CAMERA_FOOT_RADIUS_M = 0.6
 
 const distance = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 
@@ -155,45 +160,43 @@ export class CenterOcclusion {
   }
 }
 
-export interface DepthCounts {
-  clear: number
-  obstacles: number
-  /** 화면 밖이거나 깊이 값이 없음 (막지 않는다) */
-  unknown: number
+/** floor: 바닥이 보임 · obstacle: 둘레 바로 앞에 물체 · unknown: 모름 (막지 않는다) */
+export type PerimeterState = 'floor' | 'obstacle' | 'unknown'
+/** 모름의 까닭. offscreen: 화면 밖 · feet: 사람 발 자리 · close: 카메라 가까운 물체 (손·발) · nodata: 깊이 값 없음 */
+export type UnknownReason = 'offscreen' | 'feet' | 'close' | 'nodata'
+
+export interface PerimeterSample {
+  state: PerimeterState
+  /** 실제 거리 − 둘레 점까지 거리 (정면 축, m). 음수면 둘레 점 앞에 무언가 있다. 못 쟀으면 null */
+  gap: number | null
+  reason: UnknownReason | null
 }
 
 /**
- * 자리 검사에 깊이를 더한다. 원 둘레 8곳(바닥 높이)을 화면에 투영해, 그 자리의 실제 거리가 그 점까지 거리보다
- * 확실히 짧으면 장애물로 센다 (둘레 점이 가구 밑·벽 뒤에 있거나, 카메라와 둘레 사이에 물체가 있을 때)
+ * 자리 검사에 깊이를 더한다. 원 둘레 8곳(바닥 높이, 방향 번호는 SpotCheck 과 같다)을 화면에 투영해,
+ * 그 자리의 실제 거리가 둘레 점까지 거리보다 여유(12cm + 거리의 3%)보다 많이, 그러나 0.6m 보다는 적게 짧으면 장애물이다.
+ * 카메라 발밑 0.6m 안의 둘레 점, 0.6m 넘게 앞을 가린 것(손·발), 화면 밖, 값 없음은 모름이다.
+ * 한 프레임 판정만 낸다. 막을지는 PerimeterVote 가 정한다
  */
-export class PerimeterDepth {
-  private readonly gaps = Array.from({ length: SPOT_DIRECTIONS }, () => new RecentMedian(PERIMETER_HISTORY))
-  private lastCenter: Vec3 | null = null
-
-  update(center: Vec3, floorY: number, radius: number, view: StageView, depth: DepthSampler | null): DepthCounts {
-    if (this.lastCenter && distanceXZ(this.lastCenter, center) > PERIMETER_JUMP_M) this.reset()
-    this.lastCenter = center
-    const counts: DepthCounts = { clear: 0, obstacles: 0, unknown: 0 }
-    this.gaps.forEach((gaps, index) => {
-      const angle = (index / SPOT_DIRECTIONS) * Math.PI * 2
-      const point = { x: center.x + Math.sin(angle) * radius, y: floorY, z: center.z + Math.cos(angle) * radius }
-      const projected = projectToView(point, view)
-      if (!projected || !isOnScreen(projected)) {
-        gaps.push(null)
-        counts.unknown++
-        return
-      }
-      const measured = depth ? medianDepth(depth, projected.u, projected.v, PERIMETER_SAMPLE) : null
-      const gap = gaps.push(measured === null ? null : measured - projected.depth)
-      if (gap === null) counts.unknown++
-      else if (gap < -depthMargin(projected.depth)) counts.obstacles++
-      else counts.clear++
-    })
-    return counts
-  }
-
-  reset() {
-    for (const gaps of this.gaps) gaps.clear()
-    this.lastCenter = null
-  }
+export function samplePerimeterDepth(
+  center: Vec3,
+  floorY: number,
+  radius: number,
+  camera: Vec3,
+  view: StageView,
+  depth: DepthSampler | null,
+): PerimeterSample[] {
+  return Array.from({ length: SPOT_DIRECTIONS }, (_, index): PerimeterSample => {
+    const angle = (index / SPOT_DIRECTIONS) * Math.PI * 2
+    const point = { x: center.x + Math.sin(angle) * radius, y: floorY, z: center.z + Math.cos(angle) * radius }
+    if (distanceXZ(point, camera) < CAMERA_FOOT_RADIUS_M) return { state: 'unknown', gap: null, reason: 'feet' }
+    const projected = projectToView(point, view)
+    if (!projected || !isOnScreen(projected)) return { state: 'unknown', gap: null, reason: 'offscreen' }
+    const measured = depth ? medianDepth(depth, projected.u, projected.v, PERIMETER_SAMPLE) : null
+    if (measured === null) return { state: 'unknown', gap: null, reason: 'nodata' }
+    const gap = measured - projected.depth
+    if (gap >= -depthMargin(projected.depth)) return { state: 'floor', gap, reason: null }
+    if (-gap < PERIMETER_MAX_GAP_M) return { state: 'obstacle', gap, reason: null }
+    return { state: 'unknown', gap, reason: 'close' }
+  })
 }
