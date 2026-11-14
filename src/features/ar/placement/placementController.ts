@@ -1,6 +1,7 @@
 import type { ArStage, StageFrame } from './arStage'
 import { yawToward } from './facing'
 import { FloorEstimate, isHorizontal, type SurfaceLevel } from './floorEstimate'
+import { SpotCheck, type SpotReport } from './spotCheck'
 import { distanceXZ, type SurfaceHit, type Vec3 } from './types'
 
 /**
@@ -37,7 +38,8 @@ interface Spot {
 
 /**
  * AR 배치 흐름. 렌더러는 ArStage 로만 만진다.
- * 1. 개를 숨기고, 매 프레임 화면 가운데 광선이 맞은 수평면에 원을 눕힌다 (바닥보다 5cm 넘게 높으면 놓을 수 없음)
+ * 1. 개를 숨기고, 매 프레임 화면 가운데 광선이 맞은 수평면에 원을 눕힌다 (바닥보다 5cm 넘게 높으면 놓을 수 없음).
+ *    바닥이면 둘레도 본다 (SpotCheck: 둘레에 높은 면·수직면이 확인되면 놓을 수 없음)
  * 2. place(): 놓을 수 있을 때만 원 중심·바닥 높이에 개를 놓고, 앞쪽이 휴대폰을 향하게 한다. 그 뒤 방향은 고정
  * 3. replace(): 개를 숨기고 1 로 돌아간다
  */
@@ -47,6 +49,8 @@ export class PlacementController {
   private readonly stage: ArStage
   private readonly options: PlacementControllerOptions
   private readonly floor = new FloorEstimate()
+  private readonly spotCheck: SpotCheck
+  private spotReport: SpotReport | null = null
   private phase: PlacementPhase = 'searching'
   private spot: Spot | null = null
   private camera: Vec3 | null = null
@@ -61,6 +65,7 @@ export class PlacementController {
     this.options = options
     const { x, z } = stage.dogSize
     this.ringRadius = Math.max(x, z) / 2
+    this.spotCheck = new SpotCheck((rays) => stage.createProbes(rays), stage.dogSize)
   }
 
   start() {
@@ -83,6 +88,8 @@ export class PlacementController {
     // 앞쪽이 휴대폰(바닥에 투영한 점)을 향하게. 놓은 뒤에는 다시 계산하지 않아 카메라를 따라 돌지 않는다
     const yaw = this.camera ? yawToward(position, this.camera) : 0
     this.stage.setRing(this.options.onDebug ? { center: position, radius: this.ringRadius, tone: 'marker' } : null)
+    this.spotCheck.idle()
+    this.spotReport = null
     this.stage.placeDog(position, yaw)
     this.placed = { position, yaw }
     this.phase = 'placed'
@@ -105,6 +112,7 @@ export class PlacementController {
   dispose() {
     if (this.stopped) return
     this.stopped = true
+    this.spotCheck.idle()
     this.stage.dispose()
   }
 
@@ -124,7 +132,18 @@ export class PlacementController {
     } else if (this.spot && time - this.spot.seenAt > LOST_GRACE_MS) {
       this.spot = null
     }
-    const phase: PlacementPhase = !this.spot ? 'searching' : this.spot.level === 'raised' ? 'blocked' : 'placeable'
+    const floorY = this.floor.y
+    if (this.spot?.level === 'floor' && floorY !== null) {
+      this.spotReport = this.spotCheck.update(this.spot.center, floorY)
+    } else {
+      this.spotCheck.idle()
+      this.spotReport = null
+    }
+    const phase: PlacementPhase = !this.spot
+      ? 'searching'
+      : this.spot.level === 'raised' || this.spotReport?.blocked
+        ? 'blocked'
+        : 'placeable'
     this.stage.setRing(
       this.spot && { center: this.spot.center, radius: this.ringRadius, tone: phase === 'placeable' ? 'ok' : 'blocked' },
     )
@@ -148,6 +167,7 @@ export class PlacementController {
     const lines = [
       `바닥 ${meters(this.floor.y)} · 맞은 점 ${hit ? `${meters(hit.position.y)} (위 ${hit.normal.y.toFixed(2)})` : '없음'}`,
       `판정 ${this.phase}${this.spot ? ` · ${this.spot.level}` : ''} · 원 r ${this.ringRadius.toFixed(2)}`,
+      `둘레 r ${this.spotCheck.radius.toFixed(2)} · ${describeSpot(this.spotReport)}`,
     ]
     if (this.placed) {
       const { position, yaw } = this.placed
@@ -161,4 +181,10 @@ export class PlacementController {
 }
 
 const meters = (value: number | null) => (value === null ? '-' : value.toFixed(3))
+const describeSpot = (report: SpotReport | null) => {
+  if (!report) return '검사 안 함'
+  if (report.unavailable) return '검사 못 함 (광선을 못 만듦)'
+  if (!report.fresh) return '광선 만드는 중'
+  return `빈 곳 ${report.clear} · 장애물 ${report.obstacles} · 모름 ${report.unknown}`
+}
 const degrees = (radians: number) => Math.round((radians * 180) / Math.PI)

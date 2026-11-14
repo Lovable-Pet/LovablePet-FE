@@ -1,7 +1,7 @@
 import type { ModelViewerElement } from '@google/model-viewer'
 import { CircleGeometry, DoubleSide, Group, Mesh, MeshBasicMaterial, RingGeometry, type BufferGeometry } from 'three'
-import type { ArStage, RingPose, RingTone, StageFrame } from './placement/arStage'
-import type { SurfaceHit, Vec3 } from './placement/types'
+import type { ArStage, ProbeSet, RingPose, RingTone, StageFrame } from './placement/arStage'
+import type { Ray, SurfaceHit, Vec3 } from './placement/types'
 
 // model-viewer 내부를 쓰는 곳은 이 파일 하나다 (배치 로직의 ArStage 를 채우는 어댑터).
 // @google/model-viewer 4.1.0 · three 0.172.0 소스 기준 (package.json 에 고정).
@@ -55,6 +55,8 @@ interface XrFrame {
   getViewerPose(space: XrSpace): XrPose | null | undefined
   getHitTestResults(source: XrHitTestSource): readonly XrHitTestResult[]
 }
+/** 광선. origin 은 w 1, direction 은 w 0 */
+type XrRayConstructor = new (origin: DOMPointInit, direction: DOMPointInit) => object
 interface XrSession {
   requestReferenceSpace(type: 'viewer'): Promise<XrSpace>
   requestHitTestSource?(options: { space: XrSpace; offsetRay?: unknown }): Promise<XrHitTestSource>
@@ -209,6 +211,9 @@ export class ModelViewerArStage implements ArStage {
   private readonly space: XrSpace
   private frameHandle: number | null = null
   private centerSource: XrHitTestSource | null = null
+  /** 지금 도는 XR 프레임. 프레임 콜백 밖에서는 null (hit-test 결과는 프레임 안에서만 읽힌다) */
+  private frame: XrFrame | null = null
+  private readonly probeSets = new Set<ProbeSet>()
   private ring: RingObject | null = null
   private dogPlaced = false
   private fadeTimer: ReturnType<typeof setInterval> | undefined
@@ -271,11 +276,16 @@ export class ModelViewerArStage implements ArStage {
       const pose = frame.getViewerPose(space)
       if (!pose) return
       const { x, y, z } = pose.transform.position
-      onFrame({
-        time,
-        camera: { x, y, z },
-        centerHit: this.centerSource ? firstHit(frame, this.centerSource, space) : null,
-      })
+      this.frame = frame
+      try {
+        onFrame({
+          time,
+          camera: { x, y, z },
+          centerHit: this.centerSource ? firstHit(frame, this.centerSource, space) : null,
+        })
+      } finally {
+        this.frame = null
+      }
     }
     this.frameHandle = session.requestAnimationFrame(loop)
   }
@@ -330,6 +340,43 @@ export class ModelViewerArStage implements ArStage {
     this.scene.target.visible = false
   }
 
+  /**
+   * 기준 공간(local)에 고정된 광선마다 hit-test 소스를 하나씩 만든다. 광선 결과는 매 프레임 새로 나온다.
+   * 만들기는 비동기라 원이 움직일 때마다 만들지 않고, 부르는 쪽(SpotCheck)이 10cm 넘게 움직였을 때만 부른다
+   */
+  createProbes(rays: readonly Ray[]): Promise<ProbeSet> {
+    const { session, space } = this
+    const request = session.requestHitTestSource?.bind(session)
+    const XRRayClass = (globalThis as { XRRay?: XrRayConstructor }).XRRay
+    if (this.disposed || !request || !XRRayClass) return Promise.reject(new Error('XRRay·requestHitTestSource 없음'))
+    const created = rays.map(({ origin, direction }) =>
+      request({
+        space,
+        offsetRay: new XRRayClass({ ...origin, w: 1 }, { ...direction, w: 0 }),
+      }),
+    )
+    return Promise.allSettled(created).then((results) => {
+      const sources = results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
+      if (this.disposed || sources.length !== rays.length) {
+        sources.forEach(cancelQuietly)
+        const failure = results.find((result) => result.status === 'rejected')
+        throw failure?.reason ?? new Error('세션이 끝남')
+      }
+      const set: ProbeSet = {
+        read: () => {
+          const { frame } = this
+          return sources.map((source) => (frame ? firstHit(frame, source, space) : null))
+        },
+        cancel: () => {
+          if (!this.probeSets.delete(set)) return
+          sources.forEach(cancelQuietly)
+        },
+      }
+      this.probeSets.add(set)
+      return set
+    })
+  }
+
   dogFootCenter(): Vec3 | null {
     const { min, max } = this.scene.boundingBox
     const e = this.scene.target.matrixWorld.elements
@@ -349,6 +396,7 @@ export class ModelViewerArStage implements ArStage {
     if (this.frameHandle !== null) this.session.cancelAnimationFrame(this.frameHandle)
     if (this.centerSource) cancelQuietly(this.centerSource)
     this.centerSource = null
+    for (const set of [...this.probeSets]) set.cancel()
     this.removeRing()
     this.stopFade()
     this.scene.target.visible = true

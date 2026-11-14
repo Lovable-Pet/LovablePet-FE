@@ -1,4 +1,4 @@
-import type { SurfaceHit, Vec3 } from './types'
+import type { Ray, SurfaceHit, Vec3 } from './types'
 
 // 배치 로직(PlacementController)이 AR 렌더러에 바라는 것.
 // 지금은 model-viewer 어댑터(../modelViewerArStage.ts)가 채운다. 렌더러를 바꾸거나 산책 모드를 만들 때는
@@ -23,6 +23,13 @@ export interface RingPose {
   tone: RingTone
 }
 
+/** 자리 검사 광선 묶음 (AR 기준 공간에 고정된 hit-test 광선들) */
+export interface ProbeSet {
+  /** 이번 프레임의 결과. 광선마다 처음 맞은 면, 없으면 null. 프레임 콜백(onFrame) 안에서만 읽는다 */
+  read(): (SurfaceHit | null)[]
+  cancel(): void
+}
+
 export interface ArStage {
   /** 개 크기 (m). x 가로, y 높이, z 세로 (모델 기준) */
   readonly dogSize: Vec3
@@ -34,6 +41,8 @@ export interface ArStage {
   placeDog(position: Vec3, yaw: number): void
   /** 개(그림자 포함)를 숨긴다 */
   hideDog(): void
+  /** 자리 검사 광선 묶음을 만든다. 하나라도 못 만들면 reject */
+  createProbes(rays: readonly Ray[]): Promise<ProbeSet>
   /** 디버그: 개 모델 바닥 가운데의 지금 위치. 모르면 null */
   dogFootCenter(): Vec3 | null
   /** 모두 원래대로 (원 지우기, 개 보이기, hit-test 끝내기) */
