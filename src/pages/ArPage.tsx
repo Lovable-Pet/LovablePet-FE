@@ -52,7 +52,8 @@ function placementHint({ phase, manual, blockedBy }: ArPlacement) {
   // 면으로 인식되지 않은 책상·문 너머 바닥을 겨눈 때
   if (phase === 'blocked' && blockedBy === 'occluded') return '앞에 물건이 있어요. 빈 바닥을 비춰 주세요'
   if (phase === 'blocked') return '여기에는 놓을 수 없어요'
-  return '휴대폰을 천천히 움직여 바닥을 비춰 주세요'
+  // 기울이기만 하면 ARCore 가 바닥을 잘 못 찾는다. 위치를 옮기도록 안내한다
+  return '휴대폰을 들고 천천히 옆으로 움직이며 바닥을 비춰 주세요'
 }
 
 export function ArPage() {
