@@ -44,6 +44,23 @@ const isTouchDevice = () => window.matchMedia('(pointer: coarse)').matches
 /** 탭과 드래그(카메라 돌리기)를 가르는 거리 */
 const TAP_SLOP_PX = 8
 
+/** 배치 전 빨강(놓을 수 없음)이 이만큼(ms) 넘게 이어지면 다시 열어 보라는 줄을 더한다 */
+const STUCK_HINT_MS = 10_000
+
+/** active 가 STUCK_HINT_MS 넘게 이어졌는지 (중간에 풀리면 처음부터) */
+function useLongActive(active: boolean) {
+  const [long, setLong] = useState(false)
+  useEffect(() => {
+    if (!active) return
+    const timer = setTimeout(() => setLong(true), STUCK_HINT_MS)
+    return () => {
+      clearTimeout(timer)
+      setLong(false)
+    }
+  }, [active])
+  return active && long
+}
+
 /** AR 에서 개를 놓기 전 위 안내 문구 */
 function placementHint({ phase, manual, blockedBy, notice }: ArPlacement) {
   // model-viewer 기본 흐름(직접 놓기를 못 할 때)은 바닥을 찾으면 스스로 놓인다
@@ -154,6 +171,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const canReplace = dogReady && placement.manual
   /** ?debug: 바닥 추정을 처음부터 다시 (잘못 잡힌 바닥 확인용) */
   const showFloorReset = debug && inAr && placement.manual
+  /** 배치 전 빨강이 10초 넘게 이어짐 → '닫았다가 다시 열어 주세요' 한 줄 더 (바닥·깊이 상태는 건드리지 않는다) */
+  const stuck = useLongActive(arLocked && placement.manual && placement.phase === 'blocked')
 
   useEffect(() => {
     const mv = mvRef.current
@@ -376,6 +395,11 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                     ? '유기견을 탭하면 고개를 갸우뚱해요'
                     : '유기견을 탭하면 꼬리를 흔들어요'}
           </p>
+          {stuck && (
+            <p className="text-center text-label text-on-dark-secondary [text-shadow:0_1px_3px_rgb(0_0_0/0.6)]">
+              잘 안 되면 AR을 닫았다가 다시 열어 주세요
+            </p>
+          )}
           {arLocked && placement.phase === 'preparing' && <MoveSideways />}
           {isLikelyPuppy(pet.birthYear) && (
             <p className="flex max-w-[340px] gap-1.5 rounded-input bg-dark-notice px-3 py-2 text-label text-dark-notice-ink">
