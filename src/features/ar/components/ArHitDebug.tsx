@@ -1,6 +1,8 @@
 import type { ModelViewerElement } from '@google/model-viewer'
-import { useEffect, useState, type RefObject } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import { useSearchParams } from 'react-router'
+import { cn } from '../../../components/utils/cn'
+import type { PlacementDebug } from '../placement/placementController'
 
 /** 이벤트가 도착한 곳. model-viewer 면 'mv' (그림자 DOM 안에서 난 이벤트도 mv 로 보인다) */
 const describe = (target: EventTarget | null, mv: Element) => {
@@ -17,20 +19,23 @@ const describe = (target: EventTarget | null, mv: Element) => {
  * WebXR 화면에서 누르면 pointer 이벤트가 어디에 도착하는지(AR 중에는 '→ touch-layer', 화면 안 3D 는 '→ mv'),
  * positionAndNormalFromPoint 가 그 자리에서 개를 맞히는지(hit/miss)를 보인다.
  * AR 안에서 model-viewer 는 XR 카메라와 window.screen 크기로 계산한다.
- * placement 에는 AR 배치 상태(바닥 높이·맞은 점·판정·yaw)를 받아 위에 보인다
+ * placement 에는 AR 배치 상태(바닥 높이·맞은 점·판정·yaw)를 받아 위에 보인다.
+ * 상자를 탭하면 한 줄(판정·바닥 높이)로 접혀 화면 위쪽으로 올라간다 (개와 그림자를 가리지 않게). 다시 탭하면 펼친다
  */
 export function ArHitDebug({
   mvRef,
   arStatus,
-  placement = [],
+  placement = null,
 }: {
   mvRef: RefObject<ModelViewerElement | null>
   arStatus: string
-  placement?: readonly string[]
+  placement?: PlacementDebug | null
 }) {
   const [searchParams] = useSearchParams()
   const enabled = searchParams.has('debug')
   const [lines, setLines] = useState<string[]>([])
+  const [collapsed, setCollapsed] = useState(false)
+  const boxRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     // 꺼져 있으면 누를 때마다 개를 맞혀 보는 계산(positionAndNormalFromPoint)도 하지 않는다
@@ -54,12 +59,37 @@ export function ArHitDebug({
     }
   }, [mvRef, enabled])
 
+  // 상자를 탭해도 XR select(개 끌기·돌리기)가 되지 않게 한다. 터치 층보다 위에 있어 놓기 탭도 가지 않는다
+  useEffect(() => {
+    const box = boxRef.current
+    if (!enabled || !box) return
+    const blockXrSelect = (event: Event) => event.preventDefault()
+    box.addEventListener('beforexrselect', blockXrSelect)
+    return () => box.removeEventListener('beforexrselect', blockXrSelect)
+  }, [enabled])
+
   if (!enabled) return null
   return (
-    <pre className="pointer-events-none absolute top-[38%] left-2 max-w-[calc(100%-16px)] rounded-md bg-black/65 px-2 py-1.5 font-mono text-[10px] leading-snug whitespace-pre-wrap text-lime-300">
-      {`[dev] ${arStatus} · screen ${window.screen.width}x${window.screen.height} · inner ${window.innerWidth}x${window.innerHeight}\n`}
-      {placement.length > 0 && `${placement.join('\n')}\n`}
-      {lines.length ? lines.join('\n') : '화면을 눌러 보세요'}
-    </pre>
+    <button
+      ref={boxRef}
+      type="button"
+      aria-expanded={!collapsed}
+      onClick={() => setCollapsed((value) => !value)}
+      className={cn(
+        'pointer-events-auto absolute left-2 max-w-[calc(100%-16px)] rounded-md bg-black/65 px-2 py-1.5 text-left font-mono text-[10px] leading-snug whitespace-pre-wrap text-lime-300',
+        // 접으면 위쪽 안내 문구 밑으로 (개·그림자를 가리지 않게)
+        collapsed ? 'top-[calc(108px+env(safe-area-inset-top))]' : 'top-[38%]',
+      )}
+    >
+      {collapsed ? (
+        `[dev ▸] ${placement?.summary ?? arStatus}`
+      ) : (
+        <>
+          {`[dev ▾ 탭하면 접기] ${arStatus} · screen ${window.screen.width}x${window.screen.height} · inner ${window.innerWidth}x${window.innerHeight}\n`}
+          {placement && placement.lines.length > 0 && `${placement.lines.join('\n')}\n`}
+          {lines.length ? lines.join('\n') : '화면을 눌러 보세요'}
+        </>
+      )}
+    </button>
   )
 }

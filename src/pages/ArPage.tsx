@@ -469,7 +469,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         </div>
 
         <HoldRing at={dogHold.press ?? wagChipHold.press} durationMs={LONG_PRESS_MS} />
-        {import.meta.env.DEV && <ArHitDebug mvRef={mvRef} arStatus={arStatus} placement={placement.debugLines} />}
+        {import.meta.env.DEV && <ArHitDebug mvRef={mvRef} arStatus={arStatus} placement={placement.debug} />}
       </model-viewer>
 
       {showGuide && (

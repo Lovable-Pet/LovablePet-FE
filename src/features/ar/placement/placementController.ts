@@ -39,7 +39,13 @@ export interface PlacementControllerOptions {
   /** hit-test 를 쓸 수 없어 직접 놓기를 못 할 때 */
   onUnavailable(reason: string): void
   /** 디버그 글. 주면 놓은 자리에 표시 원도 남긴다 (발밑 가운데가 원 중심에 오는지 보려고) */
-  onDebug?(lines: string[]): void
+  onDebug?(debug: PlacementDebug): void
+}
+
+export interface PlacementDebug {
+  /** 한 줄 요약: 판정과 바닥 높이 (debug 상자를 접었을 때) */
+  summary: string
+  lines: string[]
 }
 
 /** 가운데 광선이 바닥을 놓쳐도 이만큼(ms)은 원을 그대로 둔다. 한두 프레임 놓칠 때 깜빡이지 않게 */
@@ -344,7 +350,9 @@ export class PlacementController {
         ...describeDirections(this.perimeter),
       )
     }
-    onDebug(lines)
+    const floorY = this.floor.y
+    const summary = `${this.phase}${this.blockedBy ? ` (${this.blockedBy})` : ''} · 바닥 ${floorY === null ? '-' : height(floorY)}${this.floor.provisional ? ' 임시' : ''}`
+    onDebug({ summary, lines })
   }
 }
 

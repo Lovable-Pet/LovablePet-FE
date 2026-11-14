@@ -1,7 +1,7 @@
 import type { ModelViewerElement } from '@google/model-viewer'
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { ModelViewerArStage } from './modelViewerArStage'
-import { PlacementController, type BlockReason, type PlacementPhase } from './placement/placementController'
+import { PlacementController, type BlockReason, type PlacementDebug, type PlacementPhase } from './placement/placementController'
 import { requestDepthWithArSessions } from './xrDepthRequest'
 
 export interface ArPlacement {
@@ -16,8 +16,8 @@ export interface ArPlacement {
   floorKnown: boolean
   /** blocked 일 때 까닭 (occluded: 바닥 앞에 실제 물체) */
   blockedBy: BlockReason | null
-  /** ?debug 일 때 바닥 높이·맞은 점·판정·yaw */
-  debugLines: string[]
+  /** ?debug 일 때 바닥 높이·맞은 점·판정·yaw. 아니면 null */
+  debug: PlacementDebug | null
   /** 화면 탭. 놓을 수 있을 때만 놓고 true (?debug 에서는 빨간 원을 두 번 탭하면 강제로 놓는다) */
   place: () => boolean
   /** 다시 놓기 */
@@ -44,7 +44,7 @@ const OFF: PlacementState = { phase: 'off', manual: false, floorKnown: false, bl
  */
 export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { debug }: { debug: boolean }): ArPlacement {
   const [state, setState] = useState<PlacementState>(OFF)
-  const [debugLines, setDebugLines] = useState<string[]>([])
+  const [debugInfo, setDebugInfo] = useState<PlacementDebug | null>(null)
   const controllerRef = useRef<PlacementController | null>(null)
   // 세션 중에 ?debug 를 바꾸면 다음 세션부터 적용된다
   const debugRef = useRef(debug)
@@ -81,7 +81,7 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
       if (status === 'session-started') {
         // 다시 들어온 때도 처음부터
         stop()
-        setDebugLines([])
+        setDebugInfo(null)
         const stage = ModelViewerArStage.attach(mv)
         if (!stage) {
           fallBack()
@@ -93,7 +93,7 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
             if (import.meta.env.DEV) console.warn('[ar] 직접 놓기를 못 해 자동 착지로 둔다:', reason)
             if (controllerRef.current === controller) fallBack()
           },
-          onDebug: debugRef.current ? setDebugLines : undefined,
+          onDebug: debugRef.current ? setDebugInfo : undefined,
         })
         controllerRef.current = controller
         controller.start()
@@ -132,5 +132,5 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
   const replace = useCallback(() => controllerRef.current?.replace(), [])
   const resetFloor = useCallback(() => controllerRef.current?.resetFloor(), [])
 
-  return { ...state, debugLines, place, replace, resetFloor }
+  return { ...state, debug: debugInfo, place, replace, resetFloor }
 }
