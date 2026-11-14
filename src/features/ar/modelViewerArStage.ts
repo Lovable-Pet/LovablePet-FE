@@ -90,7 +90,12 @@ interface XrFrame {
 type XrRayConstructor = new (origin: DOMPointInit, direction: DOMPointInit) => object
 interface XrSession {
   requestReferenceSpace(type: 'viewer'): Promise<XrSpace>
-  requestHitTestSource?(options: { space: XrSpace; offsetRay?: unknown }): Promise<XrHitTestSource>
+  requestHitTestSource?(options: {
+    space: XrSpace
+    offsetRay?: unknown
+    /** 기본 ['plane']. 'point' 는 특징점 */
+    entityTypes?: string[]
+  }): Promise<XrHitTestSource>
   requestAnimationFrame(callback: (time: number, frame: XrFrame) => void): number
   cancelAnimationFrame(handle: number): void
   /** depth-sensing 이 켜지지 않았으면 읽을 때 예외 */
@@ -278,10 +283,12 @@ export class ModelViewerArStage implements ArStage {
   private readonly space: XrSpace
   private frameHandle: number | null = null
   private centerSource: XrHitTestSource | null = null
+  /** 화면 가운데 광선의 특징점 hit-test. 못 쓰면 null */
+  private pointSource: XrHitTestSource | null = null
   /** 지금 도는 XR 프레임. 프레임 콜백 밖에서는 null (hit-test 결과는 프레임 안에서만 읽힌다) */
   private frame: XrFrame | null = null
   private readonly probeSets = new Set<ProbeSet>()
-  private readonly sensors: StageSensors = { depth: 'pending', depthFormat: null }
+  private readonly sensors: StageSensors = { depth: 'pending', depthFormat: null, points: 'pending' }
   private ring: RingObject | null = null
   private dogPlaced = false
   private fadeTimer: ReturnType<typeof setInterval> | undefined
@@ -323,8 +330,8 @@ export class ModelViewerArStage implements ArStage {
       return
     }
     // offsetRay 를 안 주면 viewer 공간 원점에서 앞(-z)으로, 곧 화면 가운데로 나가는 광선이다
-    session
-      .requestReferenceSpace('viewer')
+    const viewerSpace = session.requestReferenceSpace('viewer')
+    viewerSpace
       .then((viewer) => requestHitTestSource({ space: viewer }))
       .then((source) => {
         if (this.disposed) cancelQuietly(source)
@@ -333,6 +340,23 @@ export class ModelViewerArStage implements ArStage {
       .catch((error: unknown) => {
         if (!this.disposed) onUnavailable(error instanceof Error ? error.message : String(error))
       })
+    // 같은 광선으로 특징점도 본다. 면으로 인식되지 않은 책상·문은 평면 광선이 통과하지만 무늬 점에는 맞는다.
+    // 지원하지 않으면(예외) 조용히 건너뛴다
+    viewerSpace
+      .then((viewer) => requestHitTestSource({ space: viewer, entityTypes: ['point'] }))
+      .then(
+        (source) => {
+          if (this.disposed) {
+            cancelQuietly(source)
+            return
+          }
+          this.pointSource = source
+          this.sensors.points = 'on'
+        },
+        () => {
+          this.sensors.points = 'off'
+        },
+      )
 
     // 깊이 센서는 세션을 열 때 정해진다 (xrDepthRequest.ts 가 요청을 더한다)
     const depth = readDepthSupport(session)
@@ -358,6 +382,7 @@ export class ModelViewerArStage implements ArStage {
           camera: { x, y, z },
           view: { viewMatrix: view.transform.inverse.matrix, projectionMatrix: view.projectionMatrix },
           centerHit: this.centerSource ? firstHit(frame, this.centerSource, space) : null,
+          centerPointHit: this.pointSource ? firstHit(frame, this.pointSource, space) : null,
           depth: this.readDepth(frame, view),
           sensors: this.sensors,
         })
@@ -474,6 +499,8 @@ export class ModelViewerArStage implements ArStage {
     if (this.frameHandle !== null) this.session.cancelAnimationFrame(this.frameHandle)
     if (this.centerSource) cancelQuietly(this.centerSource)
     this.centerSource = null
+    if (this.pointSource) cancelQuietly(this.pointSource)
+    this.pointSource = null
     for (const set of [...this.probeSets]) set.cancel()
     this.removeRing()
     this.stopFade()

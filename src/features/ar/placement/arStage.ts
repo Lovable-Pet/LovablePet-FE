@@ -13,6 +13,10 @@ export interface StageFrame {
   view: StageView
   /** 화면 가운데 광선이 처음 맞은 면. 아무것도 안 맞았으면 null */
   centerHit: SurfaceHit | null
+  /**
+   * 같은 광선이 처음 맞은 특징점 (면으로 인식되지 않은 물체의 무늬 점). 특징점 hit-test 를 못 쓰거나 안 맞았으면 null
+   */
+  centerPointHit: SurfaceHit | null
   /** 이번 프레임 깊이. 깊이 센서를 못 쓰거나 이번 프레임 값이 없으면 null. onFrame 안에서만 읽는다 */
   depth: DepthSampler | null
   /** 이 세션에서 쓸 수 있는 보조 센서 */
@@ -45,6 +49,8 @@ export interface StageSensors {
   depth: SensorState
   /** 깊이 형식 (디버그). 예: 'cpu-optimized · luminance-alpha' */
   depthFormat: string | null
+  /** 특징점 hit-test (entityTypes: ['point']) */
+  points: SensorState
 }
 
 /** ok: 놓을 수 있음 · blocked: 놓을 수 없음 · marker: 디버그용, 놓은 자리 표시 */
