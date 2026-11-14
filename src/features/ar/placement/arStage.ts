@@ -63,6 +63,15 @@ export interface RingPose {
   center: Vec3
   radius: number
   tone: RingTone
+  /** 디버그: 원 위에 찍는 작은 점들 (원 안쪽 깊이 검사에서 장애물로 잡힌 표본). 없으면 점을 지운다 */
+  marks?: readonly RingMark[]
+}
+
+export interface RingMark {
+  /** 점 자리 (바닥 높이) */
+  position: Vec3
+  /** 막는 데 센 표본 (이웃과 함께 5프레임 넘게, 또는 10프레임 넘게 이어짐) */
+  strong: boolean
 }
 
 /** 자리 검사 광선 묶음 (AR 기준 공간에 고정된 hit-test 광선들) */

@@ -4,6 +4,7 @@ import type {
   ArStage,
   DepthSampler,
   ProbeSet,
+  RingMark,
   RingPose,
   RingTone,
   SensorState,
@@ -49,6 +50,10 @@ const RING_COLORS: Record<RingTone, number> = {
   blocked: 0xef4444,
   marker: 0x22d3ee,
 }
+/** 디버그 점 반지름 (m) */
+const MARK_DOT_M = 0.01
+/** 디버그 점 색: 이번 프레임 장애물 · 막는 데 센 표본 */
+const MARK_COLORS = { weak: 0xffffff, strong: 0xd946ef } as const
 
 // ── WebXR (TypeScript DOM 타입에 없다). 여기서 쓰는 것만 ──
 type XrSpace = object
@@ -275,6 +280,10 @@ interface RingObject {
   geometries: BufferGeometry[]
   radius: number
   tone: RingTone
+  /** 디버그 점 (필요한 만큼 늘려 다시 쓴다) */
+  marks: Mesh[]
+  markGeometry: BufferGeometry
+  markMaterials: Record<keyof typeof MARK_COLORS, MeshBasicMaterial>
 }
 
 export class ModelViewerArStage implements ArStage {
@@ -408,6 +417,7 @@ export class ModelViewerArStage implements ArStage {
       ring.tone = pose.tone
       for (const material of ring.materials) material.color.set(RING_COLORS[pose.tone])
     }
+    this.setMarks(ring, pose.center, pose.marks ?? [])
     ring.group.visible = true
   }
 
@@ -569,8 +579,40 @@ export class ModelViewerArStage implements ArStage {
     group.visible = false
     // pivot 바깥, 장면 루트에 둔다 (개와 따로 움직인다)
     this.scene.add(group)
-    this.ring = { group, materials, geometries: parts.map(([geometry]) => geometry), radius, tone: 'ok' }
+    const markGeometry = new CircleGeometry(MARK_DOT_M, 12)
+    markGeometry.rotateX(-Math.PI / 2)
+    const markMaterial = (color: number) =>
+      new MeshBasicMaterial({ color, depthTest: false, depthWrite: false, side: DoubleSide, toneMapped: false })
+    this.ring = {
+      group,
+      materials,
+      geometries: parts.map(([geometry]) => geometry),
+      radius,
+      tone: 'ok',
+      marks: [],
+      markGeometry,
+      markMaterials: { weak: markMaterial(MARK_COLORS.weak), strong: markMaterial(MARK_COLORS.strong) },
+    }
     return this.ring
+  }
+
+  /** 디버그 점을 원 위에 찍는다 (원 그룹 안, 원 중심 기준). 남는 점은 숨긴다 */
+  private setMarks(ring: RingObject, center: Vec3, marks: readonly RingMark[]) {
+    while (ring.marks.length < marks.length) {
+      const mesh = new Mesh(ring.markGeometry, ring.markMaterials.weak)
+      mesh.renderOrder = RING_RENDER_ORDER + 2
+      mesh.userData.noHit = true
+      mesh.raycast = () => {}
+      ring.group.add(mesh)
+      ring.marks.push(mesh)
+    }
+    ring.marks.forEach((mesh, index) => {
+      const mark = marks[index]
+      mesh.visible = !!mark
+      if (!mark) return
+      mesh.position.set(mark.position.x - center.x, mark.position.y - center.y, mark.position.z - center.z)
+      mesh.material = mark.strong ? ring.markMaterials.strong : ring.markMaterials.weak
+    })
   }
 
   private removeRing() {
@@ -579,6 +621,9 @@ export class ModelViewerArStage implements ArStage {
     ring.group.removeFromParent()
     for (const geometry of ring.geometries) geometry.dispose()
     for (const material of ring.materials) material.dispose()
+    ring.markGeometry.dispose()
+    ring.markMaterials.weak.dispose()
+    ring.markMaterials.strong.dispose()
     this.ring = null
   }
 

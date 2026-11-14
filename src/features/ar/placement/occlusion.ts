@@ -237,15 +237,38 @@ export function samplePerimeterDepth(
   return Array.from({ length: SPOT_DIRECTIONS }, (_, index): PerimeterSample => {
     const angle = (index / SPOT_DIRECTIONS) * Math.PI * 2
     const point = { x: center.x + Math.sin(angle) * radius, y: floorY, z: center.z + Math.cos(angle) * radius }
-    const projected = projectToView(point, view)
-    if (!projected || !isOnScreen(projected)) return { state: 'unknown', gap: null, ratio: null, reason: 'offscreen' }
-    const measured = depth ? medianDepth(depth, projected.u, projected.v, PERIMETER_SAMPLE) : null
-    const ratio = measured === null ? null : measured / projected.depth
-    if (distanceXZ(point, camera) < CAMERA_FOOT_RADIUS_M) return { state: 'unknown', gap: null, ratio, reason: 'feet' }
-    if (measured === null) return { state: 'unknown', gap: null, ratio, reason: 'nodata' }
-    const gap = measured - projected.depth
-    if (gap >= -depthMargin(projected.depth)) return { state: 'floor', gap, ratio, reason: null }
-    if (-gap < PERIMETER_MAX_GAP_M) return { state: 'obstacle', gap, ratio, reason: null }
-    return { state: 'unknown', gap, ratio, reason: 'close' }
+    return sampleFloorDepth(point, camera, view, depth, PERIMETER_SAMPLE)
   })
+}
+
+export interface FloorDepthOptions {
+  /** 상한에 더하는 거리 (정면 축, m). 원 안쪽 표본은 표본 점 너머 바닥을 보므로 상한을 표본 점 앞으로 잰다 */
+  extraCap?: number
+  /** 여유에 더하는 거리 비율. 깊이 배율이 이만큼 어긋나 있을 때 (원 안쪽 표본) */
+  scaleError?: number
+}
+
+/**
+ * 바닥 위 한 점이 보이는지 깊이로 본다 (둘레 점·원 안쪽 표본이 같은 기준을 쓴다).
+ * 그 자리의 실제 거리가 바닥 점까지 거리보다 여유보다 많이, 0.6m(+ extraCap) 보다는 적게 짧으면 장애물.
+ * size: 표본 n×n 깊이 칸의 중앙값 (1 이면 한 칸)
+ */
+export function sampleFloorDepth(
+  point: Vec3,
+  camera: Vec3,
+  view: StageView,
+  depth: DepthSampler | null,
+  size: number,
+  { extraCap = 0, scaleError = 0 }: FloorDepthOptions = {},
+): PerimeterSample {
+  const projected = projectToView(point, view)
+  if (!projected || !isOnScreen(projected)) return { state: 'unknown', gap: null, ratio: null, reason: 'offscreen' }
+  const measured = depth ? medianDepth(depth, projected.u, projected.v, size) : null
+  const ratio = measured === null ? null : measured / projected.depth
+  if (distanceXZ(point, camera) < CAMERA_FOOT_RADIUS_M) return { state: 'unknown', gap: null, ratio, reason: 'feet' }
+  if (measured === null) return { state: 'unknown', gap: null, ratio, reason: 'nodata' }
+  const gap = measured - projected.depth
+  if (gap >= -(depthMargin(projected.depth) + scaleError * projected.depth)) return { state: 'floor', gap, ratio, reason: null }
+  if (-gap < PERIMETER_MAX_GAP_M + extraCap) return { state: 'obstacle', gap, ratio, reason: null }
+  return { state: 'unknown', gap, ratio, reason: 'close' }
 }

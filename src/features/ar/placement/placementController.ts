@@ -1,4 +1,4 @@
-import type { ArStage, StageFrame, StageSensors } from './arStage'
+import type { ArStage, RingMark, StageFrame, StageSensors } from './arStage'
 import { DepthCalibration, type CalibrationReport } from './depthCalibration'
 import { yawToward } from './facing'
 import {
@@ -10,6 +10,7 @@ import {
   type FloorStatus,
   type SurfaceLevel,
 } from './floorEstimate'
+import { INNER_RING_FRACTIONS, InnerVote, innerSlot, sampleInnerDepth, type InnerReport } from './innerDepth'
 import { CenterOcclusion, centerDepthRatio, floorGridRatios, samplePerimeterDepth, type OcclusionResult } from './occlusion'
 import { PerimeterVote, type DirectionReport, type PerimeterReport } from './perimeterVote'
 import { READY_DEPTH_TIMEOUT_MS, READY_MOVE_M, READY_TRACKING_MS, Readiness, type ReadinessReport } from './readiness'
@@ -72,22 +73,25 @@ const DEBUG_INTERVAL_MS = 200
 /** 디버그: 막힌 근거를 이만큼(ms) 동안 센다 */
 const DEBUG_STATS_MS = 3000
 
+/** 디버그 통계 근거. inner: 원 안쪽 깊이 표본 (판정은 obstacle 로 낸다) */
+type StatReason = BlockReason | 'inner'
+
 /** 디버그: 최근 몇 초 동안 근거마다 막힌 프레임 수 */
 class RecentCounts {
   private readonly windowMs: number
-  private readonly events: { time: number; reason: BlockReason }[] = []
+  private readonly events: { time: number; reason: StatReason }[] = []
 
   constructor(windowMs: number) {
     this.windowMs = windowMs
   }
 
-  add(time: number, reason: BlockReason) {
+  add(time: number, reason: StatReason) {
     this.events.push({ time, reason })
   }
 
-  counts(now: number): Record<BlockReason, number> {
+  counts(now: number): Record<StatReason, number> {
     while (this.events.length && now - this.events[0].time > this.windowMs) this.events.shift()
-    const counts: Record<BlockReason, number> = { occluded: 0, obstacle: 0, raised: 0 }
+    const counts: Record<StatReason, number> = { occluded: 0, obstacle: 0, inner: 0, raised: 0 }
     for (const { reason } of this.events) counts[reason]++
     return counts
   }
@@ -112,6 +116,7 @@ interface Spot {
  *    - 바닥 hit 앞에 실제 물체가 있음 (CenterOcclusion: 깊이 센서 → 특징점 → 판정 안 함)
  *      깊이는 DepthCalibration 이 맞음으로 본 동안만 쓴다 (화면 전체가 같은 비율로 어긋나면 특징점으로 대신)
  *    - 둘레에 장애물이 확인됨 (SpotCheck 광선 + samplePerimeterDepth 깊이 → PerimeterVote: 3프레임 연속 2곳 이상, 또는 한 곳 10프레임 연속)
+ *    - 원 안쪽에 장애물이 확인됨 (깊이를 믿을 때만, 세 겹 × 2cm 간격 방향 → InnerVote: 이웃 2개 이상 5프레임 연속, 또는 하나 10프레임 연속)
  * 2. place(): 놓을 수 있을 때만 원 중심·바닥 높이에 개를 놓고, 앞쪽이 휴대폰을 향하게 한다. 그 뒤 방향은 고정.
  *    place({ force: true }) 는 막혀 있어도 놓는다 (디버그 확인용, 부르는 쪽이 ?debug 에서만 쓴다)
  * 3. replace(): 개를 숨기고 1 로 돌아간다
@@ -133,6 +138,9 @@ export class PlacementController {
   private spotReport: SpotReport | null = null
   private occlusion: OcclusionResult | null = null
   private perimeter: PerimeterReport | null = null
+  private readonly innerVote: InnerVote
+  /** 원 안쪽 깊이 검사 결과. 깊이를 못 믿거나 원이 없으면 null */
+  private inner: InnerReport | null = null
   private forced = false
   private phase: PlacementPhase = 'preparing'
   private notice: PlacementNotice | null = null
@@ -159,6 +167,7 @@ export class PlacementController {
     const { x, z } = stage.dogSize
     this.ringRadius = Math.max(x, z) / 2
     this.spotCheck = new SpotCheck((rays) => stage.createProbes(rays), stage.dogSize)
+    this.innerVote = new InnerVote(this.spotCheck.radius)
   }
 
   start() {
@@ -286,6 +295,7 @@ export class PlacementController {
       this.depthTrusted = depthTrusted
       this.centerOcclusion.reset()
       this.perimeterVote.reset()
+      this.innerVote.reset()
     }
 
     // hit-test 는 인식한 면만 맞힌다. 그 바닥이 실제로 처음 닿는 면인지 본다
@@ -316,14 +326,32 @@ export class PlacementController {
       this.spotReport = null
       this.perimeter = null
     }
+    // 원 안쪽: 가는 기둥(책상 다리)이 둘레 점 사이로 빠지지 않게 촘촘하게 본다. 깊이를 믿을 때만
+    if (depthTrusted && this.spot && floorY !== null) {
+      const samples = sampleInnerDepth(
+        this.spot.center,
+        floorY,
+        this.spotCheck.radius,
+        frame.camera,
+        frame.view,
+        frame.depth,
+        this.calibrationReport?.ratio ?? null,
+      )
+      this.inner = this.innerVote.update(this.spot.center, samples)
+    } else {
+      this.innerVote.reset()
+      this.inner = null
+    }
 
     const raised = this.spot?.level === 'raised'
     const occluded = !!this.spot && !!this.occlusion?.occluded
-    const obstacle = !!this.perimeter?.blocked
+    const innerBlocked = !!this.inner?.blocked
+    const obstacle = !!this.perimeter?.blocked || innerBlocked
     if (this.options.onDebug) {
       if (raised) this.blockStats.add(time, 'raised')
       if (occluded) this.blockStats.add(time, 'occluded')
-      if (obstacle) this.blockStats.add(time, 'obstacle')
+      if (this.perimeter?.blocked) this.blockStats.add(time, 'obstacle')
+      if (innerBlocked) this.blockStats.add(time, 'inner')
     }
     const blockedBy: BlockReason | null = !this.spot
       ? null
@@ -359,7 +387,12 @@ export class PlacementController {
 
     const phase: PlacementPhase = !this.spot ? 'searching' : blockedBy ? 'blocked' : 'placeable'
     this.stage.setRing(
-      this.spot && { center: this.spot.center, radius: this.ringRadius, tone: phase === 'placeable' ? 'ok' : 'blocked' },
+      this.spot && {
+        center: this.spot.center,
+        radius: this.ringRadius,
+        tone: phase === 'placeable' ? 'ok' : 'blocked',
+        marks: this.options.onDebug ? innerMarks(this.inner) : undefined,
+      },
     )
     this.phase = phase
     this.blockedBy = blockedBy
@@ -381,6 +414,8 @@ export class PlacementController {
   private clearChecks() {
     this.spotCheck.idle()
     this.perimeterVote.reset()
+    this.innerVote.reset()
+    this.inner = null
     this.centerOcclusion.reset()
     this.blockStats.clear()
     this.spotReport = null
@@ -436,11 +471,12 @@ export class PlacementController {
     } else {
       const stats = this.blockStats.counts(time)
       lines.push(
-        `최근 3초 막힌 프레임: 가운데 가림 ${stats.occluded} · 둘레 장애물 ${stats.obstacle} · 높은 면 ${stats.raised}`,
+        `최근 3초 막힌 프레임: 가운데 가림 ${stats.occluded} · 둘레 장애물 ${stats.obstacle} · 안쪽 장애물 ${stats.inner} · 높은 면 ${stats.raised}`,
         `거리 바닥 hit ${meters(hit ? distance(camera, hit.position) : null)} · 특징점 hit ${meters(centerPointHit ? distance(camera, centerPointHit.position) : null)}`,
         `가운데 ${describeOcclusion(occlusion)}`,
         `둘레 광선 ${describeSpot(this.spotReport)} · 확정 ${this.perimeter ? `${this.perimeter.confirmed}/8 · 지속 ${this.perimeter.persistent}` : '-'}`,
         ...describeDirections(this.perimeter),
+        ...describeInner(this.inner),
       )
     }
     const floorY = this.floor.y
@@ -523,6 +559,46 @@ function describeReadiness(report: ReadinessReport | null) {
     ` · b 이동 ${report.moved.toFixed(2)}/${READY_MOVE_M.toFixed(2)}m ${mark(report.moved >= READY_MOVE_M)}` +
     ` · c 바닥 층 ${mark(report.floor)} · d 깊이 보정 ${depth}`
   )
+}
+
+/** 디버그 점: 이번 프레임 장애물인 원 안쪽 표본 (막는 데 센 표본은 진하게) */
+function innerMarks(report: InnerReport | null): RingMark[] {
+  if (!report) return []
+  return report.samples
+    .filter((sample) => sample.state === 'obstacle')
+    .map((sample) => ({ position: sample.position, strong: sample.counted }))
+}
+
+/** 디버그 표본 자리 이름: 겹(반지름 비율)과 시계 방향 (12시 = 원 너머, 6시 = 휴대폰 쪽, 3시 = 오른쪽) */
+function innerSlotLabel(index: number, directions: number) {
+  const { ring, direction } = innerSlot(index, directions)
+  const hour = Math.round((direction / directions) * 12) || 12
+  return `${INNER_RING_FRACTIONS[ring].toFixed(2)}r ${hour}시`
+}
+
+/** 디버그 걸린 표본을 이만큼까지 적는다 */
+const INNER_LIST_MAX = 6
+
+/**
+ * 원 안쪽 두 줄. 예)
+ * 안쪽 장애물 표본 4/261 (87방향) · 이웃 5f 3 · 혼자 10f 0 → 막음
+ * 안쪽 걸림 0.70r 12시 ×7★ · 1.00r 12시 ×7★ · 1.00r 1시 ×2
+ */
+function describeInner(report: InnerReport | null): string[] {
+  if (!report) return ['안쪽 안 함 (깊이 보정이 맞음일 때만 본다)']
+  const total = INNER_RING_FRACTIONS.length * report.directions
+  const hits = report.samples
+    .map((sample, index) => ({ sample, index }))
+    .filter(({ sample }) => sample.state === 'obstacle')
+    .sort((a, b) => b.sample.streak - a.sample.streak)
+  const list = hits
+    .slice(0, INNER_LIST_MAX)
+    .map(({ sample, index }) => `${innerSlotLabel(index, report.directions)} ×${sample.streak}${sample.counted ? '★' : ''}`)
+  const more = hits.length > INNER_LIST_MAX ? ` 외 ${hits.length - INNER_LIST_MAX}` : ''
+  return [
+    `안쪽 장애물 표본 ${report.obstacles}/${total} (${report.directions}방향) · 이웃 5f ${report.clustered} · 혼자 10f ${report.persistent}${report.blocked ? ' → 막음' : ''}`,
+    `안쪽 걸림 ${list.length ? list.join(' · ') + more : '-'}`,
+  ]
 }
 
 /** 준비 줄 끝: 바닥이 0.5초 넘게 안 보이면 그 시간 (2초 넘으면 아래로 기울이라는 안내가 나온다) */

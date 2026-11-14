@@ -47,5 +47,6 @@ declare module 'three' {
 
   export class Mesh extends Object3D {
     constructor(geometry?: BufferGeometry, material?: MeshBasicMaterial)
+    material: MeshBasicMaterial
   }
 }
