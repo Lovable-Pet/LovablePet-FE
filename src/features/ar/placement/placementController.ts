@@ -87,7 +87,7 @@ interface Spot {
  * 1. 개를 숨기고, 매 프레임 화면 가운데 광선이 맞은 수평면에 원을 눕힌다. 놓을 수 없는 때:
  *    - 바닥보다 5cm 넘게 높은 면
  *    - 바닥 hit 앞에 실제 물체가 있음 (CenterOcclusion: 깊이 센서 → 특징점 → 판정 안 함)
- *    - 둘레에 장애물이 확인됨 (SpotCheck 광선 + samplePerimeterDepth 깊이 → PerimeterVote: 2곳 이상 · 3프레임 연속)
+ *    - 둘레에 장애물이 확인됨 (SpotCheck 광선 + samplePerimeterDepth 깊이 → PerimeterVote: 3프레임 연속 2곳 이상, 또는 한 곳 10프레임 연속)
  * 2. place(): 놓을 수 있을 때만 원 중심·바닥 높이에 개를 놓고, 앞쪽이 휴대폰을 향하게 한다. 그 뒤 방향은 고정.
  *    place({ force: true }) 는 막혀 있어도 놓는다 (디버그 확인용, 부르는 쪽이 ?debug 에서만 쓴다)
  * 3. replace(): 개를 숨기고 1 로 돌아간다
@@ -340,7 +340,7 @@ export class PlacementController {
         `최근 3초 막힌 프레임: 가운데 가림 ${stats.occluded} · 둘레 장애물 ${stats.obstacle} · 높은 면 ${stats.raised}`,
         `거리 바닥 hit ${meters(hit ? distance(camera, hit.position) : null)} · 특징점 hit ${meters(centerPointHit ? distance(camera, centerPointHit.position) : null)}`,
         `가운데 ${describeOcclusion(occlusion)}`,
-        `둘레 광선 ${describeSpot(this.spotReport)} · 확정 ${this.perimeter ? `${this.perimeter.confirmed}/8` : '-'}`,
+        `둘레 광선 ${describeSpot(this.spotReport)} · 확정 ${this.perimeter ? `${this.perimeter.confirmed}/8 · 지속 ${this.perimeter.persistent}` : '-'}`,
         ...describeDirections(this.perimeter),
       )
     }
