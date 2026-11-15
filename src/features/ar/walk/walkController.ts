@@ -311,9 +311,12 @@ export class WalkController {
 
   private walkFrame(frame: StageFrame, dt: number) {
     const { clock } = this
-    // walk_start·walk_stop 은 자연 배율(k = 1)이다. walk 에서만 v/v0 를 천천히 바꾼다
+    // walk_start·walk_stop 은 자연 배율(k = 1)이다. walk 에서만 v/v0 를 천천히 바꾼다.
+    // 이 루프 끝에서 멈출 것 같으면 1 로 돌려 둔다 (walk_stop 이 v0 에서 시작해서, 0.6 이나 1.4 로 가다 멈추면 걸음 빠르기가 툭 바뀐다)
     if (clock.clip === 'walk') {
-      this.kTarget = this.plan?.last ? this.plan.k : this.followRatio()
+      const { followDistance, stride } = this.spec
+      const stopLikely = this.ending || this.lost || this.liveStopEstimate() <= followDistance + stride / 2
+      this.kTarget = this.plan?.last ? this.plan.k : stopLikely ? 1 : this.followRatio()
       this.k += clamp(this.kTarget - this.k, -SPEED_RATIO_RATE * dt, SPEED_RATIO_RATE * dt)
     } else {
       this.k = 1
