@@ -12,15 +12,27 @@ import type {
   StageSensors,
 } from './placement/arStage'
 import type { Ray, SurfaceHit, Vec3 } from './placement/types'
+import type { WalkPose, WalkRig } from './walk/walkStage'
+import {
+  parseWalkExtras,
+  STANDING_CLIP,
+  WALK_CLIPS,
+  type ExtrasSource,
+  type ScaleSource,
+  type WalkClip,
+  type WalkExtras,
+  type WalkModelInfo,
+} from './walk/walkSpec'
 import { enabledFeaturesOf } from './xrDepthRequest'
 
-// model-viewer 내부를 쓰는 곳은 이 파일 하나다 (배치 로직의 ArStage 를 채우는 어댑터).
+// model-viewer 내부를 쓰는 곳은 이 파일 하나다 (배치 로직의 ArStage 와 산책의 WalkRig 를 채우는 어댑터).
 // @google/model-viewer 4.1.0 · three 0.172.0 소스 기준 (package.json 에 고정).
-// 공개 API 로는 AR 에서 개를 숨기거나, 탭한 자리에 바로 놓거나, 우리 hit-test 를 돌릴 수 없다.
+// 공개 API 로는 AR 에서 개를 숨기거나, 탭한 자리에 바로 놓거나, 우리 hit-test 를 돌리거나, 클립을 프레임 단위로 바꿀 수 없다.
 //
 // 쓰는 내부
 // - 요소의 Symbol('scene') → ModelScene (three 의 Scene, 장면 루트)
 //   - pivot: 개 위치·방향. target: 개·바닥 표시 상자(PlacementBox)·그림자의 부모 (target 만 숨기면 셋이 함께 숨는다)
+//   - 산책: mixer(AnimationMixer)·animationsByName(클립)·model(glTF 장면: userData 에 scenes[0].extras, children 이 루트 노드)
 // - 요소 프로토타입의 Symbol('renderer') getter → Renderer (싱글턴)
 //   - arRenderer(ARRenderer): currentSession, goalPosition·goalYaw, placementComplete, placementBox, initialHitSource
 //   - threeRenderer.xr.getReferenceSpace(): model-viewer 가 쓰는 'local' 기준 공간
@@ -163,6 +175,31 @@ interface RendererLike {
   threeRenderer: { xr: { getReferenceSpace(): XrSpace | null } }
 }
 
+// ── 산책: three 의 AnimationMixer·AnimationAction 중 쓰는 것 ──
+interface ClipLike {
+  name: string
+  duration: number
+}
+interface ActionLike {
+  time: number
+  enabled: boolean
+  paused: boolean
+  play(): unknown
+  stop(): unknown
+  reset(): unknown
+  isScheduled(): boolean
+  setEffectiveWeight(weight: number): unknown
+}
+interface MixerLike {
+  clipAction(clip: ClipLike, root?: unknown): ActionLike
+  existingAction(clip: ClipLike, root?: unknown): ActionLike | null
+  update(deltaTime: number): unknown
+}
+interface AnimatedSceneLike {
+  mixer: MixerLike
+  animationsByName: Map<string, ClipLike>
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 const hasMethods = (value: Record<string, unknown>, names: readonly string[]) =>
   names.every((name) => typeof value[name] === 'function')
@@ -211,6 +248,55 @@ function isRenderer(value: unknown): value is RendererLike {
 
 const isSession = (value: unknown): value is XrSession =>
   isRecord(value) && hasMethods(value, ['requestReferenceSpace', 'requestAnimationFrame', 'cancelAnimationFrame'])
+
+const isClip = (value: unknown): value is ClipLike =>
+  isRecord(value) && typeof value.name === 'string' && typeof value.duration === 'number' && value.duration > 0
+
+const isAnimatedScene = (value: unknown): value is AnimatedSceneLike =>
+  isRecord(value) &&
+  isRecord(value.mixer) &&
+  hasMethods(value.mixer, ['clipAction', 'existingAction', 'update']) &&
+  value.animationsByName instanceof Map
+
+/** glTF 루트 노드 배율. 루트마다 세 축이 같고 루트끼리도 같으면 그 값, 아니면 null */
+function rootScale(model: unknown): number | null {
+  if (!isRecord(model) || !Array.isArray(model.children) || model.children.length === 0) return null
+  let found: number | null = null
+  for (const child of model.children as unknown[]) {
+    if (!isRecord(child) || !isRecord(child.scale)) return null
+    const { x, y, z } = child.scale
+    if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number' || !(x > 0)) return null
+    const same = (a: number, b: number) => Math.abs(a - b) <= 1e-4 * Math.max(a, b)
+    if (!same(x, y) || !same(x, z) || (found !== null && !same(found, x))) return null
+    found = x
+  }
+  return found
+}
+
+/**
+ * GLB 를 다시 받아 JSON 청크의 scenes[scene].extras.walk 를 읽는다 (three 장면 userData 에 없을 때).
+ * 머리(20바이트)로 JSON 길이를 읽고 그만큼만 받는다. 서버가 Range 를 무시하면 받은 전체에서 읽는다
+ */
+async function readGlbWalkExtras(url: string): Promise<unknown> {
+  const fetchRange = async (start: number, end: number) => {
+    const response = await fetch(url, { headers: { Range: `bytes=${start}-${end}` } })
+    if (!response.ok) throw new Error(`GLB ${response.status}`)
+    return { partial: response.status === 206, buffer: await response.arrayBuffer() }
+  }
+  const head = await fetchRange(0, 19)
+  const headView = new DataView(head.buffer)
+  // 'glTF' · 첫 청크 종류 'JSON'
+  if (head.buffer.byteLength < 20 || headView.getUint32(0, true) !== 0x46546c67 || headView.getUint32(16, true) !== 0x4e4f534a) {
+    return null
+  }
+  const length = headView.getUint32(12, true)
+  const body = head.partial ? await fetchRange(20, 20 + length - 1) : null
+  const bytes = body?.partial ? new Uint8Array(body.buffer, 0, length) : new Uint8Array(body?.buffer ?? head.buffer, 20, length)
+  const json: unknown = JSON.parse(new TextDecoder().decode(bytes))
+  if (!isRecord(json) || !Array.isArray(json.scenes)) return null
+  const scene: unknown = json.scenes[typeof json.scene === 'number' ? json.scene : 0]
+  return isRecord(scene) && isRecord(scene.extras) ? scene.extras.walk : null
+}
 
 /**
  * 이름(description)으로 Symbol 키 값을 읽는다. 자기 속성부터 프로토타입 쪽으로 찾는다.
@@ -288,6 +374,7 @@ interface RingObject {
 
 export class ModelViewerArStage implements ArStage {
   readonly dogSize: Vec3
+  private readonly mv: ModelViewerElement
   private readonly scene: ModelSceneLike
   private readonly ar: ArRendererLike
   private readonly session: XrSession
@@ -313,6 +400,7 @@ export class ModelViewerArStage implements ArStage {
     session: XrSession,
     space: XrSpace,
   ) {
+    this.mv = mv
     this.scene = scene
     this.ar = ar
     this.session = session
@@ -491,6 +579,41 @@ export class ModelViewerArStage implements ArStage {
       this.probeSets.add(set)
       return set
     })
+  }
+
+  /**
+   * 산책 리그. 걷기 클립 3개와 standing, extras.walk 가 다 있어야 만든다 (하나라도 없으면 null → 산책 버튼을 숨긴다).
+   * extras.walk 는 three 장면 userData(GLTFLoader 가 scenes[0].extras 를 넣는다)에서 먼저 읽고, 없으면 GLB JSON 청크를 직접 읽는다.
+   * 크기 배율 s 는 루트 노드 배율(세 축이 같아야), 못 읽으면 모델 높이 ÷ ref_size_m 높이
+   */
+  async createWalkRig(): Promise<WalkRig | null> {
+    const { scene, mv } = this
+    if (this.disposed || !isAnimatedScene(scene)) return null
+    const clips = new Map<string, ClipLike>()
+    for (const name of [STANDING_CLIP, ...WALK_CLIPS]) {
+      const clip = scene.animationsByName.get(name)
+      if (!isClip(clip)) return null
+      clips.set(name, clip)
+    }
+    const { model } = scene
+    let extras: WalkExtras | null = isRecord(model) && isRecord(model.userData) ? parseWalkExtras(model.userData.walk) : null
+    let extrasSource: ExtrasSource = 'userData'
+    if (!extras && mv.src) {
+      extrasSource = 'glb'
+      try {
+        extras = parseWalkExtras(await readGlbWalkExtras(new URL(mv.src, window.location.href).href))
+      } catch (error) {
+        if (import.meta.env.DEV) console.warn('[ar] GLB 에서 extras.walk 를 읽지 못함:', error)
+      }
+    }
+    if (!extras || this.disposed) return null
+    const root = rootScale(model)
+    const scale = root ?? this.dogSize.y / extras.ref_size_m[1]
+    const scaleSource: ScaleSource = root !== null ? 'root' : 'size'
+    if (!(scale > 0) || !Number.isFinite(scale)) return null
+    const durations = Object.fromEntries(WALK_CLIPS.map((name) => [name, clips.get(name)!.duration])) as Record<WalkClip, number>
+    const info: WalkModelInfo = { extras, extrasSource, durations, scale, scaleSource, size: { ...this.dogSize } }
+    return new ModelViewerWalkRig(mv, scene, scene, this.ar, info, clips)
   }
 
   dogFootCenter(): Vec3 | null {
@@ -683,5 +806,111 @@ export class ModelViewerArStage implements ArStage {
     this.fadeTimer = undefined
     this.restoreMaterials?.()
     this.restoreMaterials = null
+  }
+}
+
+/**
+ * 산책 리그. 걷는 동안에는 model-viewer 의 애니메이션을 멈추고(pause: 매 프레임 믹서를 돌리지 않는다)
+ * 걷기 클립의 시간·가중치를 직접 넣은 뒤 mixer.update(0) 으로 그 자세를 만든다. 개 위치도 같은 프레임에 옮겨
+ * 애니메이션과 이동이 한 프레임도 어긋나지 않는다 (둘 다 다음 렌더에 나온다).
+ * - 클립끼리는 크로스페이드 없이 그 프레임에서 바로 바꾼다 (이음매가 같다)
+ * - 출발 때만 서기 루프의 지금 자세를 300ms 섞는다 (WalkPose.standingWeight)
+ * - 액션을 멈추면(stop) 아무도 안 쓰는 뼈가 기본 자세로 돌아가서, 쓸 액션을 먼저 켜고 남은 것을 끈다
+ */
+class ModelViewerWalkRig implements WalkRig {
+  readonly info: WalkModelInfo
+  private readonly mv: ModelViewerElement
+  private readonly scene: ModelSceneLike
+  private readonly animated: AnimatedSceneLike
+  private readonly ar: ArRendererLike
+  private readonly clips: Map<string, ClipLike>
+  /** 출발 때 잡아 둔 서기 루프 시간 (섞을 때 그 자세로 멈춰 둔다) */
+  private standingTime = 0
+  private driving = false
+
+  constructor(
+    mv: ModelViewerElement,
+    scene: ModelSceneLike,
+    animated: AnimatedSceneLike,
+    ar: ArRendererLike,
+    info: WalkModelInfo,
+    clips: Map<string, ClipLike>,
+  ) {
+    this.mv = mv
+    this.scene = scene
+    this.animated = animated
+    this.ar = ar
+    this.info = info
+    this.clips = clips
+  }
+
+  takeOver() {
+    const standing = this.action(STANDING_CLIP)
+    // 서기 루프가 돌고 있으면 그 시간에서 섞는다
+    this.standingTime = standing.isScheduled() ? standing.time : 0
+    this.mv.pause()
+    this.driving = true
+    // 다른 액션(앞 명령의 페이드아웃 등)이 남아 섞이지 않게 끈다. 서기를 먼저 켜 둬야 뼈가 기본 자세로 돌아가지 않는다
+    this.apply([[STANDING_CLIP, this.standingTime, 1]], true)
+  }
+
+  show(pose: WalkPose) {
+    if (!this.driving) return
+    const weight = Math.min(1, Math.max(0, pose.standingWeight))
+    this.apply(
+      weight > 0
+        ? [
+            [STANDING_CLIP, this.standingTime, weight],
+            [pose.clip, pose.time, 1 - weight],
+          ]
+        : [[pose.clip, pose.time, 1]],
+    )
+  }
+
+  moveDog(position: Vec3, yaw: number) {
+    const { scene, ar } = this
+    // placeDog 와 같이 목표도 맞춰 감쇠 없이 그 자리·방향에 둔다
+    scene.pivot.position.set(position.x, position.y, position.z)
+    ar.goalPosition.set(position.x, position.y, position.z)
+    scene.yaw = yaw
+    ar.goalYaw = yaw
+    scene.queueShadowRender()
+  }
+
+  release() {
+    if (!this.driving) return
+    this.driving = false
+    // walk_stop 의 끝 = 서기 루프 첫 프레임. 서기를 0초로 켜고 model-viewer 에 돌려준다
+    this.apply([[STANDING_CLIP, 0, 1]])
+    // 같은 액션이 model-viewer 의 지금 액션이라 섞지 않고 그 자리에서 이어 돈다 (재생 배율도 다시 맞춘다)
+    this.mv.play()
+  }
+
+  private action(name: string) {
+    return this.animated.mixer.clipAction(this.clips.get(name)!, this.scene)
+  }
+
+  /** layers 만 켜고 그 시간·가중치로 자세를 만든다. others 면 걷기·서기 밖의 액션도 끈다 */
+  private apply(layers: [string, number, number][], others = false) {
+    const { mixer, animationsByName } = this.animated
+    const used = new Set<ActionLike>()
+    for (const [name, time, weight] of layers) {
+      const action = this.action(name)
+      action.enabled = true
+      action.paused = false
+      // 남은 페이드(앞 명령의 크로스페이드)도 끝낸다
+      action.setEffectiveWeight(weight)
+      if (!action.isScheduled()) action.play()
+      action.time = time
+      used.add(action)
+    }
+    const names = others ? [...animationsByName.keys()] : [STANDING_CLIP, ...WALK_CLIPS]
+    for (const name of names) {
+      const clip = animationsByName.get(name)
+      const action = clip && mixer.existingAction(clip, this.scene)
+      if (action && !used.has(action) && action.isScheduled()) action.stop()
+    }
+    mixer.update(0)
+    this.scene.queueShadowRender()
   }
 }

@@ -60,6 +60,14 @@ export interface PlacementControllerOptions {
   onDebug?(debug: PlacementDebug): void
 }
 
+/** 놓은 뒤 프레임마다 넘기는 바닥 추정 */
+export interface PlacedFloor {
+  /** 바닥 층 높이. 아직 모르면 null */
+  y: number | null
+  /** 후보 없이 지금 맞은 수평면으로 임시로 정한 값인지 */
+  provisional: boolean
+}
+
 export interface PlacementDebug {
   /** 한 줄 요약: 판정과 바닥 높이 (debug 상자를 접었을 때) */
   summary: string
@@ -158,6 +166,8 @@ export class PlacementController {
   /** 가운데 광선이 바닥에 마지막으로 맞은 시각 (ms). 첫 프레임부터 센다 */
   private floorSeenAt: number | null = null
   private placed: { position: Vec3; yaw: number } | null = null
+  /** 놓은 뒤 매 프레임 (산책) */
+  private placedListener: ((frame: StageFrame, floor: PlacedFloor) => void) | null = null
   private reported: PlacementSnapshot | null = null
   private lastDebugAt = -Infinity
   private stopped = false
@@ -202,6 +212,23 @@ export class PlacementController {
     return true
   }
 
+  /** 지금 개 자리·방향 (놓은 자리. 산책으로 옮겼으면 옮긴 자리). 놓기 전이면 null */
+  placedPose(): { position: Vec3; yaw: number } | null {
+    return this.placed ? { position: { ...this.placed.position }, yaw: this.placed.yaw } : null
+  }
+
+  /** 놓은 뒤 매 프레임 바닥 추정과 함께 부른다 (산책). null 이면 끈다. 다시 놓으면 끊긴다 */
+  setPlacedFrameListener(listener: ((frame: StageFrame, floor: PlacedFloor) => void) | null) {
+    this.placedListener = listener
+  }
+
+  /** 산책이 개를 옮겼다: 놓은 자리 기록과 (?debug) 표시 원을 옮긴다 */
+  dogMoved(position: Vec3, yaw: number) {
+    if (this.stopped || this.phase !== 'placed') return
+    this.placed = { position: { ...position }, yaw }
+    if (this.options.onDebug) this.stage.setRing({ center: position, radius: this.ringRadius, tone: 'marker' })
+  }
+
   /**
    * 다시 놓기: 개를 숨기고 원 모드로 돌아간다. 다시 놓으면 그때 휴대폰 위치를 바라본다.
    * 최근 3초 안에 다시 보지 못한 바닥 후보는 정리한다 (좌표가 어긋나 남은 옛 바닥 높이)
@@ -211,6 +238,7 @@ export class PlacementController {
     this.stage.hideDog()
     this.stage.setRing(null)
     this.floor.prune(this.lastTime)
+    this.placedListener = null
     this.placed = null
     this.spot = null
     this.phase = 'searching'
@@ -235,6 +263,7 @@ export class PlacementController {
   dispose() {
     if (this.stopped) return
     this.stopped = true
+    this.placedListener = null
     this.spotCheck.idle()
     this.stage.dispose()
   }
@@ -247,6 +276,7 @@ export class PlacementController {
     // 놓은 뒤에도 바닥 추정은 이어 간다 (다시 놓을 때 쓴다)
     this.floor.update(frame.time, frame.centerHit, frame.camera)
     if (this.phase !== 'placed') this.track(frame)
+    else this.placedListener?.(frame, { y: this.floor.y, provisional: this.floor.provisional })
     this.debug(frame)
   }
 

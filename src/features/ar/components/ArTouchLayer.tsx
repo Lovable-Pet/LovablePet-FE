@@ -12,6 +12,7 @@ import { HoldRing } from './HoldRing'
  * - 개를 놓기 전에는 화면 어디를 탭해도 onPlaceTap (바닥 원 자리에 놓기)
  * - 놓은 뒤 개 탭(갸우뚱이 있으면 갸우뚱, 없으면 꼬리 흔들기)과 3초 누르기(짖기)는 이 층에서 받아
  *   positionAndNormalFromPoint 로 개를 맞혔는지 본다
+ * - 산책 중(locked)에는 개 탭·누르기에 반응하지 않는다 (이동·회전 막기는 그대로)
  * 화면 안 3D 에서는 그리지 않아 카메라 돌리기는 그대로다
  */
 export function ArTouchLayer({
@@ -23,6 +24,7 @@ export function ArTouchLayer({
   onTap,
   onLongPress,
   onPlaceTap,
+  locked = false,
 }: {
   /** AR 중인지 */
   active: boolean
@@ -37,6 +39,8 @@ export function ArTouchLayer({
   onLongPress: () => void
   /** 개를 놓기 전 화면 탭 */
   onPlaceTap?: () => void
+  /** 산책 중: 개 탭·3초 누르기를 받지 않는다 */
+  locked?: boolean
 }) {
   const layerRef = useRef<HTMLDivElement>(null)
   /** 첫 손가락이 닿은 곳. 다른 손가락이 닿으면 탭이 아니다 */
@@ -46,7 +50,7 @@ export function ArTouchLayer({
     !!mvRef.current?.positionAndNormalFromPoint(event.clientX, event.clientY)
 
   const hold = useLongPress<ReactPointerEvent>({
-    enabled: active && dogReady && holdEnabled,
+    enabled: active && dogReady && holdEnabled && !locked,
     slopPx,
     canStart: hitsDog,
     onLongPress,
@@ -75,7 +79,7 @@ export function ArTouchLayer({
     if (longPressed) return
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > slopPx) return
     if (!dogReady) onPlaceTap?.()
-    else if (hitsDog(event)) onTap()
+    else if (!locked && hitsDog(event)) onTap()
   }
   const onPointerCancel = () => {
     hold.handlers.onPointerCancel()
