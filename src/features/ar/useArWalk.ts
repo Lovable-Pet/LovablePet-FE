@@ -33,7 +33,7 @@ const IDLE: WalkSnapshot = { phase: 'standing', ending: false, notice: null }
  */
 export function useArWalk(
   host: WalkHost | null,
-  { canStart, debug, tuning }: { canStart: boolean; debug: boolean; /** 개발용 ?floor·?keep (다음 산책부터) */ tuning?: WalkTuning },
+  { canStart, debug, tuning }: { canStart: boolean; debug: boolean; /** 개발용 ?floor·?keep·?tight (다음 산책부터) */ tuning?: WalkTuning },
 ): ArWalk {
   const controllerRef = useRef<WalkController | null>(null)
   /** 돌고 있는 산책이 받은 host. 지금 host 와 다르면(다시 놓기·AR 끝) 산책은 끝난 것이다 */

@@ -3,7 +3,8 @@ import type { Vec3 } from '../placement/types'
 import { clipDistance, GaitClock } from './gait'
 import { newTurnState, turnStep } from './steering'
 import { Trail, type Vec2 } from './trail'
-import type { AheadCheck, FloorLevel, WalkHost } from './walkStage'
+import { UserLevel, type LevelEvent } from './userLevel'
+import type { FloorLevel, WalkHost } from './walkStage'
 import { walkSpec, type WalkClip, type WalkSpec } from './walkSpec'
 
 /**
@@ -12,11 +13,11 @@ import { walkSpec, type WalkClip, type WalkSpec } from './walkSpec'
  */
 export type WalkPhase = 'standing' | 'turn' | 'start' | 'walk' | 'stop'
 
-/** slowDown: 사용자가 3m 넘게 앞서감 → '천천히 걸어 주세요' */
-export type WalkNotice = 'slowDown'
+/** slowDown: 사용자가 3m 넘게 앞서감 → '천천히 걸어 주세요' · otherLevel: 사용자가 턱·계단으로 다른 층에 감 → '여기는 따라갈 수 없어요' */
+export type WalkNotice = 'slowDown' | 'otherLevel'
 
-/** 멈춘 까닭. distance: D 에 맞춰 · ending: 산책 끝 · tracking: 추적 끊김 · ahead: 앞이 막힘 (4단계) */
-export type StopReason = 'distance' | 'ending' | 'tracking' | 'ahead'
+/** 멈춘 까닭. distance: D 에 맞춰 · ending: 산책 끝 · tracking: 추적 끊김 · level: 사용자가 다른 층이라 경계 앞에서 */
+export type StopReason = 'distance' | 'ending' | 'tracking' | 'level'
 
 export interface WalkSnapshot {
   phase: WalkPhase
@@ -89,6 +90,8 @@ export interface WalkDebug {
     /** 개 중심이 발자취에서 벗어난 거리 (m): 지금, 산책 모드 동안 최대 */
     offTrail: number
     maxOffTrail: number
+    /** 사용자 층: state 0 같은 층 · ±1 위·아래, offset 카메라 높이 − 기준 (m), rising 경계 후보를 둠, edge 경계까지 남은 길 (m, 같은 층이면 null) */
+    level: { state: number; offset: number; rising: boolean; edge: number | null }
     decisions: readonly WalkDecision[]
     stops: readonly WalkStopResult[]
   }
@@ -102,9 +105,7 @@ export interface WalkControllerOptions {
   onDebug?(debug: WalkDebug): void
   /** 디버그 글 간격 (ms). 가짜 스테이지는 0 */
   debugIntervalMs?: number
-  /** 4단계: 걷는 중 앞 바닥 검사. 없으면 보지 않는다 */
-  ahead?: AheadCheck
-  /** 개발용 (주소 ?floor·?keep): 최저선 값을 바꿔 폰에서 견준다. 없으면 MIN_STOP_RATIO·FLOOR_KEEP_EXTRA_M */
+  /** 개발용 (주소 ?floor·?keep·?tight): 값을 바꿔 폰에서 견준다. 없으면 MIN_STOP_RATIO·FLOOR_KEEP_EXTRA_M·TIGHT_TURN_RADIUS_BODY_LENGTHS */
   tuning?: WalkTuning
 }
 
@@ -113,6 +114,8 @@ export interface WalkTuning {
   minStopRatio?: number
   /** FLOOR_KEEP_EXTRA_M 대신 (m) */
   floorKeepExtra?: number
+  /** 크게 돌 때 가장 좁게 도는 반지름 (몸길이 배, TIGHT_TURN_RADIUS_BODY_LENGTHS 대신). 좁히면 발이 옆으로 더 미끄러진다 */
+  tightTurnRatio?: number
 }
 
 /** v/v0 범위 (재생 배율과 이동 속도에 같이 곱한다) */
@@ -217,6 +220,11 @@ export const FLOOR_FOLLOW_TAU_S = 1
 export const FLOOR_FOLLOW_MPS = 0.1
 /** 놓은 높이에서 이만큼(m) 넘게 다른 바닥 층은 따라가지 않는다 (잘못 잡힌 층) */
 export const FLOOR_FOLLOW_RANGE_M = 0.2
+/**
+ * 사용자가 다른 층이면 개 코가 경계 점보다 이만큼(m) 앞에서 서도록 루프 끝에서 멈춘다.
+ * 경계 점은 카메라 높이가 바뀌기 시작한 자리라 실제 턱 면과 ±0.2m 쯤 어긋난다
+ */
+export const LEVEL_EDGE_MARGIN_M = 0.3
 
 const DEFAULT_DEBUG_INTERVAL_MS = 200
 /** 디버그·가짜 스테이지용 기록 개수 */
@@ -241,6 +249,8 @@ const flat = (point: Vec3): Vec2 => ({ x: point.x, z: point.z })
  * - 방향은 겨누는 점까지 차이에 비례해 돌리고 넘어서 돌지 않는다 (steering.ts). 상한은 초당 최대 회전각과
  *   (속도 / 가장 좁게 도는 반지름). 서 있는 채로는 돌지 않는다. 차이가 90° 를 넘으면 천천히 좁게 돈다 (크게 돌기)
  * - 사용자가 3m 넘게 앞서가면 '천천히 걸어 주세요' · 추적이 끊기거나 산책 끝을 누르면 다음 루프 끝에서 멈춘다
+ * - 사용자가 턱·계단으로 다른 층에 서면 (카메라 높이, userLevel.ts) 개는 경계 앞 루프 끝에서 멈추고 '여기는 따라갈 수 없어요'.
+ *   같은 층으로 돌아오면 다시 따라간다
  */
 export class WalkController {
   readonly spec: WalkSpec
@@ -248,6 +258,8 @@ export class WalkController {
   private readonly options: WalkControllerOptions
   private readonly clock: GaitClock
   private readonly trail: Trail
+  /** 사용자가 턱·계단으로 다른 층에 갔는지 (카메라 높이) */
+  private readonly level = new UserLevel()
   private turn = newTurnState()
   private bigTurn = false
   /** 겨누는 점 (발자취를 따라 lookAhead 앞) */
@@ -308,7 +320,9 @@ export class WalkController {
     this.options = options
     this.minStopRatio = Math.max(0, options.tuning?.minStopRatio ?? MIN_STOP_RATIO)
     this.floorKeep = Math.max(0, options.tuning?.floorKeepExtra ?? FLOOR_KEEP_EXTRA_M)
-    this.spec = walkSpec(host.rig.info)
+    const spec = walkSpec(host.rig.info)
+    const tight = options.tuning?.tightTurnRatio
+    this.spec = tight && tight > 0 ? { ...spec, tightTurnRadius: tight * spec.bodyLength } : spec
     this.clock = new GaitClock(this.spec)
     this.trail = new Trail(this.spec.trailResetRadius)
     const pose = host.dogPose()
@@ -360,8 +374,11 @@ export class WalkController {
     this.updateTracking(frame.tracking && rawDt <= FRAME_GAP_LOST_S, dt)
 
     const dog = flat(this.position)
-    // 추적이 끊긴 동안 카메라 위치는 추정값이라 발자취에 넣지 않는다
-    if (frame.tracking) this.trail.record(flat(frame.camera), dog)
+    // 추적이 끊긴 동안 카메라 위치는 추정값이라 발자취에도 층 판단에도 넣지 않는다
+    if (frame.tracking) {
+      this.trail.record(flat(frame.camera), dog)
+      this.onLevel(this.level.update(frame.camera.y - this.position.y, flat(frame.camera), dt))
+    }
     this.trail.locate(dog)
     this.gap = this.trail.length(dog, this.spec.lookAhead)
     this.updateUserSpeed(dt, frame.tracking && !this.trail.cut)
@@ -376,7 +393,9 @@ export class WalkController {
       }
       this.standingFor += dt
       this.standGap = Math.min(this.standGap, this.gap)
-      if (!this.lost && this.standingFor >= MIN_STAND_S && this.gap > this.startThreshold()) this.startBout()
+      // 다른 층 경계 앞에서는 가장 짧은 산책(walk_start + walk_stop)을 할 자리가 있어야 출발한다
+      const room = this.edgeRoom() >= this.spec.startDistance + this.spec.stopDistance
+      if (!this.lost && room && this.standingFor >= MIN_STAND_S && this.gap > this.startThreshold()) this.startBout()
       else if (floorMoved) this.host.rig.moveDog(this.position, this.yaw)
     }
     if (this.phase === 'start' || this.phase === 'walk' || this.phase === 'stop') this.walkFrame(frame, dt)
@@ -386,9 +405,8 @@ export class WalkController {
       this.maxOffTrail = Math.max(this.maxOffTrail, this.trail.offset)
     }
 
-    if (this.notice === null && this.gap > SLOW_DOWN_M) this.notice = 'slowDown'
-    else if (this.notice === 'slowDown' && this.gap < SLOW_DOWN_CLEAR_M) this.notice = null
-    this.options.ahead?.update?.(this.aheadInput(frame))
+    const slow = this.notice === 'slowDown' ? this.gap >= SLOW_DOWN_CLEAR_M : this.gap > SLOW_DOWN_M
+    this.notice = this.level.state !== 0 ? 'otherLevel' : slow ? 'slowDown' : null
     this.report()
     if (this.options.onDebug) this.host.showPath?.({ points: this.trail.ahead, aim: this.aim, y: this.position.y })
     this.debug(frame)
@@ -403,6 +421,20 @@ export class WalkController {
     if (!this.lost) return
     this.goodFor += dt
     if (this.goodFor >= TRACKING_RECOVER_S) this.lost = false
+  }
+
+  /** 사용자 층 판단을 발자취에 옮긴다 (경계 후보·경계·같은 층으로 돌아옴) */
+  private onLevel(event: LevelEvent | null) {
+    if (event === 'rise') this.trail.markRise()
+    else if (event === 'cancel') this.trail.cancelRise()
+    else if (event === 'enter') this.trail.enterOtherLevel()
+    else if (event === 'exit') this.trail.exitOtherLevel()
+  }
+
+  /** 다른 층 경계까지 개 중심이 더 갈 수 있는 거리 (m): 경계까지 길 − 몸길이 절반 − 여유. 사용자가 같은 층이면 Infinity. locate 뒤에 맞다 */
+  private edgeRoom() {
+    const edge = this.trail.edgeDistance()
+    return edge === null ? Infinity : edge - this.spec.bodyLength / 2 - LEVEL_EDGE_MARGIN_M
   }
 
   /** 길을 따라 사용자가 멀어지는 속도. 남은 길의 변화에 개가 간 거리를 더한다 */
@@ -565,9 +597,13 @@ export class WalkController {
       // 최저선에 걸리고, 그래서 또 1 로 두는 것이 되풀이된다 (천천히 걷는 사용자를 따라 걷다 서기)
       const follow = this.followRatio()
       const oneMore = this.liveOneMoreEstimate(follow)
+      const { spec } = this
+      // 이 루프 끝에서 다른 층 경계 앞이라 멈출지 (루프 끝에 남는 자리가 한 바퀴 + 정지 거리보다 짧음)
+      const edgeStop = this.edgeRoom() - clipDistance(spec, 'walk', clock.time, spec.durations.walk) < spec.stride + spec.stopDistance
       const stopLikely =
         this.ending ||
         this.lost ||
+        edgeStop ||
         this.wantsStop(this.liveStopEstimate(follow), oneMore, Math.min(oneMore, this.liveOneMoreIfUserStops(follow)), 'walk')
       this.kTarget = this.bigTurn ? BIG_TURN_SPEED_RATIO : this.plan?.last ? this.plan.k : stopLikely ? 1 : follow
       this.k += clamp(this.kTarget - this.k, -SPEED_RATIO_RATE * dt, SPEED_RATIO_RATE * dt)
@@ -650,7 +686,8 @@ export class WalkController {
     // 사용자가 멀어지는 중이면 그만큼 더 가고, 다가오는 중이면 덜 간다 (u < 0)
     const u = this.userSpeed
     let reason: StopReason | null = this.ending ? 'ending' : this.lost ? 'tracking' : null
-    if (!reason && this.options.ahead?.blocked(this.aheadInput(frame))) reason = 'ahead'
+    // 사용자가 다른 층: 한 바퀴 더 가고 멈추면 경계를 넘으면 지금 멈춘다
+    if (!reason && this.edgeRoom() < stride + stopDistance) reason = 'level'
     const stopNow = gap + this.userTravel(stopSeconds) - stopDistance
     const oneMoreK = this.lastLoopRatio(gap)
     const oneMoreSeconds = loopSeconds / oneMoreK + stopSeconds
@@ -723,17 +760,6 @@ export class WalkController {
     if (this.stops.length > HISTORY) this.stops.shift()
   }
 
-  private aheadInput(frame: StageFrame) {
-    const user = this.trail.userPosition
-    return {
-      frame,
-      position: { ...this.position },
-      yaw: this.yaw,
-      path: user ? [...this.trail.ahead, user] : [...this.trail.ahead],
-      distance: this.spec.stride + this.spec.stopDistance,
-    }
-  }
-
   /** 다음 루프 끝에서 멈추면 설 거리 (남은 루프를 v/v0 k 로) */
   private liveStopEstimate(k = this.k) {
     const { spec, clock } = this
@@ -786,14 +812,16 @@ export class WalkController {
     const limit = walking ? toDeg(this.yawLimit()) : 0
     const radius = this.bigTurn ? spec.tightTurnRadius : spec.turnRadius
     const live = walking ? this.liveStopEstimate() : null
+    const edge = this.trail.edgeDistance()
     const lines = [
-      `산책 ${this.phase}${this.ending ? ' · 끝내는 중' : ''}${this.lost ? ' · 추적 끊김' : ''}${this.notice ? ' · 천천히' : ''} · ${this.bouts}번째 출발 · 루프 ${walking ? clock.loop : '-'} · floor ${this.minStopRatio > 0 ? this.minStopRatio.toFixed(2) : '끔'} · keep ${this.floorKeep.toFixed(2)}m`,
+      `산책 ${this.phase}${this.ending ? ' · 끝내는 중' : ''}${this.lost ? ' · 추적 끊김' : ''}${this.notice === 'slowDown' ? ' · 천천히' : this.notice === 'otherLevel' ? ' · 다른 층' : ''} · ${this.bouts}번째 출발 · 루프 ${walking ? clock.loop : '-'} · floor ${this.minStopRatio > 0 ? this.minStopRatio.toFixed(2) : '끔'} · keep ${this.floorKeep.toFixed(2)}m · tight ${(spec.tightTurnRadius / spec.bodyLength).toFixed(2)}`,
       `s ${spec.scale.toFixed(4)} (${spec.scaleSource === 'root' ? '루트 배율' : '모델 크기÷ref'}) · v0 ${spec.v0.toFixed(3)}m/s · r0 ${spec.r0.toFixed(3)} · extras ${spec.extrasSource}`,
       `v/v0 ${this.k.toFixed(2)}→${this.kTarget.toFixed(2)}${this.plan?.last ? ' (마지막 루프)' : ''} · timeScale ${timeScale.toFixed(3)} · 속도 ${(walking ? clock.speed(this.k) : 0).toFixed(2)}m/s`,
       `한 바퀴 ${spec.stride.toFixed(3)}m/${spec.loopSeconds.toFixed(3)}s · 출발 ${spec.startDistance.toFixed(3)}m · 정지 ${spec.stopDistance.toFixed(3)}m/${spec.stopSeconds.toFixed(2)}s`,
       `사용자까지 ${this.gap.toFixed(2)}m (직선 ${straight.toFixed(2)}) · D ${D.toFixed(2)} · 출발 ${this.startThreshold().toFixed(2)}m${this.standingFor < MIN_STAND_S ? ' (서 있는 중)' : ''}`,
       `사용자 속도 ${this.userSpeed.toFixed(2)}m/s (${this.walkingAway() ? '걸어가는 중' : this.userWalking ? '느려지는 중' : this.userSpeed < -USER_WALK_OFF_MPS ? '다가옴' : '서 있음'})`,
       `발자취 ${this.trail.count}점 · 겨누는 점 ${spec.lookAhead.toFixed(2)}m 앞 · 발자취에서 벗어남 ${this.trail.offset.toFixed(2)}m (최대 ${this.maxOffTrail.toFixed(2)})`,
+      `사용자 층 ${LEVEL_LABEL[this.level.state]} · 카메라 높이 차 ${signed(this.level.offset)}m (기준 ${this.level.reference?.toFixed(2) ?? '-'}m)${this.level.rising ? ' · 높이 바뀌는 중' : ''}${edge !== null ? ` · 경계까지 ${edge.toFixed(2)}m (개가 더 갈 자리 ${this.edgeRoom().toFixed(2)})` : ''}`,
       `바닥 y ${this.position.y.toFixed(3)} (따라갈 층 ${this.floorTarget.toFixed(3)})`,
       live !== null ? `다음 루프 끝에 멈추면 ${live.toFixed(2)}m (D ${signed(live - D)})` : '다음 루프 끝 -',
       decision
@@ -824,6 +852,7 @@ export class WalkController {
         aim: this.aim,
         offTrail: this.trail.offset,
         maxOffTrail: this.maxOffTrail,
+        level: { state: this.level.state, offset: this.level.offset, rising: this.level.rising, edge },
         decisions: this.decisions,
         stops: this.stops,
       },
@@ -832,3 +861,4 @@ export class WalkController {
 }
 
 const signed = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}`
+const LEVEL_LABEL: Record<number, string> = { 0: '같은 층', 1: '위', [-1]: '아래' }

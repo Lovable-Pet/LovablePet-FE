@@ -67,6 +67,8 @@ function useLongActive(active: boolean) {
 /** 산책 중 위 안내 문구 */
 function walkHint({ phase, ending, notice }: ArWalk) {
   if (ending) return '멈추는 중이에요'
+  // 사용자가 턱·계단으로 다른 층에 섬: 개는 경계 앞에서 멈춘다. 같은 층으로 돌아오면 다시 따라온다
+  if (notice === 'otherLevel') return '여기는 따라갈 수 없어요'
   if (notice === 'slowDown') return '천천히 걸어 주세요'
   return phase === 'standing' ? '걸어가면 따라와요' : '따라오고 있어요'
 }
@@ -187,7 +189,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const showFloorReset = debug && inAr && placement.manual
   /** 배치 전 빨강이 10초 넘게 이어짐 → '닫았다가 다시 열어 주세요' 한 줄 더 (바닥·깊이 상태는 건드리지 않는다) */
   const stuck = useLongActive(arLocked && placement.manual && placement.phase === 'blocked')
-  /** 개발 모드에서 ?floor=0.85·?keep=0.1 로 산책 최저선 값을 바꾼다 (다음 산책부터, 배포 파일에는 들어가지 않는다) */
+  /** 개발 모드에서 ?floor=0.85·?keep=0.1 로 산책 최저선 값을, ?tight=0.15 로 크게 돌 때 반지름을 바꾼다 (다음 산책부터, 배포 파일에는 들어가지 않는다) */
   const walkTuning = useMemo(() => (import.meta.env.DEV ? readWalkTuning(searchParams) : undefined), [searchParams])
   const walk = useArWalk(placement.walkHost, { canStart: dogReady && pose === 'stand' && !animBusy, debug, tuning: walkTuning })
   /** 산책 중: 명령 칩·음성·다시 놓기를 숨기고 개 탭을 막는다 */
@@ -800,13 +802,16 @@ function MessageShell({ onBack, children }: { onBack: () => void; children: Reac
   )
 }
 
-/** 개발용 주소 옵션: ?floor (최저선 비율, 0 이면 끔, 0–1.5) · ?keep (걷는 중 지킬 길 여유 m, 0–1). 없거나 숫자가 아니면 기본값 */
+/**
+ * 개발용 주소 옵션: ?floor (최저선 비율, 0 이면 끔, 0–1.5) · ?keep (걷는 중 지킬 길 여유 m, 0–1) ·
+ * ?tight (크게 돌 때 가장 좁은 반지름, 몸길이 배 0.05–1, 기본 0.25). 없거나 숫자가 아니면 기본값
+ */
 function readWalkTuning(params: URLSearchParams): WalkTuning {
-  const read = (name: string, max: number) => {
+  const read = (name: string, max: number, min = 0) => {
     const raw = params.get(name)
     if (raw === null || raw.trim() === '') return undefined
     const value = Number(raw)
-    return Number.isFinite(value) && value >= 0 && value <= max ? value : undefined
+    return Number.isFinite(value) && value >= min && value <= max ? value : undefined
   }
-  return { minStopRatio: read('floor', 1.5), floorKeepExtra: read('keep', 1) }
+  return { minStopRatio: read('floor', 1.5), floorKeepExtra: read('keep', 1), tightTurnRatio: read('tight', 1, 0.05) }
 }

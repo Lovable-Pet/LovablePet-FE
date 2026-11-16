@@ -4,6 +4,9 @@
 // 길은 개 자리에서 시작한다: points[0] 은 개가 지나는 조각의 시작점 (처음엔 개 자리, 그 뒤엔 지나간 마지막 점), 끝은 사용자.
 // 개가 길 위 어디쯤인지(발)는 개 자리를 길에 내린 점이고, 길을 따라 앞으로만 간다 (progress).
 // 지나간 점은 이 진행 거리로 버린다. 원을 그리며 돌 때 점이 한꺼번에 버려지거나 겨누는 점이 튀지 않는다
+//
+// 다른 층: 사용자가 턱·계단으로 개와 다른 층에 서면 (UserLevel) 높이가 바뀌기 시작한 자리를 경계 점으로 넣고, 그 뒤 점은 다른 층 점이다.
+// 개는 경계까지만 간다 (edgeDistance). 같은 층으로 돌아오면 다른 층 점을 버리고 경계에서 사용자로 곧게 잇는다
 
 export interface Vec2 {
   x: number
@@ -26,12 +29,25 @@ export const TRAIL_SEARCH_M = 0.6
 /** 점 개수 상한 (오래된 것부터 버린다). 0.18m 간격이면 36m */
 export const TRAIL_MAX_POINTS = 200
 
+/** 발자취 점. n: 남긴 순서 · other: 사용자가 개와 다른 층에서 남긴 점 · edge: 다른 층으로 가기 전 경계 (개는 여기까지만 간다) */
+interface TrailPoint extends Vec2 {
+  n: number
+  other?: boolean
+  edge?: boolean
+}
+
 const dist = (a: Vec2, b: Vec2) => Math.hypot(a.x - b.x, a.z - b.z)
 const lerp = (a: Vec2, b: Vec2, t: number): Vec2 => ({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t })
 
 export class Trail {
   /** 길의 점 (points[0] 은 개가 지나는 조각의 시작). 끝은 user */
-  private points: Vec2[] = []
+  private points: TrailPoint[] = []
+  /** 지금까지 남긴 점 수 (점마다 n 으로 붙인다) */
+  private pushed = 0
+  /** 경계 후보: 사용자 높이가 바뀌기 시작한 자리와 그때까지 남긴 점 수 */
+  private rise: { point: Vec2; count: number } | null = null
+  /** 사용자가 개와 다른 층에 있다 (그동안 남긴 점은 other) */
+  private otherLevel = false
   /** 마지막으로 본 사용자 위치 */
   private user: Vec2 | null = null
   /** points[0] 에서 발까지 길 거리 (m) */
@@ -56,9 +72,10 @@ export class Trail {
     return this.user
   }
 
-  /** 개 앞에 남은 점 (디버그·4단계 앞 바닥 검사용) */
+  /** 개 앞에 남은 점 (디버그용). 사용자가 다른 층이면 경계까지 (개가 갈 수 있는 점) */
   get ahead(): readonly Vec2[] {
-    return this.points.slice(1)
+    const limit = this.limitIndex()
+    return this.points.slice(1, limit === null ? undefined : limit + 1)
   }
 
   /** 개 중심이 길에서 벗어난 거리 (m). locate 뒤에 맞다 */
@@ -71,6 +88,72 @@ export class Trail {
     this.user = null
     this.progress = 0
     this.off = 0
+    this.rise = null
+    this.otherLevel = false
+  }
+
+  /** 사용자 높이가 바뀌기 시작했다 (UserLevel 'rise'): 지금 사용자 자리를 경계 후보로 둔다 */
+  markRise() {
+    this.rise = this.user ? { point: { ...this.user }, count: this.pushed } : null
+  }
+
+  cancelRise() {
+    this.rise = null
+  }
+
+  /** 사용자가 다른 층에 섰다 (UserLevel 'enter'): 후보 뒤에 남긴 점을 다른 층 점으로, 후보 자리를 경계 점으로 넣는다 */
+  enterOtherLevel() {
+    this.otherLevel = true
+    const rise = this.rise
+    this.rise = null
+    const { points } = this
+    if (!points.length) return
+    let index = points.findIndex((point) => point.n >= (rise?.count ?? this.pushed))
+    if (index === -1) index = points.length
+    for (let i = index; i < points.length; i++) points[i].other = true
+    // 후보 뒤에 길을 다시 시작했으면 (사용자가 개 둘레를 지나감) 개 자리가 경계다
+    if (index === 0 || !rise) {
+      const edge = points[Math.max(0, index - 1)]
+      edge.other = false
+      edge.edge = true
+      return
+    }
+    points.splice(index, 0, { ...rise.point, n: rise.count - 0.5, edge: true })
+  }
+
+  /** 같은 층으로 돌아왔다 (UserLevel 'exit'): 다른 층 점을 버리고 경계를 푼다 (경계 점에서 사용자로 곧게 잇는다) */
+  exitOtherLevel() {
+    this.otherLevel = false
+    this.rise = null
+    const before = this.points.length
+    this.points = this.points.filter((point) => !point.other)
+    for (const point of this.points) point.edge = false
+    // 남은 길이 한꺼번에 바뀌었으면 이 프레임은 사용자 속도 추정에서 뺀다
+    if (this.points.length !== before) this.cut = true
+  }
+
+  /**
+   * 사용자가 다른 층이면 발에서 길을 따라 경계 점까지 거리 (m, 지나쳤으면 음수). 같은 층이면 null. locate 뒤에 맞다.
+   * 경계 점이 되짚기·끊기로 없어졌으면 첫 다른 층 점 앞 점, 다른 층 점도 없으면 마지막 점까지
+   */
+  edgeDistance(): number | null {
+    const limit = this.limitIndex()
+    if (limit === null) return null
+    let length = 0
+    for (let i = 1; i <= limit; i++) length += dist(this.points[i - 1], this.points[i])
+    return length - this.progress
+  }
+
+  /** 개가 갈 수 있는 마지막 점의 번호: 경계 점, 경계 없이 다른 층 점이 나오면 그 앞 점. 사용자가 같은 층이면 null */
+  private limitIndex(): number | null {
+    if (!this.otherLevel || !this.points.length) return null
+    const index = this.points.findIndex((point) => point.edge || point.other)
+    if (index === -1) return this.points.length - 1
+    return this.points[index].edge ? index : Math.max(0, index - 1)
+  }
+
+  private point(at: Vec2): TrailPoint {
+    return { x: at.x, z: at.z, n: this.pushed++, other: this.otherLevel }
   }
 
   /**
@@ -94,7 +177,7 @@ export class Trail {
     if (dist(last, user) < TRAIL_SPACING_M) return
     if (previous && dist(last, user) <= dist(last, previous)) return
     this.cutLoop(user)
-    if (dist(this.points[this.points.length - 1], user) >= TRAIL_SPACING_M) this.points.push({ ...user })
+    if (dist(this.points[this.points.length - 1], user) >= TRAIL_SPACING_M) this.points.push(this.point(user))
     if (this.points.length > TRAIL_MAX_POINTS) {
       this.points.splice(0, this.points.length - TRAIL_MAX_POINTS)
       this.progress = 0
@@ -124,8 +207,9 @@ export class Trail {
     }
   }
 
+  /** 사용자가 다른 층이면 개 자리가 곧 경계다 (개는 움직이지 않는다) */
   private restart(dog: Vec2) {
-    this.points = [{ ...dog }]
+    this.points = [{ ...this.point(dog), other: false, edge: this.otherLevel }]
     this.progress = 0
     this.off = 0
   }
@@ -161,7 +245,8 @@ export class Trail {
       const rest = (1 - t) * segment + tail[i + 1]
       if (direct < TRAIL_LOOP_M && rest > TRAIL_LOOP_RATIO * Math.max(direct, TRAIL_SPACING_M)) {
         points.length = i + 1
-        if (t > 1e-6) points.push(point)
+        // 조각 위 점은 뒤 점(b)의 층을 따른다. 다른 층의 사용자가 같은 층 길로 이어 붙으면 이 점이 경계다
+        if (t > 1e-6) points.push({ ...point, n: b.n, other: b.other, edge: this.otherLevel && !b.other })
         this.cut = true
         return
       }

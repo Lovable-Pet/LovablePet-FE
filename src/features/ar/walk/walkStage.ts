@@ -68,25 +68,3 @@ export interface WalkHost {
   /** ?debug 일 때 매 프레임: 발자취 점·겨누는 점을 바닥에 찍는다. null 이면 지운다 */
   showPath?(marks: WalkPathMarks | null): void
 }
-
-/**
- * 4단계 자리: 걷는 중 앞 바닥 검사 (아직 구현하지 않음).
- * 루프 끝마다 다음 한 바퀴와 멈추는 거리만큼 앞이 막혔는지 묻고, 막혔으면 그 루프 끝에서 멈춘다
- */
-export interface AheadCheck {
-  /** 매 프레임 (광선·깊이를 미리 준비할 때) */
-  update?(input: AheadInput): void
-  /** 루프 끝에서: 앞이 막혔으면 true */
-  blocked(input: AheadInput): boolean
-}
-
-export interface AheadInput {
-  frame: StageFrame
-  /** 개 발밑 가운데 */
-  position: Vec3
-  yaw: number
-  /** 앞으로 갈 길: 남은 발자취 점과 사용자 위치 */
-  path: readonly Vec2[]
-  /** 다음 루프 끝까지와 멈추는 거리를 더한 거리 (m) */
-  distance: number
-}
