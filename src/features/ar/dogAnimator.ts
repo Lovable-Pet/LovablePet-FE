@@ -54,6 +54,7 @@ export type CommandId = (typeof COMMANDS)[number]['id']
 export class DogAnimator {
   private readonly mv: ModelViewerElement
   private readonly onPose: (pose: Pose) => void
+  private readonly onBusy?: (busy: boolean) => void
   /** 개 탭 */
   private readonly tapClip: string
   /** '꼬리 흔들기' 칩 */
@@ -73,9 +74,19 @@ export class DogAnimator {
   /** 대기 루프. 진도 템플릿은 standing, 다른 템플릿은 idle */
   private readonly idleClip: string
 
-  constructor(mv: ModelViewerElement, options: { tapAnimation: string; playbackRate: number; onPose: (pose: Pose) => void }) {
+  constructor(
+    mv: ModelViewerElement,
+    options: {
+      tapAnimation: string
+      playbackRate: number
+      onPose: (pose: Pose) => void
+      /** 명령·반응을 재생하거나 기다리는 중인지가 바뀔 때 (산책은 서기 루프만 돌 때 시작한다) */
+      onBusy?: (busy: boolean) => void
+    },
+  ) {
     this.mv = mv
     this.onPose = options.onPose
+    this.onBusy = options.onBusy
     const clips = new Set(mv.availableAnimations)
     this.hasCommands = COMMAND_CLIPS.every((clip) => clips.has(clip))
     this.idleClip = clips.has('standing') ? 'standing' : clips.has('idle') ? 'idle' : (mv.availableAnimations[0] ?? '')
@@ -135,8 +146,12 @@ export class DogAnimator {
 
   private enqueue(steps: readonly Step[]) {
     const mine = ++this.run
-    this.pending++
-    this.chain = this.chain.then(() => this.perform(steps, mine)).finally(() => this.pending--)
+    if (this.pending++ === 0) this.onBusy?.(true)
+    this.chain = this.chain
+      .then(() => this.perform(steps, mine))
+      .finally(() => {
+        if (--this.pending === 0 && !this.disposed) this.onBusy?.(false)
+      })
   }
 
   private setPose(pose: Pose) {

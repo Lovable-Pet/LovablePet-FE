@@ -1,5 +1,5 @@
 import type { ModelViewerElement } from '@google/model-viewer'
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { ModelViewerArStage } from './modelViewerArStage'
 import {
   PlacementController,
@@ -8,6 +8,7 @@ import {
   type PlacementNotice,
   type PlacementPhase,
 } from './placement/placementController'
+import type { WalkHost, WalkRig } from './walk/walkStage'
 import { requestDepthWithArSessions } from './xrDepthRequest'
 
 export interface ArPlacement {
@@ -32,6 +33,11 @@ export interface ArPlacement {
   replace: () => void
   /** 바닥 다시 찾기 (?debug 버튼): 바닥 추정을 처음부터 */
   resetFloor: () => void
+  /**
+   * 산책에 넘길 것. 직접 놓은 뒤(placed)이고 모델에 걷기 클립 3개·standing·extras.walk 가 다 있을 때만.
+   * 아이폰 Quick Look·Scene Viewer·화면 안 3D·자동 착지에서는 null
+   */
+  walkHost: WalkHost | null
 }
 
 interface PlacementState {
@@ -55,6 +61,8 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
   const [state, setState] = useState<PlacementState>(OFF)
   const [debugInfo, setDebugInfo] = useState<PlacementDebug | null>(null)
   const controllerRef = useRef<PlacementController | null>(null)
+  /** 이번 세션의 산책 리그 (모델에 걷기가 없으면 null) */
+  const [walk, setWalk] = useState<{ controller: PlacementController; rig: WalkRig } | null>(null)
   // 세션 중에 ?debug 를 바꾸면 다음 세션부터 적용된다
   const debugRef = useRef(debug)
   useEffect(() => {
@@ -71,6 +79,7 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
     const stop = () => {
       controllerRef.current?.dispose()
       controllerRef.current = null
+      setWalk(null)
     }
 
     /** 직접 놓기를 못 할 때: 개를 보이고 model-viewer 가 스스로 바닥에 놓게 둔다 */
@@ -108,6 +117,10 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
         })
         controllerRef.current = controller
         controller.start()
+        // 걷기 클립·extras.walk 를 읽는다 (GLB 를 다시 받아야 하면 늦게 온다)
+        void stage.createWalkRig().then((rig) => {
+          if (rig && controllerRef.current === controller) setWalk({ controller, rig })
+        })
       } else if (status === 'object-placed') {
         // 직접 놓기에서는 우리가 놓을 때 보내는 알림이라 무시한다. 기본 흐름에서는 착지한 것
         if (!controllerRef.current) setState((previous) => (previous.manual ? previous : { ...previous, phase: 'placed' }))
@@ -143,5 +156,30 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
   const replace = useCallback(() => controllerRef.current?.replace(), [])
   const resetFloor = useCallback(() => controllerRef.current?.resetFloor(), [])
 
-  return { ...state, debug: debugInfo, place, replace, resetFloor }
+  const placed = state.phase === 'placed' && state.manual
+  const walkHost = useMemo<WalkHost | null>(() => {
+    if (!walk || !placed) return null
+    const { controller, rig } = walk
+    return {
+      rig,
+      dogPose: () => controller.placedPose(),
+      subscribe: (listener) => {
+        controller.setPlacedFrameListener(listener)
+        return () => controller.setPlacedFrameListener(null)
+      },
+      dogMoved: (position, yaw) => controller.dogMoved(position, yaw),
+      // ?debug: 발자취 점은 흰 점, 개가 겨누는 점은 진한 점 (표시 원의 디버그 점과 같은 방식)
+      showPath: (path) =>
+        controller.setPlacedMarks(
+          path
+            ? [
+                ...path.points.map((point) => ({ position: { x: point.x, y: path.y, z: point.z }, strong: false })),
+                ...(path.aim ? [{ position: { x: path.aim.x, y: path.y, z: path.aim.z }, strong: true }] : []),
+              ]
+            : [],
+        ),
+    }
+  }, [walk, placed])
+
+  return { ...state, debug: debugInfo, place, replace, resetFloor, walkHost }
 }

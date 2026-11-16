@@ -1,4 +1,4 @@
-import type { ArStage, RingMark, StageFrame, StageSensors } from './arStage'
+import { YAW_MISMATCH_RAD, type ArStage, type DrawnYawCheck, type RingMark, type StageFrame, type StageSensors } from './arStage'
 import { DepthCalibration, type CalibrationReport } from './depthCalibration'
 import { yawToward } from './facing'
 import {
@@ -58,6 +58,14 @@ export interface PlacementControllerOptions {
   onUnavailable(reason: string): void
   /** 디버그 글. 주면 놓은 자리에 표시 원도 남긴다 (발밑 가운데가 원 중심에 오는지 보려고) */
   onDebug?(debug: PlacementDebug): void
+}
+
+/** 놓은 뒤 프레임마다 넘기는 바닥 추정 */
+export interface PlacedFloor {
+  /** 바닥 층 높이. 아직 모르면 null */
+  y: number | null
+  /** 후보 없이 지금 맞은 수평면으로 임시로 정한 값인지 */
+  provisional: boolean
 }
 
 export interface PlacementDebug {
@@ -158,6 +166,10 @@ export class PlacementController {
   /** 가운데 광선이 바닥에 마지막으로 맞은 시각 (ms). 첫 프레임부터 센다 */
   private floorSeenAt: number | null = null
   private placed: { position: Vec3; yaw: number } | null = null
+  /** 놓은 뒤 매 프레임 (산책) */
+  private placedListener: ((frame: StageFrame, floor: PlacedFloor) => void) | null = null
+  /** 놓은 뒤 (?debug) 표시 원과 함께 찍을 점 (산책의 발자취·겨누는 점) */
+  private placedMarks: readonly RingMark[] = []
   private reported: PlacementSnapshot | null = null
   private lastDebugAt = -Infinity
   private stopped = false
@@ -192,6 +204,7 @@ export class PlacementController {
     this.forced = this.phase === 'blocked'
     // 앞쪽이 휴대폰(바닥에 투영한 점)을 향하게. 놓은 뒤에는 다시 계산하지 않아 카메라를 따라 돌지 않는다
     const yaw = this.camera ? yawToward(position, this.camera) : 0
+    this.placedMarks = []
     this.stage.setRing(this.options.onDebug ? { center: position, radius: this.ringRadius, tone: 'marker' } : null)
     this.clearChecks()
     this.stage.placeDog(position, yaw)
@@ -200,6 +213,35 @@ export class PlacementController {
     this.blockedBy = null
     this.report()
     return true
+  }
+
+  /** 지금 개 자리·방향 (놓은 자리. 산책으로 옮겼으면 옮긴 자리). 놓기 전이면 null */
+  placedPose(): { position: Vec3; yaw: number } | null {
+    return this.placed ? { position: { ...this.placed.position }, yaw: this.placed.yaw } : null
+  }
+
+  /** 놓은 뒤 매 프레임 바닥 추정과 함께 부른다 (산책). null 이면 끈다. 다시 놓으면 끊긴다 */
+  setPlacedFrameListener(listener: ((frame: StageFrame, floor: PlacedFloor) => void) | null) {
+    this.placedListener = listener
+  }
+
+  /** 산책이 개를 옮겼다: 놓은 자리 기록과 (?debug) 표시 원을 옮긴다 */
+  dogMoved(position: Vec3, yaw: number) {
+    if (this.stopped || this.phase !== 'placed') return
+    this.placed = { position: { ...position }, yaw }
+    this.drawPlacedRing()
+  }
+
+  /** ?debug: 놓은 개의 표시 원과 함께 바닥에 찍을 점 (산책의 발자취 점·겨누는 점). 빈 배열이면 지운다 */
+  setPlacedMarks(marks: readonly RingMark[]) {
+    this.placedMarks = marks
+    if (this.stopped || this.phase !== 'placed') return
+    this.drawPlacedRing()
+  }
+
+  private drawPlacedRing() {
+    if (!this.options.onDebug || !this.placed) return
+    this.stage.setRing({ center: this.placed.position, radius: this.ringRadius, tone: 'marker', marks: this.placedMarks })
   }
 
   /**
@@ -211,6 +253,8 @@ export class PlacementController {
     this.stage.hideDog()
     this.stage.setRing(null)
     this.floor.prune(this.lastTime)
+    this.placedListener = null
+    this.placedMarks = []
     this.placed = null
     this.spot = null
     this.phase = 'searching'
@@ -235,6 +279,7 @@ export class PlacementController {
   dispose() {
     if (this.stopped) return
     this.stopped = true
+    this.placedListener = null
     this.spotCheck.idle()
     this.stage.dispose()
   }
@@ -247,6 +292,7 @@ export class PlacementController {
     // 놓은 뒤에도 바닥 추정은 이어 간다 (다시 놓을 때 쓴다)
     this.floor.update(frame.time, frame.centerHit, frame.camera)
     if (this.phase !== 'placed') this.track(frame)
+    else this.placedListener?.(frame, { y: this.floor.y, provisional: this.floor.provisional })
     this.debug(frame)
   }
 
@@ -467,7 +513,7 @@ export class PlacementController {
       const { position, yaw } = this.placed
       const foot = this.stage.dogFootCenter()
       lines.push(
-        `${this.forced ? '강제로 놓음 · ' : ''}yaw ${degrees(yaw)}° · 지금 폰 쪽 ${degrees(yawToward(position, camera))}° · 발밑-원 ${foot ? `${(distanceXZ(foot, position) * 100).toFixed(1)}cm` : '?'}`,
+        `${this.forced ? '강제로 놓음 · ' : ''}yaw ${degrees(yaw)}° · ${describeDrawnYaw(this.stage.dogYawCheck())} · 지금 폰 쪽 ${degrees(yawToward(position, camera))}° · 발밑-원 ${foot ? `${(distanceXZ(foot, position) * 100).toFixed(1)}cm` : '?'}`,
       )
     } else {
       const stats = this.blockStats.counts(time)
@@ -540,6 +586,15 @@ function describeBins(status: FloorStatus) {
 }
 const signed = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}`
 const degrees = (radians: number) => Math.round((radians * 180) / Math.PI)
+
+/** 그려진 yaw 125° · 어긋난 프레임 0/1200 (최대 0°). 지금 2° 넘게 다르면 ⚠ */
+function describeDrawnYaw(check: DrawnYawCheck | null) {
+  if (!check) return '그려진 yaw -'
+  const { drawn, intended, frames, mismatchFrames, worst } = check
+  const off = drawn === null ? null : Math.abs(Math.atan2(Math.sin(drawn - intended), Math.cos(drawn - intended)))
+  const now = drawn === null ? '?' : `${degrees(drawn)}°${off !== null && off > YAW_MISMATCH_RAD ? ` ⚠ ${degrees(off)}° 다름` : ''}`
+  return `그려진 yaw ${now} · 어긋난 프레임 ${mismatchFrames}/${frames} (최대 ${degrees(worst)}°)`
+}
 
 const BASIS_LABEL = { depth: '깊이', points: '특징점', none: '판정 안 함' } as const
 

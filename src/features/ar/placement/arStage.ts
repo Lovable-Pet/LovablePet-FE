@@ -63,7 +63,10 @@ export interface RingPose {
   center: Vec3
   radius: number
   tone: RingTone
-  /** 디버그: 원 위에 찍는 작은 점들 (원 안쪽 깊이 검사에서 장애물로 잡힌 표본). 없으면 점을 지운다 */
+  /**
+   * 디버그: 바닥에 찍는 작은 점들. 놓기 전엔 원 안쪽 깊이 검사에서 장애물로 잡힌 표본,
+   * 놓은 뒤 산책 중엔 발자취 점(흰 점)과 개가 겨누는 점(진한 점). 없으면 점을 지운다
+   */
   marks?: readonly RingMark[]
 }
 
@@ -81,6 +84,21 @@ export interface ProbeSet {
   cancel(): void
 }
 
+/** 디버그: 개가 실제로 그려진 방향 (렌더러가 넣은 방향과 다르게 그리지 않았는지) */
+export interface DrawnYawCheck {
+  /** 마지막으로 그려진 방향 (pivot 월드 행렬의 앞 방향, rad). 모르면 null */
+  drawn: number | null
+  /** 그때 넣어 둔 방향 (rad) */
+  intended: number
+  /** 놓은 뒤 그려진 프레임 수와 그중 넣은 방향과 YAW_MISMATCH_RAD 넘게 다른 프레임 수 */
+  frames: number
+  mismatchFrames: number
+  /** 가장 크게 어긋난 각 (rad) */
+  worst: number
+}
+/** 그려진 방향이 이보다 더 다르면 어긋남으로 센다 (2°) */
+export const YAW_MISMATCH_RAD = (2 * Math.PI) / 180
+
 export interface ArStage {
   /** 개 크기 (m). x 가로, y 높이, z 세로 (모델 기준) */
   readonly dogSize: Vec3
@@ -96,6 +114,8 @@ export interface ArStage {
   createProbes(rays: readonly Ray[]): Promise<ProbeSet>
   /** 디버그: 개 모델 바닥 가운데의 지금 위치. 모르면 null */
   dogFootCenter(): Vec3 | null
+  /** 디버그: 그려진 개 방향과 넣은 방향 비교. 놓기 전이면 null */
+  dogYawCheck(): DrawnYawCheck | null
   /** 모두 원래대로 (원 지우기, 개 보이기, hit-test 끝내기) */
   dispose(): void
 }
