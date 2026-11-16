@@ -1,15 +1,17 @@
 import type { ModelViewerElement } from '@google/model-viewer'
 import { CircleGeometry, DoubleSide, Group, Mesh, MeshBasicMaterial, RingGeometry, type BufferGeometry } from 'three'
-import type {
-  ArStage,
-  DepthSampler,
-  ProbeSet,
-  RingMark,
-  RingPose,
-  RingTone,
-  SensorState,
-  StageFrame,
-  StageSensors,
+import {
+  YAW_MISMATCH_RAD,
+  type ArStage,
+  type DepthSampler,
+  type DrawnYawCheck,
+  type ProbeSet,
+  type RingMark,
+  type RingPose,
+  type RingTone,
+  type SensorState,
+  type StageFrame,
+  type StageSensors,
 } from './placement/arStage'
 import type { Ray, SurfaceHit, Vec3 } from './placement/types'
 import type { WalkPose, WalkRig } from './walk/walkStage'
@@ -23,6 +25,7 @@ import {
   type WalkExtras,
   type WalkModelInfo,
 } from './walk/walkSpec'
+import { drawnYaw, setPivotYaw, wrapYaw, type PivotLike } from './pivotYaw'
 import { enabledFeaturesOf } from './xrDepthRequest'
 
 // model-viewer 내부를 쓰는 곳은 이 파일 하나다 (배치 로직의 ArStage 와 산책의 WalkRig 를 채우는 어댑터).
@@ -37,6 +40,7 @@ import { enabledFeaturesOf } from './xrDepthRequest'
 //   - arRenderer(ARRenderer): currentSession, goalPosition·goalYaw, placementComplete, placementBox, initialHitSource
 //   - threeRenderer.xr.getReferenceSpace(): model-viewer 가 쓰는 'local' 기준 공간
 // ARRenderer 는 매 프레임 pivot 위치를 goalPosition 쪽으로, 방향을 goalYaw 쪽으로 감쇠시킨다. 그래서 둘을 같이 맞춘다.
+// 방향은 scene.yaw 가 아니라 pivot.rotation 을 통째로 넣는다 (scene.yaw 는 |yaw| > 90° 에서 틀리게 그려진다, ./pivotYaw.ts).
 // 모양이 다르면(버전이 바뀌면) attach 가 null 을 돌려주고, 부르는 쪽은 model-viewer 기본 흐름(자동 착지)으로 둔다
 
 /** ARRenderer 의 AR_SHADOW_INTENSITY. 내보내지 않는 값이라 같은 값을 적는다 */
@@ -141,12 +145,11 @@ interface NodeLike {
   traverse(visit: (node: NodeLike) => void): void
 }
 interface ModelSceneLike extends NodeLike {
-  pivot: { position: Vector3Like }
+  pivot: PivotLike & { position: Vector3Like }
   target: NodeLike & { matrixWorld: { elements: ArrayLike<number> } }
   /** 모델 좌표(target 기준) */
   boundingBox: { min: Vector3Like; max: Vector3Like }
   model: unknown
-  yaw: number
   add(object: object): unknown
   /** target 을 감쇠 없이 목표(모델 바닥이 pivot 에 오는 자리)로 옮긴다 */
   jumpToGoal(): void
@@ -220,12 +223,14 @@ function isModelScene(value: unknown): value is ModelSceneLike {
   return (
     isRecord(pivot) &&
     isVector(pivot.position) &&
+    isRecord(pivot.rotation) &&
+    typeof pivot.rotation.set === 'function' &&
+    isRecord(pivot.matrixWorld) &&
     isNode(target) &&
     isRecord((target as unknown as Record<string, unknown>).matrixWorld) &&
     isRecord(boundingBox) &&
     isVector(boundingBox.min) &&
     isVector(boundingBox.max) &&
-    typeof value.yaw === 'number' &&
     hasMethods(value, ['add', 'jumpToGoal', 'setShadowIntensity', 'setShadowOffset', 'queueShadowRender'])
   )
 }
@@ -389,6 +394,8 @@ export class ModelViewerArStage implements ArStage {
   private readonly sensors: StageSensors = { depth: 'pending', depthFormat: null, points: 'pending' }
   private ring: RingObject | null = null
   private dogPlaced = false
+  /** 놓은 뒤 그려진 방향 비교 (디버그) */
+  private yawCheck = { frames: 0, mismatchFrames: 0, worst: 0 }
   private fadeTimer: ReturnType<typeof setInterval> | undefined
   private restoreMaterials: (() => void) | null = null
   private disposed = false
@@ -469,6 +476,7 @@ export class ModelViewerArStage implements ArStage {
       this.frameHandle = session.requestAnimationFrame(loop)
       // 놓은 뒤에 model-viewer 의 첫 바닥 hit-test 가 늦게 생겼으면 끝낸다 (맞으면 개 높이를 바꿔 버린다)
       if (this.dogPlaced && this.ar.initialHitSource) this.stopInitialHitTest()
+      if (this.dogPlaced) this.checkDrawnYaw()
       const pose = frame.getViewerPose(space)
       // 휴대폰 AR 은 화면이 하나다 (view 하나)
       const view = pose?.views[0]
@@ -518,8 +526,7 @@ export class ModelViewerArStage implements ArStage {
     // 위치·방향을 목표와 같이 맞춰 감쇠(끌려감·돌아감) 없이 바로 그 자리에 둔다
     scene.pivot.position.set(position.x, position.y, position.z)
     ar.goalPosition.set(position.x, position.y, position.z)
-    scene.yaw = yaw
-    ar.goalYaw = yaw
+    ar.goalYaw = setPivotYaw(scene.pivot, yaw)
     // 처음부터 위치가 목표와 같으면 ARRenderer.moveScene 의 착지 처리가 돌지 않는다. 같은 일을 여기서 한다
     ar.placementComplete = true
     const box = ar.placementBox
@@ -534,6 +541,7 @@ export class ModelViewerArStage implements ArStage {
     // 새 자리에서 그림자를 다시 찍는다
     scene.queueShadowRender()
     this.dogPlaced = true
+    this.yawCheck = { frames: 0, mismatchFrames: 0, worst: 0 }
     this.revealDog()
   }
 
@@ -614,6 +622,25 @@ export class ModelViewerArStage implements ArStage {
     const durations = Object.fromEntries(WALK_CLIPS.map((name) => [name, clips.get(name)!.duration])) as Record<WalkClip, number>
     const info: WalkModelInfo = { extras, extrasSource, durations, scale, scaleSource, size: { ...this.dogSize } }
     return new ModelViewerWalkRig(mv, scene, scene, this.ar, info, clips)
+  }
+
+  /**
+   * 이 루프는 model-viewer 가 이번 프레임을 그린 뒤에 돈다. 그래서 지금 pivot 월드 행렬 = 방금 그려진 방향,
+   * goalYaw = 지난 프레임에 넣은 방향이다
+   */
+  private checkDrawnYaw() {
+    const drawn = drawnYaw(this.scene.pivot)
+    if (drawn === null) return
+    const off = Math.abs(wrapYaw(drawn - this.ar.goalYaw))
+    const check = this.yawCheck
+    check.frames++
+    if (off > YAW_MISMATCH_RAD) check.mismatchFrames++
+    check.worst = Math.max(check.worst, off)
+  }
+
+  dogYawCheck(): DrawnYawCheck | null {
+    if (!this.dogPlaced) return null
+    return { ...this.yawCheck, drawn: drawnYaw(this.scene.pivot), intended: this.ar.goalYaw }
   }
 
   dogFootCenter(): Vec3 | null {
@@ -872,8 +899,7 @@ class ModelViewerWalkRig implements WalkRig {
     // placeDog 와 같이 목표도 맞춰 감쇠 없이 그 자리·방향에 둔다
     scene.pivot.position.set(position.x, position.y, position.z)
     ar.goalPosition.set(position.x, position.y, position.z)
-    scene.yaw = yaw
-    ar.goalYaw = yaw
+    ar.goalYaw = setPivotYaw(scene.pivot, yaw)
     scene.queueShadowRender()
   }
 

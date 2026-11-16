@@ -1,4 +1,4 @@
-import type { ArStage, RingMark, StageFrame, StageSensors } from './arStage'
+import { YAW_MISMATCH_RAD, type ArStage, type DrawnYawCheck, type RingMark, type StageFrame, type StageSensors } from './arStage'
 import { DepthCalibration, type CalibrationReport } from './depthCalibration'
 import { yawToward } from './facing'
 import {
@@ -513,7 +513,7 @@ export class PlacementController {
       const { position, yaw } = this.placed
       const foot = this.stage.dogFootCenter()
       lines.push(
-        `${this.forced ? '강제로 놓음 · ' : ''}yaw ${degrees(yaw)}° · 지금 폰 쪽 ${degrees(yawToward(position, camera))}° · 발밑-원 ${foot ? `${(distanceXZ(foot, position) * 100).toFixed(1)}cm` : '?'}`,
+        `${this.forced ? '강제로 놓음 · ' : ''}yaw ${degrees(yaw)}° · ${describeDrawnYaw(this.stage.dogYawCheck())} · 지금 폰 쪽 ${degrees(yawToward(position, camera))}° · 발밑-원 ${foot ? `${(distanceXZ(foot, position) * 100).toFixed(1)}cm` : '?'}`,
       )
     } else {
       const stats = this.blockStats.counts(time)
@@ -586,6 +586,15 @@ function describeBins(status: FloorStatus) {
 }
 const signed = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}`
 const degrees = (radians: number) => Math.round((radians * 180) / Math.PI)
+
+/** 그려진 yaw 125° · 어긋난 프레임 0/1200 (최대 0°). 지금 2° 넘게 다르면 ⚠ */
+function describeDrawnYaw(check: DrawnYawCheck | null) {
+  if (!check) return '그려진 yaw -'
+  const { drawn, intended, frames, mismatchFrames, worst } = check
+  const off = drawn === null ? null : Math.abs(Math.atan2(Math.sin(drawn - intended), Math.cos(drawn - intended)))
+  const now = drawn === null ? '?' : `${degrees(drawn)}°${off !== null && off > YAW_MISMATCH_RAD ? ` ⚠ ${degrees(off)}° 다름` : ''}`
+  return `그려진 yaw ${now} · 어긋난 프레임 ${mismatchFrames}/${frames} (최대 ${degrees(worst)}°)`
+}
 
 const BASIS_LABEL = { depth: '깊이', points: '특징점', none: '판정 안 함' } as const
 
