@@ -5,6 +5,7 @@ import {
   type WalkNotice,
   type WalkPhase,
   type WalkSnapshot,
+  type WalkTuning,
 } from './walk/walkController'
 import type { WalkHost } from './walk/walkStage'
 
@@ -30,7 +31,10 @@ const IDLE: WalkSnapshot = { phase: 'standing', ending: false, notice: null }
  * AR 산책 모드. host 는 useArPlacement 의 walkHost (개를 놓은 뒤에만 있다).
  * canStart: 개가 서기 루프만 돌고 있는지 (명령·반응이 재생 중이면 걷기 클립으로 바꾸면 튄다)
  */
-export function useArWalk(host: WalkHost | null, { canStart, debug }: { canStart: boolean; debug: boolean }): ArWalk {
+export function useArWalk(
+  host: WalkHost | null,
+  { canStart, debug, tuning }: { canStart: boolean; debug: boolean; /** 개발용 ?floor·?keep (다음 산책부터) */ tuning?: WalkTuning },
+): ArWalk {
   const controllerRef = useRef<WalkController | null>(null)
   /** 돌고 있는 산책이 받은 host. 지금 host 와 다르면(다시 놓기·AR 끝) 산책은 끝난 것이다 */
   const ownerRef = useRef<WalkHost | null>(null)
@@ -38,9 +42,11 @@ export function useArWalk(host: WalkHost | null, { canStart, debug }: { canStart
   const [snapshot, setSnapshot] = useState<WalkSnapshot>(IDLE)
   const [debugInfo, setDebugInfo] = useState<WalkDebug | null>(null)
   const debugRef = useRef(debug)
+  const tuningRef = useRef(tuning)
   useEffect(() => {
     debugRef.current = debug
-  }, [debug])
+    tuningRef.current = tuning
+  }, [debug, tuning])
 
   // 놓은 개가 없어지거나 바뀌면 산책을 버린다 (상태는 owner !== host 로 꺼진다)
   useEffect(() => {
@@ -70,6 +76,7 @@ export function useArWalk(host: WalkHost | null, { canStart, debug }: { canStart
         setOwner(null)
       },
       onDebug: debugRef.current ? setDebugInfo : undefined,
+      tuning: tuningRef.current,
     })
     controllerRef.current = controller
     ownerRef.current = host

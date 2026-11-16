@@ -104,6 +104,15 @@ export interface WalkControllerOptions {
   debugIntervalMs?: number
   /** 4단계: 걷는 중 앞 바닥 검사. 없으면 보지 않는다 */
   ahead?: AheadCheck
+  /** 개발용 (주소 ?floor·?keep): 최저선 값을 바꿔 폰에서 견준다. 없으면 MIN_STOP_RATIO·FLOOR_KEEP_EXTRA_M */
+  tuning?: WalkTuning
+}
+
+export interface WalkTuning {
+  /** MIN_STOP_RATIO 대신. 0 이면 최저선을 끈다 (멈춤 판단·걷는 중 지킬 길·출발 거리 모두) */
+  minStopRatio?: number
+  /** FLOOR_KEEP_EXTRA_M 대신 (m) */
+  floorKeepExtra?: number
 }
 
 /** v/v0 범위 (재생 배율과 이동 속도에 같이 곱한다) */
@@ -289,10 +298,15 @@ export class WalkController {
   private readonly decisions: WalkDecision[] = []
   private readonly stops: WalkStopResult[] = []
   private lastDebugAt = -Infinity
+  /** 최저선 비율 (0 이면 끔)과 걷는 중 지킬 길 여유 (m) */
+  private readonly minStopRatio: number
+  private readonly floorKeep: number
 
   constructor(host: WalkHost, options: WalkControllerOptions) {
     this.host = host
     this.options = options
+    this.minStopRatio = Math.max(0, options.tuning?.minStopRatio ?? MIN_STOP_RATIO)
+    this.floorKeep = Math.max(0, options.tuning?.floorKeepExtra ?? FLOOR_KEEP_EXTRA_M)
     this.spec = walkSpec(host.rig.info)
     this.clock = new GaitClock(this.spec)
     this.trail = new Trail(this.spec.trailResetRadius)
@@ -429,7 +443,9 @@ export class WalkController {
     // 그 루프 끝에 최저선 + 한 바퀴 + 정지 거리 + 여유가 남게, walk_start 와 첫 루프 동안 사용자가 갈 거리를 빼고 출발한다.
     // 첫 루프는 자연 속도로 친다 (walk_start 끝에 v/v0 가 1 이고 천천히 내려온다)
     const floorStart =
-      MIN_STOP_RATIO * D + FLOOR_KEEP_EXTRA_M + 2 * stride + stopDistance + startDistance - u * (startSeconds + loopSeconds)
+      this.minStopRatio > 0
+        ? this.minStopRatio * D + this.floorKeep + 2 * stride + stopDistance + startDistance - u * (startSeconds + loopSeconds)
+        : -Infinity
     if (!this.walkingAway()) {
       // 막 걷기 시작해 아직 '걸어가는 중'이 아니어도 멀어지고 있으면 최저선을 지킨다
       return this.userSpeed > USER_WALK_ON_MPS ? Math.max(D + startMargin, floorStart) : D + startMargin
@@ -460,7 +476,7 @@ export class WalkController {
     if (this.bigTurn) return false
     const closer = Math.abs(stopNow - D) <= Math.abs(oneMore - D)
     if (ended === 'walk_start' && this.sinceWalking < RECENT_WALK_S && oneMore >= WALK_START_CLOSE_RATIO * D) return false
-    if (ifUserStops < MIN_STOP_RATIO * D) return true
+    if (ifUserStops < this.minStopRatio * D) return true
     // 걸어가는 중에 한 바퀴 더 가면 너무 가까우면 멈춘다. D 에 더 가까운 쪽을 견주지 않는다: 사용자가 개 걸음과 비슷하게 걸으면
     // 둘이 거의 같아 '한 바퀴 더'를 고르고, 그 사이 v/v0 1 로 걸어 사용자에게 붙는다
     if (this.walkingAway()) return ended !== 'walk_start' && oneMore < WALKING_STOP_RATIO * D && stopNow <= D + stride / 2
@@ -592,7 +608,7 @@ export class WalkController {
    */
   private followRatio() {
     const { v0, followDistance, stopDistance, stride } = this.spec
-    const floor = this.walkingAway() ? MIN_STOP_RATIO * followDistance + stride + FLOOR_KEEP_EXTRA_M : 0
+    const floor = this.minStopRatio > 0 && this.walkingAway() ? this.minStopRatio * followDistance + stride + this.floorKeep : 0
     const keep = Math.max(followDistance, floor) + stopDistance
     const wanted = this.userSpeed + (this.gap - keep) / CATCH_UP_S
     return clamp(wanted / v0, SPEED_RATIO_MIN, SPEED_RATIO_MAX)
@@ -770,7 +786,7 @@ export class WalkController {
     const radius = this.bigTurn ? spec.tightTurnRadius : spec.turnRadius
     const live = walking ? this.liveStopEstimate() : null
     const lines = [
-      `산책 ${this.phase}${this.ending ? ' · 끝내는 중' : ''}${this.lost ? ' · 추적 끊김' : ''}${this.notice ? ' · 천천히' : ''} · ${this.bouts}번째 출발 · 루프 ${walking ? clock.loop : '-'}`,
+      `산책 ${this.phase}${this.ending ? ' · 끝내는 중' : ''}${this.lost ? ' · 추적 끊김' : ''}${this.notice ? ' · 천천히' : ''} · ${this.bouts}번째 출발 · 루프 ${walking ? clock.loop : '-'} · floor ${this.minStopRatio > 0 ? this.minStopRatio.toFixed(2) : '끔'} · keep ${this.floorKeep.toFixed(2)}m`,
       `s ${spec.scale.toFixed(4)} (${spec.scaleSource === 'root' ? '루트 배율' : '모델 크기÷ref'}) · v0 ${spec.v0.toFixed(3)}m/s · r0 ${spec.r0.toFixed(3)} · extras ${spec.extrasSource}`,
       `v/v0 ${this.k.toFixed(2)}→${this.kTarget.toFixed(2)}${this.plan?.last ? ' (마지막 루프)' : ''} · timeScale ${timeScale.toFixed(3)} · 속도 ${(walking ? clock.speed(this.k) : 0).toFixed(2)}m/s`,
       `한 바퀴 ${spec.stride.toFixed(3)}m/${spec.loopSeconds.toFixed(3)}s · 출발 ${spec.startDistance.toFixed(3)}m · 정지 ${spec.stopDistance.toFixed(3)}m/${spec.stopSeconds.toFixed(2)}s`,
@@ -780,7 +796,7 @@ export class WalkController {
       `바닥 y ${this.position.y.toFixed(3)} (따라갈 층 ${this.floorTarget.toFixed(3)})`,
       live !== null ? `다음 루프 끝에 멈추면 ${live.toFixed(2)}m (D ${signed(live - D)})` : '다음 루프 끝 -',
       decision
-        ? `지난 판단 ${decision.ended} 끝: 지금 멈춤 ${decision.stopNow.toFixed(2)} (${signed(decision.stopNow - D)}) · 한 바퀴 더 ${decision.oneMore.toFixed(2)} (${signed(decision.oneMore - D)}, v/v0 ${decision.oneMoreK.toFixed(2)}) · 사용자 멈추면 한 바퀴 더 ${decision.oneMoreIfUserStops.toFixed(2)} (최저 ${(MIN_STOP_RATIO * D).toFixed(2)}) → ${decision.choice === 'stop' ? '멈춤' : decision.last ? '한 바퀴 더(마지막)' : '계속'}${decision.reason ? ` (${decision.reason})` : ''}`
+        ? `지난 판단 ${decision.ended} 끝: 지금 멈춤 ${decision.stopNow.toFixed(2)} (${signed(decision.stopNow - D)}) · 한 바퀴 더 ${decision.oneMore.toFixed(2)} (${signed(decision.oneMore - D)}, v/v0 ${decision.oneMoreK.toFixed(2)}) · 사용자 멈추면 한 바퀴 더 ${decision.oneMoreIfUserStops.toFixed(2)} (최저 ${this.minStopRatio > 0 ? (this.minStopRatio * D).toFixed(2) : '끔'}) → ${decision.choice === 'stop' ? '멈춤' : decision.last ? '한 바퀴 더(마지막)' : '계속'}${decision.reason ? ` (${decision.reason})` : ''}`
         : '지난 판단 -',
       stop
         ? `지난 정지 ${stop.gap.toFixed(2)}m (D ${signed(stop.error)}, 예상 ${stop.predicted.toFixed(2)}, 직선 ${stop.straight.toFixed(2)}) · ${stop.reason}`

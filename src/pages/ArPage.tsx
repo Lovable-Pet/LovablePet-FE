@@ -1,6 +1,6 @@
 import '@google/model-viewer'
 import type { ModelViewerElement } from '@google/model-viewer'
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { AlertCircle, Box, Camera, ChevronLeft, ChevronRight, Footprints, RotateCcw, Ruler, Smartphone, X } from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { ApiError } from '../apis/apiError'
@@ -19,6 +19,7 @@ import { VoiceCommandButton } from '../features/ar/components/VoiceCommandButton
 import { COMMANDS, DogAnimator, POSE_LABEL, type CommandId, type Pose } from '../features/ar/dogAnimator'
 import { useArPlacement, type ArPlacement } from '../features/ar/useArPlacement'
 import { useArWalk, type ArWalk } from '../features/ar/useArWalk'
+import type { WalkTuning } from '../features/ar/walk/walkController'
 import { LONG_PRESS_MS, useLongPress, type LongPressHandlers } from '../features/ar/useLongPress'
 import { PetPhoto } from '../features/pet/components/PetPhoto'
 import { usePetDetail } from '../features/pet/queries'
@@ -186,7 +187,9 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const showFloorReset = debug && inAr && placement.manual
   /** 배치 전 빨강이 10초 넘게 이어짐 → '닫았다가 다시 열어 주세요' 한 줄 더 (바닥·깊이 상태는 건드리지 않는다) */
   const stuck = useLongActive(arLocked && placement.manual && placement.phase === 'blocked')
-  const walk = useArWalk(placement.walkHost, { canStart: dogReady && pose === 'stand' && !animBusy, debug })
+  /** 개발 모드에서 ?floor=0.85·?keep=0.1 로 산책 최저선 값을 바꾼다 (다음 산책부터, 배포 파일에는 들어가지 않는다) */
+  const walkTuning = useMemo(() => (import.meta.env.DEV ? readWalkTuning(searchParams) : undefined), [searchParams])
+  const walk = useArWalk(placement.walkHost, { canStart: dogReady && pose === 'stand' && !animBusy, debug, tuning: walkTuning })
   /** 산책 중: 명령 칩·음성·다시 놓기를 숨기고 개 탭을 막는다 */
   const walking = walk.active
   /** ?debug 상자: 산책 중이면 산책 줄을 위에 */
@@ -795,4 +798,15 @@ function MessageShell({ onBack, children }: { onBack: () => void; children: Reac
       {children}
     </div>
   )
+}
+
+/** 개발용 주소 옵션: ?floor (최저선 비율, 0 이면 끔, 0–1.5) · ?keep (걷는 중 지킬 길 여유 m, 0–1). 없거나 숫자가 아니면 기본값 */
+function readWalkTuning(params: URLSearchParams): WalkTuning {
+  const read = (name: string, max: number) => {
+    const raw = params.get(name)
+    if (raw === null || raw.trim() === '') return undefined
+    const value = Number(raw)
+    return Number.isFinite(value) && value >= 0 && value <= max ? value : undefined
+  }
+  return { minStopRatio: read('floor', 1.5), floorKeepExtra: read('keep', 1) }
 }
