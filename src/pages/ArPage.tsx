@@ -179,7 +179,9 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const inAr = arStatus === 'session-started' || arStatus === 'object-placed'
   /** 개발 모드에서 주소에 ?debug 를 붙였을 때 (배포 파일에는 들어가지 않는다) */
   const debug = import.meta.env.DEV && searchParams.has('debug')
-  const placement = useArPlacement(mvRef, { debug })
+  /** 개발 모드에서 ?occlusion=1: 실제 물체가 개를 가리는 시험 (다음 AR 세션부터, 배포 파일에는 들어가지 않는다) */
+  const occlusion = import.meta.env.DEV && searchParams.get('occlusion') === '1'
+  const placement = useArPlacement(mvRef, { debug, occlusion })
   /** AR 에서 개가 바닥에 놓였는지 */
   const dogReady = inAr && placement.phase === 'placed'
   /** AR 에서 개를 놓기 전: 명령 칩·음성·개 탭·3초 누르기를 막는다 */

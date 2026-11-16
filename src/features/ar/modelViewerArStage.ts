@@ -14,6 +14,7 @@ import {
   type StageSensors,
 } from './placement/arStage'
 import type { Ray, SurfaceHit, Vec3 } from './placement/types'
+import type { StageOccluder } from './depthOcclusion'
 import type { WalkPose, WalkRig } from './walk/walkStage'
 import {
   parseWalkExtras,
@@ -102,6 +103,10 @@ interface XrCpuDepthInformation {
   height: number
   /** x·y 는 화면 좌표 0~1 (왼쪽 위 원점). 밖이면 RangeError */
   getDepthInMeters(x: number, y: number): number
+  /** 가림 시험(개발용)이 텍스처로 올린다: 깊이 버퍼, 값 → m, 정규화 뷰 좌표 → 정규화 깊이 버퍼 좌표 */
+  readonly data: ArrayBuffer
+  readonly rawValueToMeters: number
+  readonly normDepthBufferFromNormView: { matrix: Float32Array }
 }
 interface XrFrame {
   getViewerPose(space: XrSpace): XrViewerPose | null | undefined
@@ -320,15 +325,16 @@ function readSymbol(object: object, description: string): unknown {
  * 세션이 깊이를 CPU 로 주는지. enabledFeatures 가 없는 브라우저는 depthUsage 를 읽어 본다 (꺼져 있으면 예외).
  * 이 세션의 enabledFeatures 는 three 에게 depth-sensing 을 숨긴 목록이라 실제 목록(enabledFeaturesOf)을 본다
  */
-function readDepthSupport(session: XrSession): { state: SensorState; format: string | null } {
+function readDepthSupport(session: XrSession): { state: SensorState; format: string | null; dataFormat: string | null } {
   const features = enabledFeaturesOf(session)
-  if (features && !features.includes('depth-sensing')) return { state: 'off', format: null }
+  if (features && !features.includes('depth-sensing')) return { state: 'off', format: null, dataFormat: null }
   try {
     const usage = session.depthUsage
-    if (usage !== 'cpu-optimized') return { state: 'off', format: usage ?? null }
-    return { state: 'on', format: `${usage} · ${session.depthDataFormat ?? '?'}` }
+    if (usage !== 'cpu-optimized') return { state: 'off', format: usage ?? null, dataFormat: null }
+    const dataFormat = session.depthDataFormat ?? null
+    return { state: 'on', format: `${usage} · ${dataFormat ?? '?'}`, dataFormat }
   } catch {
-    return { state: 'off', format: null }
+    return { state: 'off', format: null, dataFormat: null }
   }
 }
 
@@ -392,6 +398,10 @@ export class ModelViewerArStage implements ArStage {
   private frame: XrFrame | null = null
   private readonly probeSets = new Set<ProbeSet>()
   private readonly sensors: StageSensors = { depth: 'pending', depthFormat: null, points: 'pending' }
+  /** 깊이 형식 ('luminance-alpha' · 'float32'). 가림 시험이 텍스처 형식을 고른다 */
+  private depthDataFormat: string | null = null
+  /** 가림 시험 (개발용 ?occlusion=1). 없으면 null */
+  private occluder: StageOccluder | null = null
   private ring: RingObject | null = null
   private dogPlaced = false
   /** 놓은 뒤 그려진 방향 비교 (디버그) */
@@ -468,6 +478,7 @@ export class ModelViewerArStage implements ArStage {
     const depth = readDepthSupport(session)
     this.sensors.depth = depth.state
     this.sensors.depthFormat = depth.format
+    this.depthDataFormat = depth.dataFormat
 
     // three.js 의 XR 루프(model-viewer 가 그린다)보다 나중에 등록돼 같은 프레임에서 그 뒤에 돈다.
     // 여기서 옮긴 원은 다음 프레임에 그려진다 (원은 바닥에 붙어 있어 한 프레임 늦어도 티가 안 난다)
@@ -483,6 +494,8 @@ export class ModelViewerArStage implements ArStage {
       if (!pose || !view) return
       const { x, y, z } = pose.transform.position
       this.frame = frame
+      const depthInfo = this.readDepth(frame, view)
+      this.feedOccluder(time, depthInfo)
       try {
         onFrame({
           time,
@@ -491,7 +504,7 @@ export class ModelViewerArStage implements ArStage {
           view: { viewMatrix: view.transform.inverse.matrix, projectionMatrix: view.projectionMatrix },
           centerHit: this.centerSource ? firstHit(frame, this.centerSource, space) : null,
           centerPointHit: this.pointSource ? firstHit(frame, this.pointSource, space) : null,
-          depth: this.readDepth(frame, view),
+          depth: depthInfo ? toDepthSampler(depthInfo) : null,
           sensors: this.sensors,
         })
       } finally {
@@ -665,17 +678,56 @@ export class ModelViewerArStage implements ArStage {
     if (this.pointSource) cancelQuietly(this.pointSource)
     this.pointSource = null
     for (const set of [...this.probeSets]) set.cancel()
+    this.occluder?.dispose()
+    this.occluder = null
     this.removeRing()
     this.stopFade()
     this.scene.target.visible = true
   }
 
+  /**
+   * 가림 시험 (개발용 ?occlusion=1, useArPlacement 가 DEV 에서만 만든다): 깊이만 쓰는 화면 전체 사각형을 장면에 넣고
+   * 매 프레임 CPU 깊이를 넘긴다. null 이면 뺀다
+   */
+  setOccluder(occluder: StageOccluder | null) {
+    this.occluder?.dispose()
+    this.occluder = null
+    this.sensors.occlusion = undefined
+    if (this.disposed || !occluder) return
+    this.occluder = occluder
+    this.scene.add(occluder.mesh)
+  }
+
+  /** 이번 프레임 깊이를 가림 시험에 넘긴다 (깊이 버퍼는 이 프레임 안에서만 읽힌다) */
+  private feedOccluder(time: number, info: XrCpuDepthInformation | null) {
+    const { occluder } = this
+    if (!occluder) return
+    if (info) {
+      try {
+        occluder.update({
+          time,
+          width: info.width,
+          height: info.height,
+          data: info.data,
+          rawValueToMeters: info.rawValueToMeters,
+          normDepthBufferFromNormView: info.normDepthBufferFromNormView.matrix,
+          format: this.depthDataFormat,
+        })
+      } catch (error) {
+        if (import.meta.env.DEV) console.warn('[ar] 가림 시험에 깊이를 넘기지 못해 끈다:', error)
+        this.setOccluder(null)
+        return
+      }
+    }
+    occluder.tick(time)
+    this.sensors.occlusion = occluder.status(time)
+  }
+
   /** 이번 프레임 깊이. 읽다가 예외가 나면 이 세션에서는 깊이를 끈다 */
-  private readDepth(frame: XrFrame, view: XrView): DepthSampler | null {
+  private readDepth(frame: XrFrame, view: XrView): XrCpuDepthInformation | null {
     if (this.sensors.depth !== 'on' || !frame.getDepthInformation) return null
     try {
-      const info = frame.getDepthInformation(view)
-      return info ? toDepthSampler(info) : null
+      return frame.getDepthInformation(view) ?? null
     } catch (error) {
       if (import.meta.env.DEV) console.warn('[ar] 깊이를 읽지 못해 끈다:', error)
       this.sensors.depth = 'off'
