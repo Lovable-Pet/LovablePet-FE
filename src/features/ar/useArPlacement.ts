@@ -168,6 +168,16 @@ export function useArPlacement(mvRef: RefObject<ModelViewerElement | null>, { de
         return () => controller.setPlacedFrameListener(null)
       },
       dogMoved: (position, yaw) => controller.dogMoved(position, yaw),
+      // ?debug: 발자취 점은 흰 점, 개가 겨누는 점은 진한 점 (표시 원의 디버그 점과 같은 방식)
+      showPath: (path) =>
+        controller.setPlacedMarks(
+          path
+            ? [
+                ...path.points.map((point) => ({ position: { x: point.x, y: path.y, z: point.z }, strong: false })),
+                ...(path.aim ? [{ position: { x: path.aim.x, y: path.y, z: path.aim.z }, strong: true }] : []),
+              ]
+            : [],
+        ),
     }
   }, [walk, placed])
 

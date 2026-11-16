@@ -168,6 +168,8 @@ export class PlacementController {
   private placed: { position: Vec3; yaw: number } | null = null
   /** 놓은 뒤 매 프레임 (산책) */
   private placedListener: ((frame: StageFrame, floor: PlacedFloor) => void) | null = null
+  /** 놓은 뒤 (?debug) 표시 원과 함께 찍을 점 (산책의 발자취·겨누는 점) */
+  private placedMarks: readonly RingMark[] = []
   private reported: PlacementSnapshot | null = null
   private lastDebugAt = -Infinity
   private stopped = false
@@ -202,6 +204,7 @@ export class PlacementController {
     this.forced = this.phase === 'blocked'
     // 앞쪽이 휴대폰(바닥에 투영한 점)을 향하게. 놓은 뒤에는 다시 계산하지 않아 카메라를 따라 돌지 않는다
     const yaw = this.camera ? yawToward(position, this.camera) : 0
+    this.placedMarks = []
     this.stage.setRing(this.options.onDebug ? { center: position, radius: this.ringRadius, tone: 'marker' } : null)
     this.clearChecks()
     this.stage.placeDog(position, yaw)
@@ -226,7 +229,19 @@ export class PlacementController {
   dogMoved(position: Vec3, yaw: number) {
     if (this.stopped || this.phase !== 'placed') return
     this.placed = { position: { ...position }, yaw }
-    if (this.options.onDebug) this.stage.setRing({ center: position, radius: this.ringRadius, tone: 'marker' })
+    this.drawPlacedRing()
+  }
+
+  /** ?debug: 놓은 개의 표시 원과 함께 바닥에 찍을 점 (산책의 발자취 점·겨누는 점). 빈 배열이면 지운다 */
+  setPlacedMarks(marks: readonly RingMark[]) {
+    this.placedMarks = marks
+    if (this.stopped || this.phase !== 'placed') return
+    this.drawPlacedRing()
+  }
+
+  private drawPlacedRing() {
+    if (!this.options.onDebug || !this.placed) return
+    this.stage.setRing({ center: this.placed.position, radius: this.ringRadius, tone: 'marker', marks: this.placedMarks })
   }
 
   /**
@@ -239,6 +254,7 @@ export class PlacementController {
     this.stage.setRing(null)
     this.floor.prune(this.lastTime)
     this.placedListener = null
+    this.placedMarks = []
     this.placed = null
     this.spot = null
     this.phase = 'searching'

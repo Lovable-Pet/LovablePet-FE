@@ -17,7 +17,7 @@ export interface ArWalk {
   /** 산책 끝을 눌러 멈추는 중 */
   ending: boolean
   notice: WalkNotice | null
-  /** ?debug 일 때 상태·s·v0·r0·v/v0·timeScale·거리·발자취·예상 정지·회전. 아니면 null */
+  /** ?debug 일 때 상태·s·v0·r0·v/v0·timeScale·거리·발자취(벗어난 거리)·예상 정지·회전. 아니면 null. 발자취 점·겨누는 점은 바닥에 찍는다 */
   debug: WalkDebug | null
   start: () => void
   /** 걷는 중이면 다음 루프 끝에서 멈춘 뒤 서기로, 서 있으면 바로 끝낸다 */

@@ -63,7 +63,10 @@ export interface RingPose {
   center: Vec3
   radius: number
   tone: RingTone
-  /** 디버그: 원 위에 찍는 작은 점들 (원 안쪽 깊이 검사에서 장애물로 잡힌 표본). 없으면 점을 지운다 */
+  /**
+   * 디버그: 바닥에 찍는 작은 점들. 놓기 전엔 원 안쪽 깊이 검사에서 장애물로 잡힌 표본,
+   * 놓은 뒤 산책 중엔 발자취 점(흰 점)과 개가 겨누는 점(진한 점). 없으면 점을 지운다
+   */
   marks?: readonly RingMark[]
 }
 

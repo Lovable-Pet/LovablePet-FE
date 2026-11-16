@@ -74,8 +74,12 @@ export interface WalkSpec extends WalkModelInfo {
   startMargin: number
   /** 가장 좁게 도는 반지름 (m). 회전 속도 상한 = 속도 / 이 값 (서 있으면 돌지 않는다) */
   turnRadius: number
-  /** 발자취 위에서 이만큼 앞의 점을 보고 방향을 잡는다 (m) */
+  /** 크게 돌 때(방향 차이 90° 넘게) 가장 좁게 도는 반지름 (m). 천천히 걸으며 제자리에 가깝게 돈다 */
+  tightTurnRadius: number
+  /** 발자취를 따라 이만큼 앞의 점을 겨눈다 (m, pure pursuit) */
   lookAhead: number
+  /** 사용자가 개 둘레 이 반경(m) 안을 지나가면 발자취를 개 자리에서 다시 시작한다 */
+  trailResetRadius: number
 }
 
 /** D = max(이 값, 몸길이 × FOLLOW_BODY_LENGTHS) */
@@ -85,9 +89,13 @@ export const FOLLOW_BODY_LENGTHS = 1.5
 export const START_MARGIN_MIN_M = 0.3
 /** 가장 좁게 도는 반지름 = 몸길이 × 이 값 */
 export const TURN_RADIUS_BODY_LENGTHS = 0.45
-/** 방향을 잡을 앞 점 = max(LOOK_AHEAD_MIN_M, 몸길이 × LOOK_AHEAD_BODY_LENGTHS) */
+/** 크게 돌 때 가장 좁게 도는 반지름 = 몸길이 × 이 값 */
+export const TIGHT_TURN_RADIUS_BODY_LENGTHS = 0.25
+/** 겨누는 점 = 발자취를 따라 max(LOOK_AHEAD_MIN_M, 몸길이 × LOOK_AHEAD_BODY_LENGTHS) 앞 */
 export const LOOK_AHEAD_MIN_M = 0.3
 export const LOOK_AHEAD_BODY_LENGTHS = 0.5
+/** 발자취를 다시 시작하는 개 둘레 = max(TRAIL_RESET_MIN_M, 몸길이 / 2) */
+export const TRAIL_RESET_MIN_M = 0.4
 
 const positive = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0
 
@@ -128,6 +136,8 @@ export function walkSpec(info: WalkModelInfo): WalkSpec {
     followDistance: Math.max(FOLLOW_MIN_M, FOLLOW_BODY_LENGTHS * bodyLength),
     startMargin: Math.max(START_MARGIN_MIN_M, (startDistance + stopDistance) / 2),
     turnRadius: TURN_RADIUS_BODY_LENGTHS * bodyLength,
+    tightTurnRadius: TIGHT_TURN_RADIUS_BODY_LENGTHS * bodyLength,
     lookAhead: Math.max(LOOK_AHEAD_MIN_M, LOOK_AHEAD_BODY_LENGTHS * bodyLength),
+    trailResetRadius: Math.max(TRAIL_RESET_MIN_M, bodyLength / 2),
   }
 }
