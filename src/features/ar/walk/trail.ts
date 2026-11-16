@@ -73,9 +73,14 @@ export class Trail {
     this.off = 0
   }
 
-  /** 사용자 위치를 받는다. 마지막 점에서 TRAIL_SPACING_M 넘게 멀어졌으면 점을 남긴다 */
+  /**
+   * 사용자 위치를 받는다. 마지막 점에서 TRAIL_SPACING_M 넘게 멀어졌고 멀어지는 중이면 점을 남긴다.
+   * 마지막 점 쪽으로 다가오는 중에는 남기지 않는다: 남기면 다음 프레임들에 되짚기(retrace)로 다시 거둬서 남은 길이
+   * 톱니처럼 늘었다 줄고, 거두는 프레임은 사용자 속도에서 빠져 다가오는데도 멀어지는 것으로 잰다
+   */
   record(user: Vec2, dog: Vec2) {
     this.cut = false
+    const previous = this.user
     this.user = { ...user }
     if (dist(dog, user) < this.resetRadius) {
       // 개 둘레 안: 길을 개 자리에서 다시 시작한다. 개 앞(사용자가 오던 쪽)에 남은 점을 버리고, 둘레 안에서는 점을 남기지 않는다
@@ -85,7 +90,9 @@ export class Trail {
     }
     if (!this.points.length) this.restart(dog)
     this.retrace(user)
-    if (dist(this.points[this.points.length - 1], user) < TRAIL_SPACING_M) return
+    const last = this.points[this.points.length - 1]
+    if (dist(last, user) < TRAIL_SPACING_M) return
+    if (previous && dist(last, user) <= dist(last, previous)) return
     this.cutLoop(user)
     if (dist(this.points[this.points.length - 1], user) >= TRAIL_SPACING_M) this.points.push({ ...user })
     if (this.points.length > TRAIL_MAX_POINTS) {
