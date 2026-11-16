@@ -173,6 +173,12 @@ export const WALKING_START_MARGIN_M = 0.1
  */
 export const WALKING_START_LEAD_RATIO = 0.4
 /**
+ * 사용자가 걸어가는 중이면 개가 서 있는 거리(선 뒤 가장 가까웠던 남은 길) + 이만큼(m) 넘어도 출발한다 (D × WALKING_START_MIN_RATIO 아래로는
+ * 안 내린다). 천천히 걷다 멈춘 개는 D 보다 가까이(1m 쯤) 서는데, D 근처까지 기다리면 사용자가 0.5m 넘게 걸어간 뒤에야 따라온다
+ */
+export const WALKING_START_ABOVE_STAND_M = 0.3
+export const WALKING_START_MIN_RATIO = 0.8
+/**
  * 사용자가 걸어가는 중이면 한 바퀴 더 가면 D × 이 값보다 가까워질 때만 멈춘다 (아니면 v/v0 를 낮춰 계속 걷는다).
  * 사용자가 개의 가장 느린 걸음(v/v0 0.6)보다 천천히 걸으면 개는 걷다 서기를 되풀이하는데, 이 폭만큼 서 있다
  */
@@ -203,7 +209,8 @@ const flat = (point: Vec3): Vec2 => ({ x: point.x, z: point.z })
  * AR 산책: 개가 사용자를 따라 걷는다. 렌더러는 WalkHost·WalkRig 로만 만진다.
  * - 휴대폰을 바닥에 투영한 점을 18cm 마다 발자취로 남기고 (Trail), 개는 발자취를 따라 lookAhead 앞 점을 겨누며 걷는다 (pure pursuit)
  * - 서 있다가 출발 (walk_start, 서기 루프 지금 프레임에서 300ms 크로스페이드): 사용자가 서 있으면 남은 길 > D + 여유,
- *   걸어가는 중이면 (멀어지는 속도가 이어짐) D + 0.1m 에서 walk_start 동안 사용자가 개보다 더 갈 거리를 뺀 만큼만 넘어도.
+ *   걸어가는 중이면 (멀어지는 속도가 이어짐) 개가 서 있는 거리 + 0.3m (0.8 D 아래로는 안 내림) 와,
+ *   D + 0.1m 에서 walk_start 동안 사용자가 개보다 더 갈 거리를 뺀 것 중 짧은 쪽만 넘어도.
  *   거리에 맞춰 멈춘 뒤에는 0.8초 넘게 선 뒤에 출발한다
  * - walk_start·walk 끝마다 '지금 멈춤'과 '한 바퀴 더' 중 D 에 더 가깝게 서는 쪽을 고른다.
  *   한 바퀴는 속도와 상관없이 stride_m·s 를 가서, 사용자가 서 있으면 v/v0 는 멈추는 자리를 바꾸지 못한다 (시간만 바뀐다).
@@ -251,6 +258,8 @@ export class WalkController {
   private userWalking = false
   /** 거리에 맞춰 멈춘 뒤 서 있는 시간 (s). 처음과 다른 까닭으로 멈춘 뒤에는 Infinity */
   private standingFor = Infinity
+  /** 서 있는 동안 가장 짧았던 남은 길 (m). 걷는 중이면 Infinity */
+  private standGap = Infinity
   /** 사용자가 걸어가는 중이 아니게 된 뒤 지난 시간 (s). 걸어가는 중이면 0 */
   private sinceWalking = Infinity
   private lastGap: number | null = null
@@ -338,6 +347,7 @@ export class WalkController {
         return
       }
       this.standingFor += dt
+      this.standGap = Math.min(this.standGap, this.gap)
       if (!this.lost && this.standingFor >= MIN_STAND_S && this.gap > this.startThreshold()) this.startBout()
       else if (floorMoved) this.host.rig.moveDog(this.position, this.yaw)
     }
@@ -392,13 +402,21 @@ export class WalkController {
 
   /**
    * 서 있다가 출발하는 남은 길. 사용자가 서 있으면 D + 여유,
-   * 걸어가는 중이면 D + WALKING_START_MARGIN_M − (walk_start 동안 사용자가 개보다 더 갈 거리, D × WALKING_START_LEAD_RATIO 까지)
+   * 걸어가는 중이면 둘 중 짧은 쪽:
+   * - 개가 서 있는 거리 + WALKING_START_ABOVE_STAND_M (D × WALKING_START_MIN_RATIO 아래로는 안 내림.
+   *   가장 짧은 산책 동안 개가 사용자보다 이보다 더 가면 그만큼: 다음에 지금보다 가까이 서지 않게)
+   * - D + WALKING_START_MARGIN_M − (walk_start 동안 사용자가 개보다 더 갈 거리, D × WALKING_START_LEAD_RATIO 까지)
    */
   private startThreshold() {
     const { followDistance: D, startMargin, startSeconds, startDistance } = this.spec
     if (!this.walkingAway()) return D + startMargin
     const lead = clamp(this.userSpeed * startSeconds - startDistance, 0, WALKING_START_LEAD_RATIO * D)
-    return D + WALKING_START_MARGIN_M - lead
+    // 가장 짧은 산책(walk_start + 한 바퀴 + walk_stop) 동안 개가 사용자보다 더 가는 거리가 WALKING_START_ABOVE_STAND_M 보다 크면
+    // 그만큼 더 기다린다: 개의 가장 느린 걸음보다 천천히 걸으면 (0.2m/s) 출발할 때마다 지난번보다 가까이 선다
+    const { stride, stopDistance, loopSeconds, stopSeconds } = this.spec
+    const gain = startDistance + stride + stopDistance - Math.max(0, this.userSpeed) * (startSeconds + loopSeconds + stopSeconds)
+    const fromStand = Math.max(WALKING_START_MIN_RATIO * D, this.standGap + Math.max(WALKING_START_ABOVE_STAND_M, gain))
+    return Math.min(D + WALKING_START_MARGIN_M - lead, fromStand)
   }
 
   /**
@@ -417,7 +435,9 @@ export class WalkController {
     if (this.bigTurn) return false
     const closer = Math.abs(stopNow - D) <= Math.abs(oneMore - D)
     if (ended === 'walk_start' && this.sinceWalking < RECENT_WALK_S && oneMore >= WALK_START_CLOSE_RATIO * D) return false
-    if (this.walkingAway()) return ended !== 'walk_start' && oneMore < WALKING_STOP_RATIO * D && closer
+    // 걸어가는 중에 한 바퀴 더 가면 너무 가까우면 멈춘다. D 에 더 가까운 쪽을 견주지 않는다: 사용자가 개 걸음과 비슷하게 걸으면
+    // 둘이 거의 같아 '한 바퀴 더'를 고르고, 그 사이 v/v0 1 로 걸어 사용자에게 붙는다
+    if (this.walkingAway()) return ended !== 'walk_start' && oneMore < WALKING_STOP_RATIO * D && stopNow <= D + stride / 2
     return stopNow <= D + stride / 2 && closer
   }
 
@@ -447,6 +467,7 @@ export class WalkController {
     this.bigTurn = error !== null && Math.abs(error) > BIG_TURN_DEG * RAD
     this.phase = 'start'
     this.bouts++
+    this.standGap = Infinity
   }
 
   /** 제자리 회전 클립을 틀기 시작했으면 true. 다 돌면 개 방향을 돌리고 서기로 (다음 프레임에 walk_start) */
@@ -674,7 +695,9 @@ export class WalkController {
   private liveOneMoreEstimate() {
     const { spec, clock } = this
     const left = (spec.durations.walk - clock.time) / clock.rate(this.k)
-    const more = spec.loopSeconds / this.k
+    // 루프 끝 판단(decide)과 같은 v/v0 로 한 바퀴 더를 친다 (다르면 여기서는 멈출 것 같아 v/v0 를 1 로 올리고, 판단에서는 한 바퀴 더를 고른다)
+    const ahead = clipDistance(spec, 'walk', clock.time, spec.durations.walk)
+    const more = spec.loopSeconds / this.lastLoopRatio(this.gap - ahead)
     return this.liveStopEstimate() - spec.stride + this.userTravel(left + more + spec.stopSeconds) - this.userTravel(left + spec.stopSeconds)
   }
 
