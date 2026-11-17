@@ -17,7 +17,7 @@ import { ArTouchLayer } from '../features/ar/components/ArTouchLayer'
 import { HoldRing } from '../features/ar/components/HoldRing'
 import { VoiceCommandButton } from '../features/ar/components/VoiceCommandButton'
 import { COMMANDS, DogAnimator, POSE_LABEL, type CommandId, type Pose } from '../features/ar/dogAnimator'
-import { useArPlacement, type ArPlacement } from '../features/ar/useArPlacement'
+import { useArPlacement, type ArOcclusionOptions, type ArPlacement } from '../features/ar/useArPlacement'
 import { useArWalk, type ArWalk } from '../features/ar/useArWalk'
 import type { WalkTuning } from '../features/ar/walk/walkController'
 import { LONG_PRESS_MS, useLongPress, type LongPressHandlers } from '../features/ar/useLongPress'
@@ -179,8 +179,11 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const inAr = arStatus === 'session-started' || arStatus === 'object-placed'
   /** 개발 모드에서 주소에 ?debug 를 붙였을 때 (배포 파일에는 들어가지 않는다) */
   const debug = import.meta.env.DEV && searchParams.has('debug')
-  /** 개발 모드에서 ?occlusion=1: 실제 물체가 개를 가리는 시험 (다음 AR 세션부터, 배포 파일에는 들어가지 않는다) */
-  const occlusion = import.meta.env.DEV && searchParams.get('occlusion') === '1'
+  /**
+   * 개발 모드에서 실제 물체가 개를 가리는 시험: ?occlusion=1 (바닥 제외·bilinear·섞기) · ?occlusion=raw (d6b8a0e 방식, 견주기용) ·
+   * ?ofloor=0.04 (바닥 제외 문턱 m, 0 이면 끔). 다음 AR 세션부터, 배포 파일에는 들어가지 않는다
+   */
+  const occlusion = useMemo(() => (import.meta.env.DEV ? readOcclusion(searchParams) : null), [searchParams])
   const placement = useArPlacement(mvRef, { debug, occlusion })
   /** AR 에서 개가 바닥에 놓였는지 */
   const dogReady = inAr && placement.phase === 'placed'
@@ -816,4 +819,16 @@ function readWalkTuning(params: URLSearchParams): WalkTuning {
     return Number.isFinite(value) && value >= min && value <= max ? value : undefined
   }
   return { minStopRatio: read('floor', 1.5), floorKeepExtra: read('keep', 1), tightTurnRatio: read('tight', 1, 0.05) }
+}
+
+/** 개발용 가림 시험: ?occlusion=1 · raw 가 아니면 끔. ?ofloor 는 0–0.5 (m), 없거나 숫자가 아니면 기본값 */
+function readOcclusion(params: URLSearchParams): ArOcclusionOptions | null {
+  const mode = params.get('occlusion')
+  if (mode !== '1' && mode !== 'raw') return null
+  const raw = params.get('ofloor')
+  const value = raw === null || raw.trim() === '' ? NaN : Number(raw)
+  return {
+    mode: mode === 'raw' ? 'raw' : 'smooth',
+    floorIgnore: Number.isFinite(value) && value >= 0 && value <= 0.5 ? value : undefined,
+  }
 }

@@ -10,6 +10,10 @@ import {
 } from './placement/placementController'
 import type { WalkHost, WalkRig } from './walk/walkStage'
 import { requestDepthWithArSessions } from './xrDepthRequest'
+import type { OccluderOptions } from './depthOcclusion'
+
+/** 개발용 가림 시험 설정 (타입만 가져와 배포 파일에는 depthOcclusion 이 들어가지 않는다) */
+export type ArOcclusionOptions = OccluderOptions
 
 export interface ArPlacement {
   /** off: AR 밖 (화면 안 3D, 아이폰 Quick Look 포함) */
@@ -61,11 +65,14 @@ export function useArPlacement(
   mvRef: RefObject<ModelViewerElement | null>,
   {
     debug,
-    occlusion = false,
+    occlusion = null,
   }: {
     debug: boolean
-    /** 개발용 ?occlusion=1: 실제 물체가 개를 가리는 시험 (깊이만 쓰는 사각형). 다음 세션부터. 배포 파일에서는 늘 꺼진다 */
-    occlusion?: boolean
+    /**
+     * 개발용 ?occlusion=1·raw: 실제 물체가 개를 가리는 시험 (깊이만 쓰는 사각형). null 이면 끔. 다음 세션부터.
+     * 배포 파일에서는 늘 꺼진다
+     */
+    occlusion?: ArOcclusionOptions | null
   },
 ): ArPlacement {
   const [state, setState] = useState<PlacementState>(OFF)
@@ -131,8 +138,9 @@ export function useArPlacement(
         controller.start()
         // 가림 시험은 개발 모드에서만 불러온다 (배포 빌드에서는 이 분기와 모듈이 빠진다)
         if (import.meta.env.DEV && occlusionRef.current) {
+          const options = occlusionRef.current
           void import('./depthOcclusion').then(({ DepthOccluder }) => {
-            if (controllerRef.current === controller) stage.setOccluder(new DepthOccluder())
+            if (controllerRef.current === controller) stage.setOccluder(new DepthOccluder(options))
           })
         }
         // 걷기 클립·extras.walk 를 읽는다 (GLB 를 다시 받아야 하면 늦게 온다)

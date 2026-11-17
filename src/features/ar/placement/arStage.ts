@@ -53,8 +53,8 @@ export interface StageSensors {
   depthFormat: string | null
   /** 특징점 hit-test (entityTypes: ['point']) */
   points: SensorState
-  /** 가림 시험 상태 (개발용 ?occlusion=1 일 때만, 디버그 한 줄) */
-  occlusion?: string
+  /** 가림 시험 상태 (개발용 ?occlusion=1·raw 일 때만, 디버그 줄) */
+  occlusion?: readonly string[]
 }
 
 /** ok: 놓을 수 있음 · blocked: 놓을 수 없음 · marker: 디버그용, 놓은 자리 표시 */

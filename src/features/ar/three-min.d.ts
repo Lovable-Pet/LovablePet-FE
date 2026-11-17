@@ -9,6 +9,12 @@ declare module 'three' {
   export const RedFormat: number
   export const RGFormat: number
 
+  export class Matrix4 {
+    readonly elements: number[]
+    fromArray(array: ArrayLike<number>, offset?: number): this
+    invert(): this
+  }
+
   export class Object3D {
     visible: boolean
     renderOrder: number

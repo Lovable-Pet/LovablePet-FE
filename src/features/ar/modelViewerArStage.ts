@@ -400,9 +400,11 @@ export class ModelViewerArStage implements ArStage {
   private readonly sensors: StageSensors = { depth: 'pending', depthFormat: null, points: 'pending' }
   /** 깊이 형식 ('luminance-alpha' · 'float32'). 가림 시험이 텍스처 형식을 고른다 */
   private depthDataFormat: string | null = null
-  /** 가림 시험 (개발용 ?occlusion=1). 없으면 null */
+  /** 가림 시험 (개발용 ?occlusion=1·raw). 없으면 null */
   private occluder: StageOccluder | null = null
   private ring: RingObject | null = null
+  /** 보이는 원의 면 높이 (놓기 전 가림 시험의 바닥). 원이 없으면 null */
+  private ringFloorY: number | null = null
   private dogPlaced = false
   /** 놓은 뒤 그려진 방향 비교 (디버그) */
   private yawCheck = { frames: 0, mismatchFrames: 0, worst: 0 }
@@ -495,7 +497,7 @@ export class ModelViewerArStage implements ArStage {
       const { x, y, z } = pose.transform.position
       this.frame = frame
       const depthInfo = this.readDepth(frame, view)
-      this.feedOccluder(time, depthInfo)
+      this.feedOccluder(time, depthInfo, view)
       try {
         onFrame({
           time,
@@ -518,8 +520,10 @@ export class ModelViewerArStage implements ArStage {
     if (this.disposed) return
     if (!pose) {
       if (this.ring) this.ring.group.visible = false
+      this.ringFloorY = null
       return
     }
+    this.ringFloorY = pose.center.y
     const ring = this.ensureRing(pose.radius)
     ring.group.position.set(pose.center.x, pose.center.y - RING_SINK_M, pose.center.z)
     if (ring.tone !== pose.tone) {
@@ -686,7 +690,7 @@ export class ModelViewerArStage implements ArStage {
   }
 
   /**
-   * 가림 시험 (개발용 ?occlusion=1, useArPlacement 가 DEV 에서만 만든다): 깊이만 쓰는 화면 전체 사각형을 장면에 넣고
+   * 가림 시험 (개발용 ?occlusion=1·raw, useArPlacement 가 DEV 에서만 만든다): 깊이만 쓰는 화면 전체 사각형을 장면에 넣고
    * 매 프레임 CPU 깊이를 넘긴다. null 이면 뺀다
    */
   setOccluder(occluder: StageOccluder | null) {
@@ -698,8 +702,11 @@ export class ModelViewerArStage implements ArStage {
     this.scene.add(occluder.mesh)
   }
 
-  /** 이번 프레임 깊이를 가림 시험에 넘긴다 (깊이 버퍼는 이 프레임 안에서만 읽힌다) */
-  private feedOccluder(time: number, info: XrCpuDepthInformation | null) {
+  /**
+   * 이번 프레임 깊이를 가림 시험에 넘긴다 (깊이 버퍼는 이 프레임 안에서만 읽힌다).
+   * 깊이를 잰 카메라(이 뷰의 포즈·투영)와 지금 바닥 높이도 같이: 바닥 근처 실제 점은 가리지 않는다
+   */
+  private feedOccluder(time: number, info: XrCpuDepthInformation | null, view: XrView) {
     const { occluder } = this
     if (!occluder) return
     if (info) {
@@ -712,6 +719,9 @@ export class ModelViewerArStage implements ArStage {
           rawValueToMeters: info.rawValueToMeters,
           normDepthBufferFromNormView: info.normDepthBufferFromNormView.matrix,
           format: this.depthDataFormat,
+          cameraWorld: view.transform.matrix,
+          projectionMatrix: view.projectionMatrix,
+          floorY: this.occluderFloorY(),
         })
       } catch (error) {
         if (import.meta.env.DEV) console.warn('[ar] 가림 시험에 깊이를 넘기지 못해 끈다:', error)
@@ -721,6 +731,12 @@ export class ModelViewerArStage implements ArStage {
     }
     occluder.tick(time)
     this.sensors.occlusion = occluder.status(time)
+  }
+
+  /** 가림 시험이 빼는 바닥 높이: 놓은 개의 발(pivot), 놓기 전엔 보이는 원의 면. 모르면 null */
+  private occluderFloorY(): number | null {
+    if (this.dogPlaced) return this.scene.pivot.position.y
+    return this.ringFloorY
   }
 
   /** 이번 프레임 깊이. 읽다가 예외가 나면 이 세션에서는 깊이를 끈다 */
@@ -819,6 +835,7 @@ export class ModelViewerArStage implements ArStage {
 
   private removeRing() {
     const ring = this.ring
+    this.ringFloorY = null
     if (!ring) return
     ring.group.removeFromParent()
     for (const geometry of ring.geometries) geometry.dispose()
