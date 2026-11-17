@@ -5,11 +5,11 @@ import { newTurnState, turnStep } from './steering'
 import { Trail, type Vec2 } from './trail'
 import { UserLevel, type LevelEvent } from './userLevel'
 import type { FloorLevel, WalkHost } from './walkStage'
-import { walkSpec, type WalkClip, type WalkSpec } from './walkSpec'
+import { pickTurnClip, walkSpec, type TurnClipSpec, type WalkClip, type WalkSpec } from './walkSpec'
 
 /**
  * standing: 서 있음 (model-viewer 가 서기 루프를 돌린다) · start: walk_start · walk: walk 루프 · stop: walk_stop ·
- * turn: 출발 전 제자리 회전 클립 (나중 자리, 지금은 어댑터에 클립이 없어 오지 않는다)
+ * turn: 출발 전 제자리 회전 클립 (모델에 turn_* 클립과 extras.turn 이 있을 때만)
  */
 export type WalkPhase = 'standing' | 'turn' | 'start' | 'walk' | 'stop'
 
@@ -90,6 +90,8 @@ export interface WalkDebug {
     /** 개 중심이 발자취에서 벗어난 거리 (m): 지금, 산책 모드 동안 최대 */
     offTrail: number
     maxOffTrail: number
+    /** 제자리 회전: 지금 도는 중이거나 마지막으로 돈 것. progress 0~1, need 필요했던 각 (rad). 없으면 null */
+    turn: { clip: string; progress: number; need: number; speed: number; active: boolean; count: number } | null
     /** 사용자 층: state 0 같은 층 · ±1 위·아래, offset 카메라 높이 − 기준 (m), rising 경계 후보를 둠, edge 경계까지 남은 길 (m, 같은 층이면 null) */
     level: { state: number; offset: number; rising: boolean; edge: number | null }
     decisions: readonly WalkDecision[]
@@ -105,7 +107,7 @@ export interface WalkControllerOptions {
   onDebug?(debug: WalkDebug): void
   /** 디버그 글 간격 (ms). 가짜 스테이지는 0 */
   debugIntervalMs?: number
-  /** 개발용 (주소 ?floor·?keep·?tight): 값을 바꿔 폰에서 견준다. 없으면 MIN_STOP_RATIO·FLOOR_KEEP_EXTRA_M·TIGHT_TURN_RADIUS_BODY_LENGTHS */
+  /** 개발용 (주소 ?floor·?keep·?tight·?turnspeed): 값을 바꿔 폰에서 견준다. 없으면 MIN_STOP_RATIO·FLOOR_KEEP_EXTRA_M·TIGHT_TURN_RADIUS_BODY_LENGTHS·1 */
   tuning?: WalkTuning
 }
 
@@ -116,6 +118,8 @@ export interface WalkTuning {
   floorKeepExtra?: number
   /** 크게 돌 때 가장 좁게 도는 반지름 (몸길이 배, TIGHT_TURN_RADIUS_BODY_LENGTHS 대신). 좁히면 발이 옆으로 더 미끄러진다 */
   tightTurnRatio?: number
+  /** 제자리 회전 클립 재생 배율에 곱한다 (자연 배율 1/√s × 이 값). 기본 1 */
+  turnSpeed?: number
 }
 
 /** v/v0 범위 (재생 배율과 이동 속도에 같이 곱한다) */
@@ -226,6 +230,14 @@ export const FLOOR_FOLLOW_RANGE_M = 0.2
  */
 export const LEVEL_EDGE_MARGIN_M = 0.3
 
+/** 제자리 회전 하나: 클립, 클립 시간, 필요했던 각 (rad), 돌기 전 yaw */
+interface TurnPlay {
+  spec: TurnClipSpec
+  time: number
+  need: number
+  yaw0: number
+}
+
 const DEFAULT_DEBUG_INTERVAL_MS = 200
 /** 디버그·가짜 스테이지용 기록 개수 */
 const HISTORY = 50
@@ -251,6 +263,9 @@ const flat = (point: Vec3): Vec2 => ({ x: point.x, z: point.z })
  * - 사용자가 3m 넘게 앞서가면 '천천히 걸어 주세요' · 추적이 끊기거나 산책 끝을 누르면 다음 루프 끝에서 멈춘다
  * - 사용자가 턱·계단으로 다른 층에 서면 (카메라 높이, userLevel.ts) 개는 경계 앞 루프 끝에서 멈추고 '여기는 따라갈 수 없어요'.
  *   같은 층으로 돌아오면 다시 따라간다
+ * - 출발할 때 방향 차이가 90° 를 넘고 모델에 제자리 회전 클립이 있으면 walk_start 전에 그 클립을 튼다 (|각| ≤ 135° 면 같은 쪽 90°,
+ *   넘으면 180°). 끝나는 프레임에 개를 end_offset 만큼 옮기고 yaw 를 돌려 서기 첫 프레임으로 바꾼 뒤 다시 판단한다.
+ *   도는 중에는 산책 끝·추적 끊김·사용자 움직임과 상관없이 끝까지 돈다. 남는 각은 걸으며 맞춘다
  */
 export class WalkController {
   readonly spec: WalkSpec
@@ -262,6 +277,12 @@ export class WalkController {
   private readonly level = new UserLevel()
   private turn = newTurnState()
   private bigTurn = false
+  /** 지금 도는 제자리 회전 · 마지막으로 돈 것 (디버그) */
+  private turnPlay: TurnPlay | null = null
+  private lastTurn: TurnPlay | null = null
+  private turnCount = 0
+  /** 제자리 회전 재생 배율 = r0 × turnSpeed */
+  private readonly turnSpeed: number
   /** 겨누는 점 (발자취를 따라 lookAhead 앞) */
   private aim: Vec2 | null = null
   private maxOffTrail = 0
@@ -320,6 +341,8 @@ export class WalkController {
     this.options = options
     this.minStopRatio = Math.max(0, options.tuning?.minStopRatio ?? MIN_STOP_RATIO)
     this.floorKeep = Math.max(0, options.tuning?.floorKeepExtra ?? FLOOR_KEEP_EXTRA_M)
+    const turnSpeed = options.tuning?.turnSpeed
+    this.turnSpeed = turnSpeed && turnSpeed > 0 ? turnSpeed : 1
     const spec = walkSpec(host.rig.info)
     const tight = options.tuning?.tightTurnRatio
     this.spec = tight && tight > 0 ? { ...spec, tightTurnRadius: tight * spec.bodyLength } : spec
@@ -399,6 +422,7 @@ export class WalkController {
       else if (floorMoved) this.host.rig.moveDog(this.position, this.yaw)
     }
     if (this.phase === 'start' || this.phase === 'walk' || this.phase === 'stop') this.walkFrame(frame, dt)
+    else if (this.phase === 'turn') this.turnFrame(dt, floorMoved)
     else this.aimError()
     this.lastMoved = this.movedThisFrame
     if (this.phase !== 'standing' && this.phase !== 'turn') {
@@ -530,8 +554,8 @@ export class WalkController {
 
   private startBout() {
     const error = this.aimError()
-    // 나중 자리: 제자리 회전 클립이 있으면 크게 돌아야 할 때 walk_start 전에 튼다
-    if (error !== null && Math.abs(error) > BIG_TURN_DEG * RAD && this.turnInPlace(error)) return
+    // 크게 돌아야 하면 제자리 회전 클립이 있을 때 walk_start 전에 튼다
+    if (error !== null && Math.abs(error) > BIG_TURN_DEG * RAD && this.startTurn(error)) return
     this.host.rig.takeOver()
     this.clock.restart()
     this.k = 1
@@ -545,21 +569,58 @@ export class WalkController {
     this.standGap = Infinity
   }
 
-  /** 제자리 회전 클립을 틀기 시작했으면 true. 다 돌면 개 방향을 돌리고 서기로 (다음 프레임에 walk_start) */
-  private turnInPlace(angle: number) {
-    const { rig } = this.host
-    if (!rig.turnInPlace) return false
-    const started = rig.turnInPlace(angle, (turned) => {
-      if (this.finished || this.phase !== 'turn') return
-      this.yaw = wrapAngle(this.yaw + turned)
-      rig.moveDog(this.position, this.yaw)
-      this.host.dogMoved(this.position, this.yaw)
-      this.phase = 'standing'
-      if (this.ending) this.finish()
-      else this.report()
-    })
-    if (started) this.phase = 'turn'
-    return started
+  /** 맞는 제자리 회전 클립이 있으면 틀기 시작하고 true (서기 루프 지금 프레임에서 walk_start 처럼 섞어 들어간다) */
+  private startTurn(need: number) {
+    const spec = pickTurnClip(this.spec.turns ?? [], need)
+    if (!spec) return false
+    this.host.rig.takeOver()
+    this.turnPlay = { spec, time: 0, need, yaw0: this.yaw }
+    this.lastTurn = this.turnPlay
+    this.turnCount++
+    this.standingFade = 0
+    this.yawRate = 0
+    this.phase = 'turn'
+    return true
+  }
+
+  /**
+   * 제자리 회전 한 프레임. 끝나는 프레임에서 크로스페이드 없이: 위치 += R_y(돌기 전 yaw)·end_offset·s, yaw += angle,
+   * 서기 첫 프레임으로 (release). 그 뒤는 서 있을 때처럼 다음 프레임에 다시 판단한다 (산책 끝·추적 끊김·사용자 위치)
+   */
+  private turnFrame(dt: number, floorMoved: boolean) {
+    const play = this.turnPlay
+    if (!play) return
+    this.aimError()
+    this.yawRate = 0
+    play.time += dt * this.spec.r0 * this.turnSpeed
+    this.standingFade += dt
+    if (play.time < play.spec.duration) {
+      // 바닥 층을 따라가는 높이만 바꾼다 (돌기와 옮기기는 클립이 한다)
+      if (floorMoved) this.host.rig.moveDog(this.position, this.yaw)
+      this.host.rig.show({
+        clip: play.spec.clip,
+        time: play.time,
+        standingWeight: Math.max(0, 1 - this.standingFade / STANDING_FADE_S),
+      })
+      return
+    }
+    const { scale } = this.spec
+    const [ox, oz] = play.spec.offset
+    const cos = Math.cos(play.yaw0)
+    const sin = Math.sin(play.yaw0)
+    this.position.x += (ox * cos + oz * sin) * scale
+    this.position.z += (-ox * sin + oz * cos) * scale
+    this.yaw = wrapAngle(play.yaw0 + play.spec.angle)
+    play.time = play.spec.duration
+    this.turnPlay = null
+    this.host.rig.moveDog(this.position, this.yaw)
+    this.host.dogMoved(this.position, this.yaw)
+    this.host.rig.release()
+    this.phase = 'standing'
+    // 출발하려다 돈 것이라 서 있는 시간을 기다리지 않는다
+    this.standingFor = Infinity
+    this.standGap = Infinity
+    if (this.ending) this.finish()
   }
 
   /**
@@ -830,6 +891,7 @@ export class WalkController {
       stop
         ? `지난 정지 ${stop.gap.toFixed(2)}m (D ${signed(stop.error)}, 예상 ${stop.predicted.toFixed(2)}, 직선 ${stop.straight.toFixed(2)}) · ${stop.reason}`
         : '지난 정지 -',
+      describeTurn(this.turnPlay ?? this.lastTurn, !!this.turnPlay, this.turnCount, this.turnSpeed, spec.turns ?? []),
       `회전 ${toDeg(this.yawRate).toFixed(0)}°/s (상한 ${limit.toFixed(0)}, 반지름 ${radius.toFixed(2)}m${this.bigTurn ? ' · 크게 돌기' : ''}) · 최대 ${toDeg(this.maxYawRate).toFixed(0)}°/s · 방향 차이 ${toDeg(this.yawError).toFixed(0)}°`,
     ]
     onDebug({
@@ -852,12 +914,33 @@ export class WalkController {
         aim: this.aim,
         offTrail: this.trail.offset,
         maxOffTrail: this.maxOffTrail,
+        turn: (() => {
+          const play = this.turnPlay ?? this.lastTurn
+          return play
+            ? {
+                clip: play.spec.clip,
+                progress: play.time / play.spec.duration,
+                need: play.need,
+                speed: this.turnSpeed,
+                active: !!this.turnPlay,
+                count: this.turnCount,
+              }
+            : null
+        })(),
         level: { state: this.level.state, offset: this.level.offset, rising: this.level.rising, edge },
         decisions: this.decisions,
         stops: this.stops,
       },
     })
   }
+}
+
+/** 디버그 제자리 회전 줄: 클립·진행률·필요했던 각·turnspeed */
+function describeTurn(play: TurnPlay | null, active: boolean, count: number, speed: number, turns: readonly TurnClipSpec[]) {
+  const head = `제자리 회전 ${turns.length ? turns.map((turn) => turn.clip.replace('turn_', '')).join('·') : '클립 없음 (걸으며 돈다)'} · turnspeed ${speed.toFixed(2)}`
+  if (!play) return `${head} · 아직 안 돎`
+  const progress = Math.round((play.time / play.spec.duration) * 100)
+  return `${head} · ${active ? '도는 중' : '지난'} ${play.spec.clip} ${progress}% · 필요 ${toDeg(play.need).toFixed(0)}° → ${toDeg(play.spec.angle).toFixed(0)}° (남는 ${toDeg(wrapAngle(play.need - play.spec.angle)).toFixed(0)}°) · ${count}번`
 }
 
 const signed = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}`

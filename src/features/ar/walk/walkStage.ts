@@ -1,18 +1,18 @@
 import type { StageFrame } from '../placement/arStage'
 import type { Vec3 } from '../placement/types'
 import type { Vec2 } from './trail'
-import type { WalkClip, WalkModelInfo } from './walkSpec'
+import type { TurnClip, WalkClip, WalkModelInfo } from './walkSpec'
 
 // 산책 로직(WalkController)이 렌더러에 바라는 것. model-viewer 어댑터(../modelViewerArStage.ts 의 ModelViewerWalkRig)가 채운다.
 // 믹서·timeScale·클립 전환·개 위치처럼 model-viewer 내부를 만지는 일은 모두 그쪽에 있다
 
-/** 이번 프레임에 보일 걷기 자세 */
+/** 이번 프레임에 보일 걷기·제자리 회전 자세 */
 export interface WalkPose {
-  clip: WalkClip
+  clip: WalkClip | TurnClip
   /** 클립 시간 (s) */
   time: number
   /**
-   * 걷기를 시작할 때 서기 자세를 섞는 비율 (1 → 0). 0 이면 걷기 클립만.
+   * 걷기·제자리 회전을 시작할 때 서기 자세를 섞는 비율 (1 → 0). 0 이면 그 클립만.
    * 기존 명령처럼 서기 루프의 지금 프레임에서 300ms 크로스페이드로 넘어간다
    */
   standingWeight: number
@@ -23,19 +23,15 @@ export interface WalkRig {
   readonly info: WalkModelInfo
   /** 걷기 시작: model-viewer 가 애니메이션을 돌리지 않게 하고 지금 서기 자세를 섞기용으로 잡아 둔다 */
   takeOver(): void
-  /** 걷기 클립을 그 시간으로 (크로스페이드 없이 그 프레임에서 바로) */
+  /** 걷기·제자리 회전 클립을 그 시간으로 (크로스페이드 없이 그 프레임에서 바로). 회전 클립은 info.turns 에 있는 것만 온다 */
   show(pose: WalkPose): void
   /** 개를 그 자리·방향으로 바로 (감쇠 없이) */
   moveDog(position: Vec3, yaw: number): void
-  /** walk_stop 이 끝났을 때: 서기 루프 첫 프레임에서 model-viewer 에 돌려준다 */
-  release(): void
   /**
-   * 나중 자리: 제자리 회전 (AI-AR 이 만들 90°·180° 클립, standing 첫 프레임에서 시작해 거기서 끝난다). 아직 클립이 없어 어댑터는 비워 둔다.
-   * 출발할 때 겨누는 점까지 방향 차이가 90° 를 넘으면 walk_start 전에 부른다. angle: 돌아야 할 각 (rad, yaw 가 커지는 쪽 +).
-   * 맞는 클립을 틀기 시작했으면 true 를 돌려주고, 다 돌면 done(실제로 돈 각) 을 부른다 (그 뒤 개 방향을 그만큼 돌려 walk_start).
-   * 클립이 없으면 false (그러면 걸으며 좁게 돈다)
+   * walk_stop·제자리 회전이 끝났을 때: 서기 루프 첫 프레임에서 model-viewer 에 돌려준다.
+   * 회전 클립이 움직인 root translation(서기에는 없는 채널)도 쉼 값으로 돌아간다
    */
-  turnInPlace?(angle: number, done: (turned: number) => void): boolean
+  release(): void
 }
 
 /** ?debug: 바닥에 찍을 발자취 점과 개가 겨누는 점 */

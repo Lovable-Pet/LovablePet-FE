@@ -17,11 +17,14 @@ import type { Ray, SurfaceHit, Vec3 } from './placement/types'
 import type { StageOccluder } from './depthOcclusion'
 import type { WalkPose, WalkRig } from './walk/walkStage'
 import {
+  parseTurnExtras,
   parseWalkExtras,
   STANDING_CLIP,
+  TURN_CLIPS,
   WALK_CLIPS,
   type ExtrasSource,
   type ScaleSource,
+  type TurnClipSpec,
   type WalkClip,
   type WalkExtras,
   type WalkModelInfo,
@@ -284,10 +287,10 @@ function rootScale(model: unknown): number | null {
 }
 
 /**
- * GLB 를 다시 받아 JSON 청크의 scenes[scene].extras.walk 를 읽는다 (three 장면 userData 에 없을 때).
+ * GLB 를 다시 받아 JSON 청크의 scenes[scene].extras 를 읽는다 (three 장면 userData 에 extras.walk 가 없을 때).
  * 머리(20바이트)로 JSON 길이를 읽고 그만큼만 받는다. 서버가 Range 를 무시하면 받은 전체에서 읽는다
  */
-async function readGlbWalkExtras(url: string): Promise<unknown> {
+async function readGlbSceneExtras(url: string): Promise<Record<string, unknown> | null> {
   const fetchRange = async (start: number, end: number) => {
     const response = await fetch(url, { headers: { Range: `bytes=${start}-${end}` } })
     if (!response.ok) throw new Error(`GLB ${response.status}`)
@@ -305,7 +308,7 @@ async function readGlbWalkExtras(url: string): Promise<unknown> {
   const json: unknown = JSON.parse(new TextDecoder().decode(bytes))
   if (!isRecord(json) || !Array.isArray(json.scenes)) return null
   const scene: unknown = json.scenes[typeof json.scene === 'number' ? json.scene : 0]
-  return isRecord(scene) && isRecord(scene.extras) ? scene.extras.walk : null
+  return isRecord(scene) && isRecord(scene.extras) ? scene.extras : null
 }
 
 /**
@@ -609,6 +612,7 @@ export class ModelViewerArStage implements ArStage {
   /**
    * 산책 리그. 걷기 클립 3개와 standing, extras.walk 가 다 있어야 만든다 (하나라도 없으면 null → 산책 버튼을 숨긴다).
    * extras.walk 는 three 장면 userData(GLTFLoader 가 scenes[0].extras 를 넣는다)에서 먼저 읽고, 없으면 GLB JSON 청크를 직접 읽는다.
+   * 제자리 회전(turn_*)은 클립과 extras.turn 이 둘 다 있는 것만 쓴다 (extras.walk 와 같은 곳에서 읽는다). 없으면 걸으며 돈다.
    * 크기 배율 s 는 루트 노드 배율(세 축이 같아야), 못 읽으면 모델 높이 ÷ ref_size_m 높이
    */
   async createWalkRig(): Promise<WalkRig | null> {
@@ -621,12 +625,16 @@ export class ModelViewerArStage implements ArStage {
       clips.set(name, clip)
     }
     const { model } = scene
-    let extras: WalkExtras | null = isRecord(model) && isRecord(model.userData) ? parseWalkExtras(model.userData.walk) : null
+    const userData = isRecord(model) && isRecord(model.userData) ? model.userData : null
+    let extras: WalkExtras | null = userData ? parseWalkExtras(userData.walk) : null
+    let turnExtras: unknown = userData?.turn
     let extrasSource: ExtrasSource = 'userData'
     if (!extras && mv.src) {
       extrasSource = 'glb'
       try {
-        extras = parseWalkExtras(await readGlbWalkExtras(new URL(mv.src, window.location.href).href))
+        const sceneExtras = await readGlbSceneExtras(new URL(mv.src, window.location.href).href)
+        extras = parseWalkExtras(sceneExtras?.walk)
+        turnExtras = sceneExtras?.turn
       } catch (error) {
         if (import.meta.env.DEV) console.warn('[ar] GLB 에서 extras.walk 를 읽지 못함:', error)
       }
@@ -637,7 +645,16 @@ export class ModelViewerArStage implements ArStage {
     const scaleSource: ScaleSource = root !== null ? 'root' : 'size'
     if (!(scale > 0) || !Number.isFinite(scale)) return null
     const durations = Object.fromEntries(WALK_CLIPS.map((name) => [name, clips.get(name)!.duration])) as Record<WalkClip, number>
-    const info: WalkModelInfo = { extras, extrasSource, durations, scale, scaleSource, size: { ...this.dogSize } }
+    const turnClips = parseTurnExtras(turnExtras)
+    const turns: TurnClipSpec[] = []
+    for (const name of TURN_CLIPS) {
+      const entry = turnClips[name]
+      const clip = scene.animationsByName.get(name)
+      if (!entry || !isClip(clip)) continue
+      clips.set(name, clip)
+      turns.push({ clip: name, angle: (entry.angle_deg * Math.PI) / 180, duration: clip.duration, offset: entry.end_offset_m })
+    }
+    const info: WalkModelInfo = { extras, extrasSource, durations, scale, scaleSource, size: { ...this.dogSize }, turns }
     return new ModelViewerWalkRig(mv, scene, scene, this.ar, info, clips)
   }
 
@@ -906,12 +923,14 @@ export class ModelViewerArStage implements ArStage {
 }
 
 /**
- * 산책 리그. 걷는 동안에는 model-viewer 의 애니메이션을 멈추고(pause: 매 프레임 믹서를 돌리지 않는다)
+ * 산책 리그. 걷는 동안·제자리 회전 동안에는 model-viewer 의 애니메이션을 멈추고(pause: 매 프레임 믹서를 돌리지 않는다)
  * 걷기 클립의 시간·가중치를 직접 넣은 뒤 mixer.update(0) 으로 그 자세를 만든다. 개 위치도 같은 프레임에 옮겨
  * 애니메이션과 이동이 한 프레임도 어긋나지 않는다 (둘 다 다음 렌더에 나온다).
  * - 클립끼리는 크로스페이드 없이 그 프레임에서 바로 바꾼다 (이음매가 같다)
  * - 출발 때만 서기 루프의 지금 자세를 300ms 섞는다 (WalkPose.standingWeight)
  * - 액션을 멈추면(stop) 아무도 안 쓰는 뼈가 기본 자세로 돌아가서, 쓸 액션을 먼저 켜고 남은 것을 끈다
+ * - 회전 클립이 끝나면 서기를 켜고 회전 액션을 끈다. 서기에 없는 root translation 은 그 바인딩을 쓰는 액션이 없어져
+ *   AnimationMixer 가 처음 값(쉼 위치)으로 되돌린다 (three _deactivateAction → restoreOriginalState)
  */
 class ModelViewerWalkRig implements WalkRig {
   readonly info: WalkModelInfo
@@ -975,7 +994,7 @@ class ModelViewerWalkRig implements WalkRig {
   release() {
     if (!this.driving) return
     this.driving = false
-    // walk_stop 의 끝 = 서기 루프 첫 프레임. 서기를 0초로 켜고 model-viewer 에 돌려준다
+    // walk_stop·제자리 회전의 끝 = 서기 루프 첫 프레임. 서기를 0초로 켜고 (남은 액션은 끈다) model-viewer 에 돌려준다
     this.apply([[STANDING_CLIP, 0, 1]])
     // 같은 액션이 model-viewer 의 지금 액션이라 섞지 않고 그 자리에서 이어 돈다 (재생 배율도 다시 맞춘다)
     this.mv.play()
@@ -999,7 +1018,7 @@ class ModelViewerWalkRig implements WalkRig {
       action.time = time
       used.add(action)
     }
-    const names = others ? [...animationsByName.keys()] : [STANDING_CLIP, ...WALK_CLIPS]
+    const names = others ? [...animationsByName.keys()] : [STANDING_CLIP, ...WALK_CLIPS, ...this.info.turns.map((turn) => turn.clip)]
     for (const name of names) {
       const clip = animationsByName.get(name)
       const action = clip && mixer.existingAction(clip, this.scene)

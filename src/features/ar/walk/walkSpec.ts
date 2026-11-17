@@ -29,6 +29,79 @@ export const STANDING_CLIP = 'standing'
 /** 클립 길이 (s, 클립 시간) */
 export type WalkClipDurations = Record<WalkClip, number>
 
+// 제자리 회전 클립의 약속 (AI-AR work/turn_v1/fe_contract.md, 11-17 진도 시험본)
+// - 클립: turn_left_90 (+90°) · turn_right_90 (−90°) · turn_180 (+180°, 왼쪽으로). standing 첫 프레임에서 시작해
+//   "angle 만큼 돌리고 end_offset 만큼 옮긴 standing 첫 프레임"으로 끝난다 (뼈 자세는 비트 단위로 같고 루트만 다르다)
+// - scenes[0].extras.turn = { ref_size_m, clips: { 이름: { angle_deg, duration_s, end_offset_m: [x, z] } } } (크기 배율 1)
+//   angle +: yaw 가 커지는 쪽 (three rotation.y +, 앞(+z)이 +x(개의 왼쪽) 쪽으로). end_offset_m: 회전 전 모델 축 기준 [x, z] (m)
+// - 재생: 걷기처럼 1/√s 배율. 끝나는 프레임에서 크로스페이드 없이 위치 += R_y(회전 전 yaw)·(x, 0, z)·s, yaw += angle,
+//   standing 첫 프레임으로 바꾼다 (섞으면 회전이 두 번 들어간다)
+// - extras.turn 이나 클립이 없으면 회전 클립 없이 지금처럼 걸으며 돈다
+
+export const TURN_CLIPS = ['turn_left_90', 'turn_right_90', 'turn_180'] as const
+export type TurnClip = (typeof TURN_CLIPS)[number]
+
+/** extras.turn.clips 의 한 클립 (크기 배율 1) */
+export interface TurnClipExtras {
+  angle_deg: number
+  duration_s: number
+  /** 끝났을 때 모델 원점이 옮겨진 거리 [x, z] (m). 회전 전 모델 축, +x 개의 왼쪽, +z 개의 앞 */
+  end_offset_m: [number, number]
+}
+
+/** 모델에 있는 회전 클립 하나 (extras.turn 과 클립이 둘 다 있을 때만) */
+export interface TurnClipSpec {
+  clip: TurnClip
+  /** 도는 각 (rad, yaw 가 커지는 쪽 +) */
+  angle: number
+  /** 클립 길이 (s, 클립 시간. GLB 클립의 길이) */
+  duration: number
+  /** end_offset_m (m, 크기 배율 1) */
+  offset: [number, number]
+}
+
+const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+
+/** extras.turn 에서 이름이 맞고 모양이 맞는 클립만. 없으면 빈 객체 */
+export function parseTurnExtras(value: unknown): Partial<Record<TurnClip, TurnClipExtras>> {
+  const out: Partial<Record<TurnClip, TurnClipExtras>> = {}
+  if (typeof value !== 'object' || value === null) return out
+  const clips = (value as Record<string, unknown>).clips
+  if (typeof clips !== 'object' || clips === null) return out
+  for (const name of TURN_CLIPS) {
+    const clip = (clips as Record<string, unknown>)[name]
+    if (typeof clip !== 'object' || clip === null) continue
+    const { angle_deg, duration_s, end_offset_m } = clip as Record<string, unknown>
+    if (!finite(angle_deg) || angle_deg === 0 || !(finite(duration_s) && duration_s > 0)) continue
+    if (!Array.isArray(end_offset_m) || end_offset_m.length !== 2 || !end_offset_m.every(finite)) continue
+    out[name] = { angle_deg, duration_s, end_offset_m: [end_offset_m[0], end_offset_m[1]] }
+  }
+  return out
+}
+
+/** 90° 클립과 180° 클립을 가르는 각: 필요한 각이 이 안이면 같은 부호 90°, 넘으면 180° */
+export const TURN_PICK_SPLIT_DEG = 135
+
+/**
+ * 돌아야 할 각(rad)에 쓸 회전 클립. |각| ≤ 135° 면 같은 부호의 90° 클립, 넘으면 180° 클립 (부호와 상관없이).
+ * 그 클립이 없으면 남는 각이 지금보다 작아지는 클립 중 가장 맞는 것, 그것도 없으면 null. 남는 각은 출발 뒤 조향이 맞춘다
+ */
+export function pickTurnClip(turns: readonly TurnClipSpec[], need: number): TurnClipSpec | null {
+  const split = (TURN_PICK_SPLIT_DEG * Math.PI) / 180
+  const wrap = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle))
+  const preferred =
+    Math.abs(need) <= split
+      ? turns.find((turn) => Math.abs(turn.angle) <= split && Math.sign(turn.angle) === Math.sign(need))
+      : turns.find((turn) => Math.abs(turn.angle) > split)
+  if (preferred) return preferred
+  let best: TurnClipSpec | null = null
+  for (const turn of turns) {
+    const left = Math.abs(wrap(need - turn.angle))
+    if (left < Math.abs(need) && (!best || left < Math.abs(wrap(need - best.angle)))) best = turn
+  }
+  return best
+}
+
 /** s 를 어디서 읽었는지. root: GLB 루트 노드 배율 · size: 불러온 모델 크기 ÷ ref_size_m (루트 배율을 못 읽을 때) */
 export type ScaleSource = 'root' | 'size'
 
@@ -44,6 +117,8 @@ export interface WalkModelInfo {
   scaleSource: ScaleSource
   /** 불러온 모델 크기 (m). x 가로, y 높이, z 앞뒤 */
   size: Vec3
+  /** 제자리 회전 클립 (extras.turn 과 클립이 둘 다 있는 것만). 비면 걸으며 돈다 */
+  turns: readonly TurnClipSpec[]
 }
 
 /** 산책 로직이 쓰는 수치 (모두 실제 크기·실제 시간) */
