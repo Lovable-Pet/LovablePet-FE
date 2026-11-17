@@ -207,6 +207,27 @@ export class Trail {
     }
   }
 
+  /**
+   * 길을 개 자리에서 다시 시작한다 (서 있는 개 둘레를 사용자가 돌아감: 그 길은 따라가지 않는다). 사용자 위치는 둔다.
+   * 남은 길이 한꺼번에 바뀌면 이 프레임은 사용자 속도 추정에서 뺀다
+   */
+  restartAt(dog: Vec2) {
+    if (this.points.length > 1) this.cut = true
+    this.restart(dog)
+  }
+
+  /**
+   * 길의 첫 점(개가 지나는 조각의 시작)을 개 자리로 옮긴다 (제자리 회전 클립이 개를 옮김: 옛 자리에서 시작하는 첫 조각이 옆으로 비껴
+   * 겨누는 점이 남는 각보다 더 틀어지지 않게). 다른 층 경계 점이면 두지 않는다
+   */
+  moveStart(dog: Vec2) {
+    const first = this.points[0]
+    if (!first || first.edge) return
+    this.points[0] = { ...first, x: dog.x, z: dog.z }
+    this.progress = 0
+    this.off = 0
+  }
+
   /** 사용자가 다른 층이면 개 자리가 곧 경계다 (개는 움직이지 않는다) */
   private restart(dog: Vec2) {
     this.points = [{ ...this.point(dog), other: false, edge: this.otherLevel }]

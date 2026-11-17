@@ -194,7 +194,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const showFloorReset = debug && inAr && placement.manual
   /** 배치 전 빨강이 10초 넘게 이어짐 → '닫았다가 다시 열어 주세요' 한 줄 더 (바닥·깊이 상태는 건드리지 않는다) */
   const stuck = useLongActive(arLocked && placement.manual && placement.phase === 'blocked')
-  /** 개발 모드에서 ?floor=0.85·?keep=0.1 로 산책 최저선 값을, ?tight=0.15 로 크게 돌 때 반지름을, ?turnspeed=1.3 으로 제자리 회전 빠르기를 바꾼다 (다음 산책부터, 배포 파일에는 들어가지 않는다) */
+  /** 개발 모드에서 ?floor=0.85·?keep=0.1 로 산책 최저선 값을, ?tight=0.15 로 크게 돌 때 반지름을, ?turnspeed=1.3 으로 제자리 회전 빠르기를 바꾸고, ?watch=1 이면 서 있는 동안 뒤쪽 사용자를 제자리 회전으로 바라본다 (다음 산책부터, 배포 파일에는 들어가지 않는다) */
   const walkTuning = useMemo(() => (import.meta.env.DEV ? readWalkTuning(searchParams) : undefined), [searchParams])
   const walk = useArWalk(placement.walkHost, { canStart: dogReady && pose === 'stand' && !animBusy, debug, tuning: walkTuning })
   /** 산책 중: 명령 칩·음성·다시 놓기를 숨기고 개 탭을 막는다 */
@@ -809,8 +809,8 @@ function MessageShell({ onBack, children }: { onBack: () => void; children: Reac
 
 /**
  * 개발용 주소 옵션: ?floor (최저선 비율, 0 이면 끔, 0–1.5) · ?keep (걷는 중 지킬 길 여유 m, 0–1) ·
- * ?tight (크게 돌 때 가장 좁은 반지름, 몸길이 배 0.05–1, 기본 0.25) · ?turnspeed (제자리 회전 재생 배율에 곱함, 0.25–3, 기본 1).
- * 없거나 숫자가 아니면 기본값
+ * ?tight (크게 돌 때 가장 좁은 반지름, 몸길이 배 0.05–1, 기본 0.25) · ?turnspeed (제자리 회전 재생 배율에 곱함, 0.25–3, 기본 1) ·
+ * ?watch=1 (서 있는 동안 뒤쪽 사용자를 제자리 회전으로 바라봄, 기본 끔). 없거나 숫자가 아니면 기본값
  */
 function readWalkTuning(params: URLSearchParams): WalkTuning {
   const read = (name: string, max: number, min = 0) => {
@@ -824,6 +824,7 @@ function readWalkTuning(params: URLSearchParams): WalkTuning {
     floorKeepExtra: read('keep', 1),
     tightTurnRatio: read('tight', 1, 0.05),
     turnSpeed: read('turnspeed', 3, 0.25),
+    watch: params.get('watch') === '1',
   }
 }
 
