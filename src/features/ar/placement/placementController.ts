@@ -166,8 +166,8 @@ export class PlacementController {
   /** 가운데 광선이 바닥에 마지막으로 맞은 시각 (ms). 첫 프레임부터 센다 */
   private floorSeenAt: number | null = null
   private placed: { position: Vec3; yaw: number } | null = null
-  /** 놓은 뒤 매 프레임 (산책) */
-  private placedListener: ((frame: StageFrame, floor: PlacedFloor) => void) | null = null
+  /** 놓은 뒤 매 프레임 (산책·고개 바라보기·몸 돌리기) */
+  private readonly placedListeners = new Set<(frame: StageFrame, floor: PlacedFloor) => void>()
   /** 놓은 뒤 (?debug) 표시 원과 함께 찍을 점 (산책의 발자취·겨누는 점) */
   private placedMarks: readonly RingMark[] = []
   private reported: PlacementSnapshot | null = null
@@ -220,9 +220,12 @@ export class PlacementController {
     return this.placed ? { position: { ...this.placed.position }, yaw: this.placed.yaw } : null
   }
 
-  /** 놓은 뒤 매 프레임 바닥 추정과 함께 부른다 (산책). null 이면 끈다. 다시 놓으면 끊긴다 */
-  setPlacedFrameListener(listener: ((frame: StageFrame, floor: PlacedFloor) => void) | null) {
-    this.placedListener = listener
+  /** 놓은 뒤 매 프레임 바닥 추정과 함께 부른다 (산책·고개 바라보기). 돌려준 함수로 끊는다. 다시 놓으면 모두 끊긴다 */
+  addPlacedFrameListener(listener: (frame: StageFrame, floor: PlacedFloor) => void): () => void {
+    this.placedListeners.add(listener)
+    return () => {
+      this.placedListeners.delete(listener)
+    }
   }
 
   /** 산책이 개를 옮겼다: 놓은 자리 기록과 (?debug) 표시 원을 옮긴다 */
@@ -253,7 +256,7 @@ export class PlacementController {
     this.stage.hideDog()
     this.stage.setRing(null)
     this.floor.prune(this.lastTime)
-    this.placedListener = null
+    this.placedListeners.clear()
     this.placedMarks = []
     this.placed = null
     this.spot = null
@@ -279,7 +282,7 @@ export class PlacementController {
   dispose() {
     if (this.stopped) return
     this.stopped = true
-    this.placedListener = null
+    this.placedListeners.clear()
     this.spotCheck.idle()
     this.stage.dispose()
   }
@@ -292,7 +295,11 @@ export class PlacementController {
     // 놓은 뒤에도 바닥 추정은 이어 간다 (다시 놓을 때 쓴다)
     this.floor.update(frame.time, frame.centerHit, frame.camera)
     if (this.phase !== 'placed') this.track(frame)
-    else this.placedListener?.(frame, { y: this.floor.y, provisional: this.floor.provisional })
+    else {
+      const floor = { y: this.floor.y, provisional: this.floor.provisional }
+      // 듣는 중에 끊어도(산책이 끝남 등) 이번 프레임은 남은 것만 부른다
+      for (const listener of [...this.placedListeners]) if (this.placedListeners.has(listener)) listener(frame, floor)
+    }
     this.debug(frame)
   }
 

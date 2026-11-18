@@ -5,7 +5,7 @@ import { newTurnState, turnStep } from './steering'
 import { Trail, type Vec2 } from './trail'
 import { UserLevel, type LevelEvent } from './userLevel'
 import type { FloorLevel, WalkHost } from './walkStage'
-import { pickTurnClip, walkSpec, type TurnClipSpec, type WalkClip, type WalkSpec } from './walkSpec'
+import { pickTurnClip, turnEndPose, walkSpec, type TurnClipSpec, type WalkClip, type WalkSpec } from './walkSpec'
 
 /**
  * standing: 서 있음 (model-viewer 가 서기 루프를 돌린다) · start: walk_start · walk: walk 루프 · stop: walk_stop ·
@@ -49,11 +49,11 @@ export interface WalkDecision {
   reason: StopReason | null
 }
 
-/** 서 있다가 출발할 때 (또는 ?watch 로 서 있는 채 돌 때) 고른 동작. 각은 개 정면 기준 (°, + 가 개의 왼쪽) */
+/** 서 있다가 출발할 때 (또는 고개 바라보기의 몸 돌리기로 서 있는 채 돌 때) 고른 동작. 각은 개 정면 기준 (°, + 가 개의 왼쪽) */
 export interface WalkStartDecision {
   time: number
-  /** start: 출발 · watch: 서 있는 동안 사용자를 바라보기 (개발용 ?watch=1) */
-  trigger: 'start' | 'watch'
+  /** start: 출발 · body: 서 있는 동안 사용자를 바라보려고 몸 돌리기 (requestTurn, ../gaze 의 규칙) */
+  trigger: 'start' | 'body'
   /** turn: 제자리 회전 클립 뒤 출발 · walk: 걸으며 돈다 */
   action: 'turn' | 'walk'
   clip: string | null
@@ -116,10 +116,9 @@ export interface WalkDebug {
     start: WalkStartDecision | null
     /**
      * 서 있는 동안 (제자리 회전 중 포함, 걷는 중이면 null): 사용자·겨누는 점 각 (°, 개 정면 기준), 출발 거리 안인지,
-     * 사용자가 개 둘레를 돌아 출발 거리 안 발자취를 버리는 중인지, 사용자가 떠나지 않아 출발을 미루는지,
-     * ?watch 로 뒤쪽에 있은 시간 (s, 꺼져 있으면 null)
+     * 사용자가 개 둘레를 돌아 출발 거리 안 발자취를 버리는 중인지, 사용자가 떠나지 않아 출발을 미루는지
      */
-    stand: { user: number | null; aim: number | null; inZone: boolean; around: boolean; circling: boolean; watch: number | null } | null
+    stand: { user: number | null; aim: number | null; inZone: boolean; around: boolean; circling: boolean } | null
     /** 사용자 층: state 0 같은 층 · ±1 위·아래, offset 카메라 높이 − 기준 (m), rising 경계 후보를 둠, edge 경계까지 남은 길 (m, 같은 층이면 null) */
     level: { state: number; offset: number; rising: boolean; edge: number | null }
     decisions: readonly WalkDecision[]
@@ -135,7 +134,7 @@ export interface WalkControllerOptions {
   onDebug?(debug: WalkDebug): void
   /** 디버그 글 간격 (ms). 가짜 스테이지는 0 */
   debugIntervalMs?: number
-  /** 개발용 (주소 ?floor·?keep·?tight·?turnspeed·?watch): 값을 바꿔 폰에서 견준다. 없으면 MIN_STOP_RATIO·FLOOR_KEEP_EXTRA_M·TIGHT_TURN_RADIUS_BODY_LENGTHS·1·끔 */
+  /** 개발용 (주소 ?floor·?keep·?tight·?turnspeed): 값을 바꿔 폰에서 견준다. 없으면 MIN_STOP_RATIO·FLOOR_KEEP_EXTRA_M·TIGHT_TURN_RADIUS_BODY_LENGTHS·1 */
   tuning?: WalkTuning
 }
 
@@ -148,8 +147,6 @@ export interface WalkTuning {
   tightTurnRatio?: number
   /** 제자리 회전 클립 재생 배율에 곱한다 (자연 배율 1/√s × 이 값). 기본 1 */
   turnSpeed?: number
-  /** 서 있는 동안 뒤쪽 사용자를 제자리 회전으로 바라본다 (WATCH_DEG·WATCH_HOLD_S·WATCH_COOLDOWN_S). 기본 끔 */
-  watch?: boolean
 }
 
 /** v/v0 범위 (재생 배율과 이동 속도에 같이 곱한다) */
@@ -186,10 +183,6 @@ export const STOP_FACE_PATH_RATIO = 1.15
  * 출발 거리 밖에서 찍힌 발자취 (걷는 중에 남긴 길·정말 멀리 갔다 온 길)는 그대로 따라간다
  */
 export const STAND_TRAIL_OFF_DEG = 45
-/** 개발용 ?watch=1: 서 있는 개 정면에서 사용자가 WATCH_DEG 넘게 벗어난 채 WATCH_HOLD_S 넘으면 제자리 회전으로 바라본다. 회전이 끝난 뒤 WATCH_COOLDOWN_S 동안은 다시 돌지 않는다 */
-export const WATCH_DEG = 110
-export const WATCH_HOLD_S = 0.6
-export const WATCH_COOLDOWN_S = 1
 /** 사용자가 이만큼(m) 넘게 앞서가면 '천천히 걸어 주세요', SLOW_DOWN_CLEAR_M 아래로 오면 끈다 */
 export const SLOW_DOWN_M = 3
 export const SLOW_DOWN_CLEAR_M = 2.6
@@ -312,6 +305,7 @@ const flat = (point: Vec3): Vec2 => ({ x: point.x, z: point.z })
  *   넘으면 180°). 끝나는 프레임에 개를 end_offset 만큼 옮기고 yaw 를 돌려 서기 첫 프레임으로 바꾼 뒤 다시 판단한다.
  *   도는 중에는 산책 끝·추적 끊김·사용자 움직임과 상관없이 끝까지 돈다. 남는 각은 걸으며 맞춘다
  * - 서 있는 개 둘레를 사용자가 돌면 그 발자취는 따라가지 않는다 (STAND_TRAIL_OFF_DEG): 사용자가 개 뒤쪽에서 떠나면 항상 제자리 회전 뒤 출발
+ * - 서 있는 동안 고개 바라보기(../gaze)가 몸 돌리기를 맡기면 (requestTurn: 사용자가 고개 한계 밖에 오래 있음) 같은 회전 클립으로 돈다
  */
 export class WalkController {
   readonly spec: WalkSpec
@@ -339,9 +333,6 @@ export class WalkController {
   private standStraight = 0
   /** 서 있는 동안 사용자·겨누는 점 각 (rad, 개 정면 기준)·출발 거리 안·개 둘레를 도는 중. 걷는 중이면 null */
   private stand: { user: number | null; aim: number | null; inZone: boolean; circling: boolean } | null = null
-  /** 개발용 ?watch=1 과 사용자가 뒤쪽에 있은 시간 (s) */
-  private readonly watch: boolean
-  private behindFor = 0
   /** 겨누는 점 (발자취를 따라 lookAhead 앞) */
   private aim: Vec2 | null = null
   private maxOffTrail = 0
@@ -402,7 +393,6 @@ export class WalkController {
     this.floorKeep = Math.max(0, options.tuning?.floorKeepExtra ?? FLOOR_KEEP_EXTRA_M)
     const turnSpeed = options.tuning?.turnSpeed
     this.turnSpeed = turnSpeed && turnSpeed > 0 ? turnSpeed : 1
-    this.watch = !!options.tuning?.watch
     const spec = walkSpec(host.rig.info)
     const tight = options.tuning?.tightTurnRatio
     this.spec = tight && tight > 0 ? { ...spec, tightTurnRadius: tight * spec.bodyLength } : spec
@@ -485,7 +475,7 @@ export class WalkController {
       const circling = this.circling()
       if (this.stand) this.stand.circling = circling
       if (!this.lost && room && this.standingFor >= MIN_STAND_S && !circling && this.gap > this.startThreshold()) this.startBout()
-      else if (!this.watchFrame(dt) && floorMoved) this.host.rig.moveDog(this.position, this.yaw)
+      else if (floorMoved) this.host.rig.moveDog(this.position, this.yaw)
     }
     if (this.phase === 'start' || this.phase === 'walk' || this.phase === 'stop') this.walkFrame(frame, dt)
     else if (this.phase === 'turn') this.turnFrame(dt, floorMoved)
@@ -668,21 +658,19 @@ export class WalkController {
   }
 
   /**
-   * 개발용 ?watch=1: 서 있는 개 정면에서 사용자가 WATCH_DEG 넘게 벗어난 채 WATCH_HOLD_S 넘게 있으면 출발 전이라도 제자리 회전으로
-   * 사용자를 바라본다. 회전이 끝난 뒤 WATCH_COOLDOWN_S 동안은 돌지 않는다. 개 둘레(발자취 다시 시작하는 원) 안이면 보지 않는다
-   * (방향이 마구 바뀐다). 돌기 시작했으면 true
+   * 서 있는 동안 몸 돌리기 (고개 바라보기의 규칙, ../gaze/gazeController.ts: 사용자가 고개 좌우 한계 밖에 오래 있음).
+   * 서 있는 단계이고 추적·같은 층이고 사용자가 개 둘레(발자취 다시 시작하는 원) 밖일 때만 받는다 (안이면 방향이 마구 바뀐다).
+   * 각은 이쪽에서 잰 사용자 방향 (같은 프레임 발자취의 사용자 점). 돌기 시작했으면 true
    */
-  private watchFrame(dt: number) {
-    const angle = this.stand?.user ?? null
+  requestTurn(reason: string): boolean {
+    if (this.finished || this.ending || this.phase !== 'standing' || this.lost || this.level.state !== 0) return false
     const user = this.trail.userPosition
-    const near = !user || Math.hypot(user.x - this.position.x, user.z - this.position.z) < this.spec.trailResetRadius
-    if (!this.watch || this.lost || this.level.state !== 0 || angle === null || near || Math.abs(angle) <= WATCH_DEG * RAD) {
-      this.behindFor = 0
-      return false
-    }
-    this.behindFor += dt
-    if (this.behindFor < WATCH_HOLD_S || this.sinceTurn < WATCH_COOLDOWN_S) return false
-    const spec = pickTurnClip(this.spec.turns ?? [], angle)
+    if (!user) return false
+    const dx = user.x - this.position.x
+    const dz = user.z - this.position.z
+    if (Math.hypot(dx, dz) < this.spec.trailResetRadius) return false
+    const need = wrapAngle(Math.atan2(dx, dz) - this.yaw)
+    const spec = pickTurnClip(this.spec.turns ?? [], need)
     if (!spec) return false
     // 사용자를 바라보고 서니 개 앞 발자취는 따라갈 길이 아니다
     if (this.trail.count > 0) {
@@ -690,7 +678,7 @@ export class WalkController {
       this.standRestarts++
     }
     this.aimError()
-    this.startTurn(spec, angle, 'watch', `사용자가 정면에서 ${WATCH_DEG}° 넘게 ${WATCH_HOLD_S}초 (watch)`)
+    this.startTurn(spec, need, 'body', reason)
     return true
   }
 
@@ -735,7 +723,6 @@ export class WalkController {
       return
     }
     this.recordStart('start', 'walk', null, big ? `겨누는 점이 ${BIG_TURN_DEG}° 넘게 뒤쪽이지만 제자리 회전 클립 없음` : `겨누는 점이 ${BIG_TURN_DEG}° 안`)
-    this.behindFor = 0
     this.host.rig.takeOver()
     this.clock.restart()
     this.k = 1
@@ -752,7 +739,6 @@ export class WalkController {
   /** 제자리 회전 클립을 틀기 시작한다 (서기 루프 지금 프레임에서 walk_start 처럼 섞어 들어간다) */
   private startTurn(spec: TurnClipSpec, need: number, trigger: WalkStartDecision['trigger'], reason: string) {
     this.recordStart(trigger, 'turn', spec.clip, reason)
-    this.behindFor = 0
     this.host.rig.takeOver()
     this.turnPlay = { spec, time: 0, need, yaw0: this.yaw }
     this.lastTurn = this.turnPlay
@@ -783,13 +769,10 @@ export class WalkController {
       })
       return
     }
-    const { scale } = this.spec
-    const [ox, oz] = play.spec.offset
-    const cos = Math.cos(play.yaw0)
-    const sin = Math.sin(play.yaw0)
-    this.position.x += (ox * cos + oz * sin) * scale
-    this.position.z += (-ox * sin + oz * cos) * scale
-    this.yaw = wrapAngle(play.yaw0 + play.spec.angle)
+    const end = turnEndPose(play.spec, this.position, play.yaw0, this.spec.scale)
+    this.position.x = end.position.x
+    this.position.z = end.position.z
+    this.yaw = end.yaw
     play.time = play.spec.duration
     this.turnPlay = null
     // 발자취는 옮겨진 자리에서 시작한다 (옛 자리에서 시작하면 첫 조각이 비껴 남는 각보다 더 틀어 겨눈다)
@@ -1121,7 +1104,6 @@ export class WalkController {
               inZone: this.stand.inZone,
               around: this.standRestarts > 0,
               circling: this.stand.circling,
-              watch: this.watch ? this.behindFor : null,
             }
           : null,
         level: { state: this.level.state, offset: this.level.offset, rising: this.level.rising, edge },
@@ -1131,15 +1113,14 @@ export class WalkController {
     })
   }
 
-  /** 디버그 서 있는 동안 줄: 사용자·겨누는 점 각, 출발 거리 안, 개 둘레를 돌아 발자취를 버리는 중, 출발 미룸, watch */
+  /** 디버그 서 있는 동안 줄: 사용자·겨누는 점 각, 출발 거리 안, 개 둘레를 돌아 발자취를 버리는 중, 출발 미룸 */
   private describeStand() {
-    const watch = this.watch ? `watch 켬${this.behindFor > 0 ? ` (뒤쪽 ${this.behindFor.toFixed(1)}s)` : ''}` : 'watch 끔'
     const stand = this.stand
-    if (!stand) return `서 있을 때 - · ${watch}`
+    if (!stand) return '서 있을 때 -'
     const angle = (value: number | null) => (value === null ? '-' : `${toDeg(value).toFixed(0)}°`)
     const zone = stand.inZone ? '출발 거리 안' : '출발 거리 밖'
     const around = this.standRestarts > 0 ? ' · 개 둘레를 돎 (출발 거리 안 발자취 버림)' : ''
-    return `서 있는 동안: 사용자 ${angle(stand.user)} · 겨누는 점 ${angle(stand.aim)} · ${zone}${around}${stand.circling ? ' · 출발 미룸 (사용자가 떠나지 않음)' : ''} · ${watch}`
+    return `서 있는 동안: 사용자 ${angle(stand.user)} · 겨누는 점 ${angle(stand.aim)} · ${zone}${around}${stand.circling ? ' · 출발 미룸 (사용자가 떠나지 않음)' : ''}`
   }
 }
 
@@ -1148,7 +1129,7 @@ function describeStart(start: WalkStartDecision | null) {
   if (!start) return '출발 판단 -'
   const angle = (value: number | null) => (value === null ? '-' : `${value.toFixed(0)}°`)
   const action = start.action === 'turn' ? `제자리 ${start.clip}` : '걸으며'
-  return `${start.trigger === 'watch' ? '지켜보기' : '출발'} ${(start.time / 1000).toFixed(1)}s: 겨누는 점 ${angle(start.aim)} · 사용자 ${angle(start.user)} (직선 ${start.straight.toFixed(2)}m, 발자취 ${start.gap.toFixed(2)}m) → ${action} · ${start.reason}${start.restarted ? ' · 개 둘레를 돌아 발자취 다시 시작함' : ''}`
+  return `${start.trigger === 'body' ? '몸 돌리기' : '출발'} ${(start.time / 1000).toFixed(1)}s: 겨누는 점 ${angle(start.aim)} · 사용자 ${angle(start.user)} (직선 ${start.straight.toFixed(2)}m, 발자취 ${start.gap.toFixed(2)}m) → ${action} · ${start.reason}${start.restarted ? ' · 개 둘레를 돌아 발자취 다시 시작함' : ''}`
 }
 
 /** 디버그 제자리 회전 줄: 클립·진행률·필요했던 각·turnspeed */

@@ -1,4 +1,5 @@
 import { Mic } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import { cn } from '../../../components/utils/cn'
 import type { CommandId } from '../dogAnimator'
 import { useVoiceCommand } from '../useVoiceCommand'
@@ -13,6 +14,7 @@ export function VoiceCommandButton({
   disabled = false,
   onCommand,
   onMiss,
+  onListen,
 }: {
   inAr: boolean
   /** AR 에서 개를 놓기 전. 누를 수 없고, 듣는 중이었으면 조용히 멈춘다 */
@@ -20,8 +22,17 @@ export function VoiceCommandButton({
   onCommand: (id: CommandId) => void
   /** 들린 말에서 명령을 못 찾았을 때 ('알아듣지 못했어요' 문구는 여기서 띄운다) */
   onMiss?: () => void
+  /** 듣기 시작할 때 (개가 사용자를 바라본다) */
+  onListen?: () => void
 }) {
   const { supported, listening, heard, flash, toggle } = useVoiceCommand({ inAr, disabled, onCommand, onMiss })
+  const onListenRef = useRef(onListen)
+  useEffect(() => {
+    onListenRef.current = onListen
+  })
+  useEffect(() => {
+    if (listening) onListenRef.current?.()
+  }, [listening])
   if (!supported) return null
 
   const bubble = listening ? (heard ? `“${heard}”` : '듣고 있어요…') : flash?.text

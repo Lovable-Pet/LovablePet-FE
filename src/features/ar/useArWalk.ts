@@ -23,6 +23,8 @@ export interface ArWalk {
   start: () => void
   /** 걷는 중이면 다음 루프 끝에서 멈춘 뒤 서기로, 서 있으면 바로 끝낸다 */
   end: () => void
+  /** 서 있는 단계에서 몸 돌리기 (고개 바라보기의 규칙). 돌기 시작했으면 true */
+  requestTurn: (reason: string) => boolean
 }
 
 const IDLE: WalkSnapshot = { phase: 'standing', ending: false, notice: null }
@@ -33,7 +35,7 @@ const IDLE: WalkSnapshot = { phase: 'standing', ending: false, notice: null }
  */
 export function useArWalk(
   host: WalkHost | null,
-  { canStart, debug, tuning }: { canStart: boolean; debug: boolean; /** 개발용 ?floor·?keep·?tight (다음 산책부터) */ tuning?: WalkTuning },
+  { canStart, debug, tuning }: { canStart: boolean; debug: boolean; /** 개발용 ?floor·?keep·?tight·?turnspeed (다음 산책부터) */ tuning?: WalkTuning },
 ): ArWalk {
   const controllerRef = useRef<WalkController | null>(null)
   /** 돌고 있는 산책이 받은 host. 지금 host 와 다르면(다시 놓기·AR 끝) 산책은 끝난 것이다 */
@@ -87,6 +89,7 @@ export function useArWalk(
   }, [host, canStart])
 
   const end = useCallback(() => controllerRef.current?.end(), [])
+  const requestTurn = useCallback((reason: string) => controllerRef.current?.requestTurn(reason) ?? false, [])
 
   const active = owner !== null && owner === host
   return {
@@ -98,5 +101,6 @@ export function useArWalk(
     debug: active ? debugInfo : null,
     start,
     end,
+    requestTurn,
   }
 }

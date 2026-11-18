@@ -19,6 +19,8 @@ import { VoiceCommandButton } from '../features/ar/components/VoiceCommandButton
 import { COMMANDS, DogAnimator, POSE_LABEL, type CommandId, type Pose } from '../features/ar/dogAnimator'
 import { useArPlacement, type ArOcclusionOptions, type ArPlacement } from '../features/ar/useArPlacement'
 import { useArWalk, type ArWalk } from '../features/ar/useArWalk'
+import { useArGaze } from '../features/ar/useArGaze'
+import { GAZE_IN_PRODUCTION, type GazeTuning } from '../features/ar/gaze/gazeSpec'
 import type { WalkTuning } from '../features/ar/walk/walkController'
 import { LONG_PRESS_MS, useLongPress, type LongPressHandlers } from '../features/ar/useLongPress'
 import { PetPhoto } from '../features/pet/components/PetPhoto'
@@ -32,7 +34,8 @@ import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 // model-viewer 가 기기에 맞는 AR을 고른다 (ar-modes 순서대로)
 // - 안드로이드 Chrome: WebXR. 이 페이지 안에서 카메라가 열려 아래 오버레이(명령 버튼)가 그대로 보인다.
 //   바닥 원을 보고 탭한 자리에 사용자를 바라보게 놓는다 (useArPlacement). 놓기 전에는 명령·음성·개 탭을 막는다.
-//   놓은 뒤 서 있을 때 '산책'을 누르면 개가 사용자를 따라 걷는다 (useArWalk, 걷기 클립이 있는 모델만). 그동안 명령·음성·개 탭은 숨기거나 막는다
+//   놓은 뒤 서 있을 때 '산책'을 누르면 개가 사용자를 따라 걷는다 (useArWalk, 걷기 클립이 있는 모델만). 그동안 명령·음성·개 탭은 숨기거나 막는다.
+//   놓은 뒤에는 고개를 돌려 가끔 사용자(휴대폰)를 바라본다 (useArGaze, 지금은 개발 모드만. 제자리 회전 클립이 있으면 오래 옆·뒤에 있는 사용자 쪽으로 돌아선다)
 // - WebXR 이 안 되는 안드로이드: Scene Viewer 앱으로 넘어간다 (명령·탭 반응 없음)
 // - 아이폰: Quick Look 으로 USDZ 를 연다. USDZ 에는 대기 루프 하나만 있어 명령·탭 반응이 안 된다
 // - AR 이 안 되는 기기(데스크톱 등): 화면 안 3D 로 보여 준다. 명령·탭 반응은 된다
@@ -184,7 +187,15 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
    * ?ofloor=0.04 (바닥 제외 문턱 m, 0 이면 끔). 다음 AR 세션부터, 배포 파일에는 들어가지 않는다
    */
   const occlusion = useMemo(() => (import.meta.env.DEV ? readOcclusion(searchParams) : null), [searchParams])
-  const placement = useArPlacement(mvRef, { debug, occlusion })
+  /**
+   * 고개 바라보기: 개발 모드에서 기본 켬 (?gaze=0 끔), ?gazemax=70·?gazeup=45 한계, ?gazeon=4.5·?gazeoff=3 바라보기·딴청 평균 초,
+   * ?bodyturn=2.5 몸 돌리기까지 초 (0 끔). 배포 빌드는 GAZE_IN_PRODUCTION (지금 끔)이고 옵션은 들어가지 않는다
+   */
+  const gazeOptions = useMemo(
+    () => (import.meta.env.DEV ? readGazeOptions(searchParams) : { enabled: GAZE_IN_PRODUCTION, tuning: undefined }),
+    [searchParams],
+  )
+  const placement = useArPlacement(mvRef, { debug, occlusion, gazeEnabled: gazeOptions.enabled })
   /** AR 에서 개가 바닥에 놓였는지 */
   const dogReady = inAr && placement.phase === 'placed'
   /** AR 에서 개를 놓기 전: 명령 칩·음성·개 탭·3초 누르기를 막는다 */
@@ -194,15 +205,40 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const showFloorReset = debug && inAr && placement.manual
   /** 배치 전 빨강이 10초 넘게 이어짐 → '닫았다가 다시 열어 주세요' 한 줄 더 (바닥·깊이 상태는 건드리지 않는다) */
   const stuck = useLongActive(arLocked && placement.manual && placement.phase === 'blocked')
-  /** 개발 모드에서 ?floor=0.85·?keep=0.1 로 산책 최저선 값을, ?tight=0.15 로 크게 돌 때 반지름을, ?turnspeed=1.3 으로 제자리 회전 빠르기를 바꾸고, ?watch=1 이면 서 있는 동안 뒤쪽 사용자를 제자리 회전으로 바라본다 (다음 산책부터, 배포 파일에는 들어가지 않는다) */
+  /** 개발 모드에서 ?floor=0.85·?keep=0.1 로 산책 최저선 값을, ?tight=0.15 로 크게 돌 때 반지름을, ?turnspeed=1.3 으로 제자리 회전 빠르기를 바꾼다 (다음 산책부터, 배포 파일에는 들어가지 않는다) */
   const walkTuning = useMemo(() => (import.meta.env.DEV ? readWalkTuning(searchParams) : undefined), [searchParams])
-  const walk = useArWalk(placement.walkHost, { canStart: dogReady && pose === 'stand' && !animBusy, debug, tuning: walkTuning })
+  /** 고개 바라보기가 매 프레임 읽는 산책 상태 (산책 훅이 고개 훅보다 뒤라 ref 로 넘긴다) */
+  const walkStateRef = useRef<{ active: boolean; standing: boolean; requestTurn: (reason: string) => boolean }>({
+    active: false,
+    standing: false,
+    requestTurn: () => false,
+  })
+  const gaze = useArGaze(placement.gazeHost, {
+    enabled: gazeOptions.enabled,
+    offReason: '?gaze=0',
+    debug,
+    template: model.template,
+    tuning: gazeOptions.tuning,
+    turnSpeed: walkTuning?.turnSpeed,
+    readAnimator: () => animatorRef.current?.state ?? { pose: 'stand', busy: false },
+    readWalk: () => walkStateRef.current,
+    walkHost: placement.walkHost,
+  })
+  const walk = useArWalk(placement.walkHost, {
+    canStart: dogReady && pose === 'stand' && !animBusy && !gaze.turning,
+    debug,
+    tuning: walkTuning,
+  })
+  useEffect(() => {
+    walkStateRef.current = { active: walk.active, standing: walk.phase === 'standing', requestTurn: walk.requestTurn }
+  }, [walk.active, walk.phase, walk.requestTurn])
   /** 산책 중: 명령 칩·음성·다시 놓기를 숨기고 개 탭을 막는다 */
   const walking = walk.active
-  /** ?debug 상자: 산책 중이면 산책 줄을 위에 */
+  /** ?debug 상자: 산책 중이면 산책 줄을 위에, 맨 위에 고개 한 줄 */
+  const gazeLines = gaze.debugLine ? [gaze.debugLine] : []
   const hitDebug = walk.debug
-    ? { summary: walk.debug.summary, lines: [...walk.debug.lines, ...(placement.debug?.lines ?? [])] }
-    : placement.debug
+    ? { summary: walk.debug.summary, lines: [...gazeLines, ...walk.debug.lines, ...(placement.debug?.lines ?? [])] }
+    : placement.debug && { ...placement.debug, lines: [...gazeLines, ...placement.debug.lines] }
 
   useEffect(() => {
     const mv = mvRef.current
@@ -273,8 +309,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   }
 
   const runCommand = (commandId: CommandId) => {
-    // 산책 중에는 걷기 클립을 산책이 돌린다
-    if (walking) return
+    // 산책 중·몸 돌리기 중에는 클립을 산책·회전이 돌린다
+    if (walking || gaze.isTurning()) return
     setActiveCommand(commandId)
     animatorRef.current?.command(commandId)
   }
@@ -282,20 +318,22 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   /** 개 탭. head_tilt 가 있으면 갸우뚱, 없으면 꼬리 흔들기 */
   const tapReaction = () => {
     if (walking) return
+    gaze.trigger('tap')
+    if (gaze.isTurning()) return
     setActiveCommand(null)
     animatorRef.current?.tap()
   }
 
   /** '꼬리 흔들기' 칩. 늘 꼬리 흔들기 */
   const wagReaction = () => {
-    if (walking) return
+    if (walking || gaze.isTurning()) return
     setActiveCommand(null)
     animatorRef.current?.wag()
   }
 
   /** 음성 명령을 못 알아들었을 때. head_tilt 가 있으면 갸우뚱 ('알아듣지 못했어요' 문구는 마이크 버튼이 띄운다) */
   const puzzledReaction = () => {
-    if (!walking) animatorRef.current?.puzzled()
+    if (!walking && !gaze.isTurning()) animatorRef.current?.puzzled()
   }
 
   /** 다시 놓기: 개를 숨기고 바닥 원으로 돌아간다 */
@@ -475,7 +513,13 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">
                     {hasCommands && (
-                      <VoiceCommandButton inAr={inAr} disabled={arLocked} onCommand={runCommand} onMiss={puzzledReaction} />
+                      <VoiceCommandButton
+                        inAr={inAr}
+                        disabled={arLocked}
+                        onCommand={runCommand}
+                        onMiss={puzzledReaction}
+                        onListen={() => gaze.trigger('mic')}
+                      />
                     )}
                   </div>
                   {showFloorReset && (
@@ -513,7 +557,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                 hasCommands={hasCommands}
                 pose={pose}
                 active={activeCommand}
-                disabled={!loaded || arLocked}
+                disabled={!loaded || arLocked || gaze.turning}
                 onCommand={runCommand}
                 onWag={wagReaction}
                 wagHold={wagChipHold.handlers}
@@ -809,22 +853,44 @@ function MessageShell({ onBack, children }: { onBack: () => void; children: Reac
 
 /**
  * 개발용 주소 옵션: ?floor (최저선 비율, 0 이면 끔, 0–1.5) · ?keep (걷는 중 지킬 길 여유 m, 0–1) ·
- * ?tight (크게 돌 때 가장 좁은 반지름, 몸길이 배 0.05–1, 기본 0.25) · ?turnspeed (제자리 회전 재생 배율에 곱함, 0.25–3, 기본 1) ·
- * ?watch=1 (서 있는 동안 뒤쪽 사용자를 제자리 회전으로 바라봄, 기본 끔). 없거나 숫자가 아니면 기본값
+ * ?tight (크게 돌 때 가장 좁은 반지름, 몸길이 배 0.05–1, 기본 0.25) · ?turnspeed (제자리 회전 재생 배율에 곱함, 0.25–3, 기본 1, 몸 돌리기에도).
+ * 없거나 숫자가 아니면 기본값
  */
 function readWalkTuning(params: URLSearchParams): WalkTuning {
-  const read = (name: string, max: number, min = 0) => {
-    const raw = params.get(name)
-    if (raw === null || raw.trim() === '') return undefined
-    const value = Number(raw)
-    return Number.isFinite(value) && value >= min && value <= max ? value : undefined
-  }
+  const read = numberParam(params)
   return {
     minStopRatio: read('floor', 1.5),
     floorKeepExtra: read('keep', 1),
     tightTurnRatio: read('tight', 1, 0.05),
     turnSpeed: read('turnspeed', 3, 0.25),
-    watch: params.get('watch') === '1',
+  }
+}
+
+/**
+ * 개발용 고개 바라보기: ?gaze=0 끔 (기본 켬) · ?gazemax (좌우 한계 °, 10–120) · ?gazeup (위 한계 °, 0–80) ·
+ * ?gazeon·?gazeoff (바라보기·딴청 평균 초, 0.5–30) · ?bodyturn (몸 돌리기까지 초, 0 이면 끔, 0–30). 없거나 숫자가 아니면 기본값
+ */
+function readGazeOptions(params: URLSearchParams): { enabled: boolean; tuning: GazeTuning } {
+  const read = numberParam(params)
+  return {
+    enabled: params.get('gaze') !== '0',
+    tuning: {
+      yawDeg: read('gazemax', 120, 10),
+      upDeg: read('gazeup', 80),
+      lookMeanS: read('gazeon', 30, 0.5),
+      awayMeanS: read('gazeoff', 30, 0.5),
+      bodyTurnS: read('bodyturn', 30),
+    },
+  }
+}
+
+/** 주소의 숫자 옵션을 읽는 함수. min~max 밖이거나 숫자가 아니면 undefined */
+function numberParam(params: URLSearchParams) {
+  return (name: string, max: number, min = 0) => {
+    const raw = params.get(name)
+    if (raw === null || raw.trim() === '') return undefined
+    const value = Number(raw)
+    return Number.isFinite(value) && value >= min && value <= max ? value : undefined
   }
 }
 

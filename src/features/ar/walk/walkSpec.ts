@@ -79,6 +79,21 @@ export function parseTurnExtras(value: unknown): Partial<Record<TurnClip, TurnCl
   return out
 }
 
+/**
+ * 회전 클립이 끝난 프레임의 개 자리·방향: 위치 += R_y(돌기 전 yaw)·(end_offset x, 0, z)·s, yaw += angle.
+ * three R_y: x' = x cos + z sin, z' = −x sin + z cos (산책의 회전과 산책 밖 몸 돌리기가 같이 쓴다)
+ */
+export function turnEndPose(spec: TurnClipSpec, position: Vec3, yaw0: number, scale: number): { position: Vec3; yaw: number } {
+  const [ox, oz] = spec.offset
+  const cos = Math.cos(yaw0)
+  const sin = Math.sin(yaw0)
+  const yaw = yaw0 + spec.angle
+  return {
+    position: { x: position.x + (ox * cos + oz * sin) * scale, y: position.y, z: position.z + (-ox * sin + oz * cos) * scale },
+    yaw: Math.atan2(Math.sin(yaw), Math.cos(yaw)),
+  }
+}
+
 /** 90° 클립과 180° 클립을 가르는 각: 필요한 각이 이 안이면 같은 부호 90°, 넘으면 180° */
 export const TURN_PICK_SPLIT_DEG = 135
 

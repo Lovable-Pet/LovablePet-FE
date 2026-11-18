@@ -16,6 +16,9 @@ import {
 import type { Ray, SurfaceHit, Vec3 } from './placement/types'
 import type { StageOccluder } from './depthOcclusion'
 import type { WalkPose, WalkRig } from './walk/walkStage'
+import type { GazeCommand } from './gaze/gazeController'
+import type { GazeRig } from './gaze/gazeStage'
+import { findNeckBones, NeckAim, type BoneLike } from './neckAim'
 import {
   parseTurnExtras,
   parseWalkExtras,
@@ -40,6 +43,8 @@ import { enabledFeaturesOf } from './xrDepthRequest'
 // - 요소의 Symbol('scene') → ModelScene (three 의 Scene, 장면 루트)
 //   - pivot: 개 위치·방향. target: 개·바닥 표시 상자(PlacementBox)·그림자의 부모 (target 만 숨기면 셋이 함께 숨는다)
 //   - 산책: mixer(AnimationMixer)·animationsByName(클립)·model(glTF 장면: userData 에 scenes[0].extras, children 이 루트 노드)
+//   - 고개 바라보기: renderShadow 를 인스턴스에서 감싸 그 앞에 목·머리 뼈를 돌린다. ARRenderer.onWebXRFrame 은
+//     preRender(애니메이션 믹서) → renderShadow → threeRenderer.render 순서라 그림자와 화면이 같은 자세를 쓴다
 // - 요소 프로토타입의 Symbol('renderer') getter → Renderer (싱글턴)
 //   - arRenderer(ARRenderer): currentSession, goalPosition·goalYaw, placementComplete, placementBox, initialHitSource
 //   - threeRenderer.xr.getReferenceSpace(): model-viewer 가 쓰는 'local' 기준 공간
@@ -164,6 +169,8 @@ interface ModelSceneLike extends NodeLike {
   setShadowIntensity(intensity: number): void
   setShadowOffset(offset: number): void
   queueShadowRender(): void
+  /** 그림자가 필요하면 찍는다. AR 은 매 프레임 애니메이션 뒤·그리기 전에 부른다 (고개 바라보기가 감싼다) */
+  renderShadow?(renderer: unknown): void
 }
 interface PlacementBoxLike {
   show: boolean
@@ -413,6 +420,10 @@ export class ModelViewerArStage implements ArStage {
   private yawCheck = { frames: 0, mismatchFrames: 0, worst: 0 }
   private fadeTimer: ReturnType<typeof setInterval> | undefined
   private restoreMaterials: (() => void) | null = null
+  /** 산책 리그 (고개 바라보기가 산책이 돌리는 클립을 읽는다) */
+  private walkRig: ModelViewerWalkRig | null = null
+  /** 고개 바라보기. 만들지 않았으면 null */
+  private gaze: { rig: GazeRig; unhook: () => void } | null = null
   private disposed = false
 
   private constructor(
@@ -655,7 +666,57 @@ export class ModelViewerArStage implements ArStage {
       turns.push({ clip: name, angle: (entry.angle_deg * Math.PI) / 180, duration: clip.duration, offset: entry.end_offset_m })
     }
     const info: WalkModelInfo = { extras, extrasSource, durations, scale, scaleSource, size: { ...this.dogSize }, turns }
-    return new ModelViewerWalkRig(mv, scene, scene, this.ar, info, clips)
+    this.walkRig = new ModelViewerWalkRig(mv, scene, scene, this.ar, info, clips)
+    return this.walkRig
+  }
+
+  /**
+   * 고개 바라보기 리그. 목 아래·목 가운데·머리·두 눈·코 뼈가 다 있어야 만든다 (없으면 null → 그 개는 고개를 돌리지 않는다).
+   * scene.renderShadow 를 이 인스턴스에서 감싸 그 직전에 뼈를 돌린다: 믹서가 이번 프레임 자세를 쓴 뒤이고, 그림자와 화면이
+   * 같은 자세로 그려진다. 산책 리그가 믹서를 직접 돌릴 때(model-viewer 애니메이션 멈춤)도 그 자세 위에 더한다
+   */
+  createGazeRig(): GazeRig | null {
+    if (this.disposed) return null
+    if (this.gaze) return this.gaze.rig
+    const { scene, mv } = this
+    const original = scene.renderShadow
+    if (typeof original !== 'function' || !isNode(scene.model)) return null
+    const parts = findNeckBones(scene.model as unknown as BoneLike)
+    if (!parts) return null
+    const aim = new NeckAim(parts, scene.pivot)
+    let command: GazeCommand | null = null
+    let clip: string | null = null
+    const hadOwn = Object.prototype.hasOwnProperty.call(scene, 'renderShadow')
+    scene.renderShadow = (renderer: unknown) => {
+      // 산책 리그가 돌리는 중이면 그 클립, 아니면 model-viewer 가 돌리는 클립
+      clip = this.walkRig?.drivingClip ?? (mv.animationName || null)
+      try {
+        if (aim.apply(command)) scene.queueShadowRender()
+      } catch (error) {
+        if (import.meta.env.DEV) console.warn('[ar] 고개 바라보기를 끈다:', error)
+        command = null
+      }
+      original.call(scene, renderer)
+    }
+    const rig: GazeRig = {
+      sample: () => {
+        const sample = aim.sample
+        return sample ? { eye: sample.eye, root: sample.root, yaw: sample.yaw, clip } : null
+      },
+      set: (next) => {
+        command = next
+      },
+    }
+    this.gaze = {
+      rig,
+      unhook: () => {
+        aim.restore()
+        if (hadOwn) scene.renderShadow = original
+        else delete (scene as { renderShadow?: unknown }).renderShadow
+        scene.queueShadowRender()
+      },
+    }
+    return rig
   }
 
   /**
@@ -701,6 +762,8 @@ export class ModelViewerArStage implements ArStage {
     for (const set of [...this.probeSets]) set.cancel()
     this.occluder?.dispose()
     this.occluder = null
+    this.gaze?.unhook()
+    this.gaze = null
     this.removeRing()
     this.stopFade()
     this.scene.target.visible = true
@@ -942,6 +1005,8 @@ class ModelViewerWalkRig implements WalkRig {
   /** 출발 때 잡아 둔 서기 루프 시간 (섞을 때 그 자세로 멈춰 둔다) */
   private standingTime = 0
   private driving = false
+  /** 돌리는 중인 클립 (섞는 중이면 서기가 아닌 쪽). 돌려준 뒤에는 null */
+  drivingClip: string | null = null
 
   constructor(
     mv: ModelViewerElement,
@@ -996,6 +1061,7 @@ class ModelViewerWalkRig implements WalkRig {
     this.driving = false
     // walk_stop·제자리 회전의 끝 = 서기 루프 첫 프레임. 서기를 0초로 켜고 (남은 액션은 끈다) model-viewer 에 돌려준다
     this.apply([[STANDING_CLIP, 0, 1]])
+    this.drivingClip = null
     // 같은 액션이 model-viewer 의 지금 액션이라 섞지 않고 그 자리에서 이어 돈다 (재생 배율도 다시 맞춘다)
     this.mv.play()
   }
@@ -1018,6 +1084,7 @@ class ModelViewerWalkRig implements WalkRig {
       action.time = time
       used.add(action)
     }
+    this.drivingClip = layers[layers.length - 1][0]
     const names = others ? [...animationsByName.keys()] : [STANDING_CLIP, ...WALK_CLIPS, ...this.info.turns.map((turn) => turn.clip)]
     for (const name of names) {
       const clip = animationsByName.get(name)

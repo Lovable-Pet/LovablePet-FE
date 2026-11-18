@@ -110,6 +110,11 @@ export class DogAnimator {
     this.run++
   }
 
+  /** 지금 자세와 명령·반응을 재생하거나 기다리는 중인지 (고개 바라보기가 매 프레임 읽는다) */
+  get state(): { pose: Pose; busy: boolean } {
+    return { pose: this.pose, busy: this.pending > 0 }
+  }
+
   /** 명령. 진행 중인 클립은 끝까지 재생하고(중간에 끊으면 자세가 튄다), 가장 마지막 명령만 이어서 한다 */
   command(id: CommandId) {
     if (!this.hasCommands) return
