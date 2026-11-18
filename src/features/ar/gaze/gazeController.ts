@@ -8,6 +8,7 @@ import {
   GAZE_AWAY_MEAN_S,
   GAZE_CLIP_WEIGHT,
   GAZE_GIVE_UP_S,
+  GAZE_JAW_CLIPS,
   GAZE_LOOK_MEAN_S,
   GAZE_LOOP_CLIPS,
   GAZE_MAX_SPEED_DEG,
@@ -27,6 +28,7 @@ import {
   GAZE_WEIGHT_IN_S,
   GAZE_WEIGHT_OUT_S,
   GAZE_WEIGHT_RELEASE_S,
+  gazeJaw,
   gazeLimits,
   isTurnClip,
   type GazeTuning,
@@ -70,6 +72,11 @@ export interface GazeCommand {
   yaw: number
   pitch: number
   weight: number
+  /**
+   * 턱 남기는 비율 0~1 (1 = 루프 그대로, 0 = 쉼 자세로 입 다묾). 대기 루프에서 위로 든 만큼만 1 아래로.
+   * weight 0 이거나 수평·아래면 정확히 1
+   */
+  jaw: number
 }
 
 /** 바로 바라보는 계기 */
@@ -94,6 +101,8 @@ export interface GazeDebug {
   rawYaw: number | null
   rawPitch: number | null
   weight: number
+  /** 턱 남기는 비율 (1 = 루프 그대로) */
+  jaw: number
   clip: string | null
   /** 다음에 보기·딴청이 바뀔 때까지 (s) */
   nextIn: number | null
@@ -125,6 +134,8 @@ const wrapAngle = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle)
 const smoothstep = (x: number) => x * x * (3 - 2 * x)
 /** 프레임 사이가 이보다 길면 이만큼으로 자른다 (s) */
 const MAX_FRAME_S = 0.1
+/** 턱 남기는 비율이 1 에 이만큼 가까우면 1 (건드리지 않음) */
+const JAW_SNAP = 1e-3
 
 /**
  * 고개 바라보기 (계속 보지 않게):
@@ -137,6 +148,8 @@ const MAX_FRAME_S = 0.1
  * - 세기는 클립별 (GAZE_CLIP_WEIGHT): 0 인 클립(짖기·전환·walk_start·회전 등)이면 0.2초 안에 풀고 끝나면 다시 본다
  * - 몸 돌리기: 서기 루프만 돌 때 (명령 없음·서 있음) 사용자가 좌우 한계 밖에 2.5초 넘게 있으면 onTurn 으로 제자리 회전을 맡긴다.
  *   회전 클립이 끝나면 3초 동안은 다시 돌지 않는다
+ * - 턱: 대기 루프(서기·앉기·엎드리기)의 헥헥거림을 위로 든 만큼 줄인다 (GAZE_JAW, 위 30° 에서 남기는 비율 0.3·진도 0.15).
+ *   수평·아래를 볼 때는 그대로
  */
 export class GazeController {
   private readonly options: GazeControllerOptions
@@ -147,6 +160,9 @@ export class GazeController {
   private readonly lookMean: number
   private readonly awayMean: number
   private readonly bodyTurnS: number
+  /** 턱: 위로 fullUp 이상 들었을 때 남기는 비율 · 그 각 (rad) */
+  private readonly jawKeep: number
+  private readonly jawFullUp: number
   private lastTime: number | null = null
   /** 처음부터 흐른 시간 (s) */
   private now = 0
@@ -185,6 +201,7 @@ export class GazeController {
     rawYaw: null,
     rawPitch: null,
     weight: 0,
+    jaw: 1,
     clip: null,
     nextIn: null,
     outFor: 0,
@@ -205,6 +222,9 @@ export class GazeController {
     this.lookMean = tuning.lookMeanS ?? GAZE_LOOK_MEAN_S
     this.awayMean = tuning.awayMeanS ?? GAZE_AWAY_MEAN_S
     this.bodyTurnS = tuning.bodyTurnS ?? BODY_TURN_S
+    const jaw = gazeJaw(options.template)
+    this.jawKeep = clamp(tuning.jawKeep ?? jaw.keep, 0, 1)
+    this.jawFullUp = Math.max(1, tuning.jawFullUpDeg ?? jaw.fullUpDeg) * RAD
   }
 
   /** 바로 바라보는 계기 (톡·마이크). 다음 update 에서 반영한다 */
@@ -229,7 +249,7 @@ export class GazeController {
     this.lastCamera = null
     this.lastClip = null
     this.pending.length = 0
-    this.snapshot = { ...this.snapshot, state: 'off', offReason: reason, weight: 0, bodyTurnIn: null, nextIn: null }
+    this.snapshot = { ...this.snapshot, state: 'off', offReason: reason, weight: 0, jaw: 1, bodyTurnIn: null, nextIn: null }
     return null
   }
 
@@ -252,6 +272,7 @@ export class GazeController {
     this.follow(looking ? clipWeight : 0, clipWeight === 0)
 
     const turn = this.bodyTurn(input, sample, outOfRange)
+    const jaw = this.jaw(sample.clip)
     this.snapshot = {
       state: this.gaveUp
         ? 'out'
@@ -268,6 +289,7 @@ export class GazeController {
       rawYaw: this.rawYaw === null ? null : toDeg(this.rawYaw),
       rawPitch: this.rawPitch === null ? null : toDeg(this.rawPitch),
       weight: this.weight,
+      jaw,
       clip: sample.clip,
       nextIn: Math.max(0, this.modeUntil - now),
       outFor: this.outFor,
@@ -276,7 +298,16 @@ export class GazeController {
       lastTrigger: this.lastTrigger,
       still: this.stillFor > GAZE_STILL_LONG_S,
     }
-    return this.angleReady ? { yaw: this.yaw, pitch: this.pitch, weight: this.weight } : null
+    return this.angleReady ? { yaw: this.yaw, pitch: this.pitch, weight: this.weight, jaw } : null
+  }
+
+  /** 턱 남기는 비율: 대기 루프에서 1 − weight × 위로 든 정도 × (1 − keep). 수평·아래·weight 0 이면 정확히 1 */
+  private jaw(clip: string | null): number {
+    if (!clip || !GAZE_JAW_CLIPS.has(clip) || !this.angleReady || !(this.weight > 0) || !(this.pitch > 0)) return 1
+    const up = Math.min(1, this.pitch / this.jawFullUp)
+    const jaw = 1 - this.weight * up * (1 - this.jawKeep)
+    // 고개가 수평으로 돌아오는 동안 pitch 는 0 에 다가가기만 한다: 거의 1 이면 1 (턱 0.02° 안, 루프와 비트까지 같게)
+    return jaw > 1 - JAW_SNAP ? 1 : jaw
   }
 
   /** 사용자 움직임: 움직이기 시작·다가옴 계기, 오래 가만히 */
@@ -479,6 +510,7 @@ export function describeGaze(debug: GazeDebug): string {
         ? ` (원래 ${deg(debug.rawYaw)} ${deg(debug.rawPitch)})`
         : ''),
     `w ${debug.weight.toFixed(2)}${debug.clip ? ` ${debug.clip}` : ''}`,
+    `턱 ${debug.jaw.toFixed(2)}`,
     debug.nextIn === null ? '' : `다음 ${debug.nextIn.toFixed(1)}초`,
     debug.outFor > 0 ? `한계 밖 ${debug.outFor.toFixed(1)}초` : '',
     debug.bodyTurnIn !== null ? `몸 회전 ${debug.bodyTurnIn.toFixed(1)}초 뒤` : debug.bodyTurnBlock ? `몸 회전 안 함 (${debug.bodyTurnBlock})` : '몸 회전 대기 아님',

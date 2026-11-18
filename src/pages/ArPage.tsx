@@ -868,7 +868,8 @@ function readWalkTuning(params: URLSearchParams): WalkTuning {
 
 /**
  * 개발용 고개 바라보기: ?gaze=0 끔 (기본 켬) · ?gazemax (좌우 한계 °, 10–120) · ?gazeup (위 한계 °, 0–80) ·
- * ?gazeon·?gazeoff (바라보기·딴청 평균 초, 0.5–30) · ?bodyturn (몸 돌리기까지 초, 0 이면 끔, 0–30). 없거나 숫자가 아니면 기본값
+ * ?gazeon·?gazeoff (바라보기·딴청 평균 초, 0.5–30) · ?bodyturn (몸 돌리기까지 초, 0 이면 끔, 0–30) ·
+ * ?gazejaw (위로 들었을 때 턱 남기는 비율, 0–1) · ?gazejawup (그 비율까지 줄이는 위 각 °, 1–80). 없거나 숫자가 아니면 기본값
  */
 function readGazeOptions(params: URLSearchParams): { enabled: boolean; tuning: GazeTuning } {
   const read = numberParam(params)
@@ -880,6 +881,8 @@ function readGazeOptions(params: URLSearchParams): { enabled: boolean; tuning: G
       lookMeanS: read('gazeon', 30, 0.5),
       awayMeanS: read('gazeoff', 30, 0.5),
       bodyTurnS: read('bodyturn', 30),
+      jawKeep: read('gazejaw', 1),
+      jawFullUpDeg: read('gazejawup', 80, 1),
     },
   }
 }

@@ -18,6 +18,7 @@ import type { StageOccluder } from './depthOcclusion'
 import type { WalkPose, WalkRig } from './walk/walkStage'
 import type { GazeCommand } from './gaze/gazeController'
 import type { GazeRig } from './gaze/gazeStage'
+import { GAZE_JAW_CLIPS } from './gaze/gazeSpec'
 import { findNeckBones, NeckAim, type BoneLike } from './neckAim'
 import {
   parseTurnExtras,
@@ -691,7 +692,8 @@ export class ModelViewerArStage implements ArStage {
       // 산책 리그가 돌리는 중이면 그 클립, 아니면 model-viewer 가 돌리는 클립
       clip = this.walkRig?.drivingClip ?? (mv.animationName || null)
       try {
-        if (aim.apply(command)) scene.queueShadowRender()
+        // 턱은 지금 그리는 클립이 대기 루프일 때만 (판단 쪽 클립은 한 프레임 늦다: 짖기로 바뀐 첫 프레임에도 입은 그대로)
+        if (aim.apply(command, clip !== null && GAZE_JAW_CLIPS.has(clip))) scene.queueShadowRender()
       } catch (error) {
         if (import.meta.env.DEV) console.warn('[ar] 고개 바라보기를 끈다:', error)
         command = null

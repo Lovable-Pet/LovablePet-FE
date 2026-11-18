@@ -1,6 +1,6 @@
 import type { Vec3 } from './placement/types'
 import type { GazeCommand } from './gaze/gazeController'
-import { GAZE_BONES, GAZE_EYE_BONES, GAZE_NOSE_BONE, GAZE_SHARE } from './gaze/gazeSpec'
+import { GAZE_BONES, GAZE_EYE_BONES, GAZE_JAW_BONE, GAZE_NOSE_BONE, GAZE_SHARE } from './gaze/gazeSpec'
 
 // 고개 바라보기의 뼈 돌리기. 애니메이션(믹서)이 이번 프레임 자세를 쓴 뒤·그리기 전에 목 아래·목 가운데·머리 뼈의
 // 로컬 회전에 추가 회전을 곱한다. 원래 동작(숨쉬기·갸우뚱 등)은 그 위에 그대로 남는다.
@@ -16,6 +16,8 @@ import { GAZE_BONES, GAZE_EYE_BONES, GAZE_NOSE_BONE, GAZE_SHARE } from './gaze/g
 // - 믹서는 값이 바뀐 프레임에만 뼈를 쓴다 (three PropertyMixer.apply). 그래서 지금 값이 지난번에 우리가 쓴 값과 같으면
 //   (아무도 다시 안 씀) 원래 자세로 되돌린 뒤 더하고, 다르면 그 값을 새 원래 자세로 삼는다. 더하지 않을 때(weight 0)는
 //   원래 자세 그대로 둔다 (비트까지 같다)
+// - 턱(jaw_jnt, 머리 자식)은 command.jaw < 1 일 때만 로컬 회전을 쉼(바인드) 자세 → 루프 값 사이로 섞는다 (slerp(쉼, 루프, jaw)).
+//   목 뼈와 같은 방식으로 원래 값을 되찾는다. 1 이면 건드리지 않는다
 
 interface QuaternionLike {
   readonly x: number
@@ -86,6 +88,13 @@ function power(q: Quat, t: number): Quat {
   if (s < 1e-9) return [...IDENTITY]
   const k = Math.sin(half * t) / s
   return [x * k, y * k, z * k, Math.cos(half * t)]
+}
+
+/** a → b 를 t 만큼 (짧은 길) */
+function slerp(a: Quat, b: Quat, t: number): Quat {
+  const dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+  const to: Quat = dot < 0 ? [-b[0], -b[1], -b[2], -b[3]] : b
+  return normalize(multiply(a, power(multiply(conjugate(a), to), t)))
 }
 
 /** 같은 회전 중 w ≥ 0 인 쪽 (짧은 길) */
@@ -159,6 +168,8 @@ export interface NeckParts {
   gazeAxis: readonly [number, number, number]
   /** 바인드 자세의 두 눈 가운데 → 코 pitch (rad, 확인용) */
   bindEyeNosePitch: number
+  /** 턱 뼈와 쉼(바인드) 자세의 로컬 회전 [x, y, z, w]. 턱이 없거나 머리 자식이 아니면 null (턱은 건드리지 않음) */
+  jaw: { bone: BoneLike; rest: readonly [number, number, number, number] } | null
 }
 
 /**
@@ -198,34 +209,48 @@ export function findNeckBones(model: BoneLike): NeckParts | null {
   if (!(flat > 1e-6)) return null
   const local = rotate(conjugate(headBind.rotation), [line[0] / flat, 0, line[2] / flat])
   const length = Math.hypot(...local)
+  // 턱 쉼 자세 = 바인드 자세의 머리 기준 회전 (6종 모두 입 다문 자세)
+  const jawBone = byName.get(GAZE_JAW_BONE)
+  const jaw =
+    jawBone && jawBone.parent === head && skin.bones.includes(jawBone)
+      ? { bone: jawBone, rest: normalize(multiply(conjugate(headBind.rotation), bind(jawBone).rotation)) }
+      : null
   return {
     bones: [base, mid, head],
     eyes: [left, right],
     nose,
     gazeAxis: [local[0] / length, local[1] / length, local[2] / length],
     bindEyeNosePitch: Math.atan2(line[1], flat),
+    jaw,
   }
 }
 
 export class NeckAim {
   private readonly bones: readonly [BoneLike, BoneLike, BoneLike]
+  /** 원래 자세를 되찾는 뼈: 목 셋 (+ 턱) */
+  private readonly tracked: readonly BoneLike[]
+  private readonly jawRest: Quat | null
   private readonly eyes: readonly [BoneLike, BoneLike]
   private readonly gazeAxis: readonly [number, number, number]
   private readonly frame: FrameLike
   private readonly shares: readonly number[]
   /** 애니메이션이 마지막으로 쓴 로컬 회전 (원래 자세) */
   private readonly base: Quat[]
-  /** 지난번에 우리가 쓴 로컬 회전. 더하지 않았으면 null */
-  private written: Quat[] | null = null
+  /** 지난번에 우리가 쓴 로컬 회전 (tracked 순서, 쓰지 않은 뼈는 null). 아무것도 안 썼으면 null */
+  private written: (Quat | null)[] | null = null
   private last: NeckSample | null = null
+  /** 지난 apply 에서 턱에 쓴 남기는 비율 (1 = 건드리지 않음) */
+  private jawKeep = 1
 
   constructor(parts: NeckParts, frame: FrameLike, shares: readonly number[] = GAZE_SHARE) {
     this.bones = parts.bones
+    this.tracked = parts.jaw ? [...parts.bones, parts.jaw.bone] : parts.bones
+    this.jawRest = parts.jaw ? [...parts.jaw.rest] : null
     this.eyes = parts.eyes
     this.gazeAxis = parts.gazeAxis
     this.frame = frame
     this.shares = shares
-    this.base = this.bones.map(readQuat)
+    this.base = this.tracked.map(readQuat)
   }
 
   /** 지난 apply 에서 잰 것. 아직 없으면 null */
@@ -233,17 +258,23 @@ export class NeckAim {
     return this.last
   }
 
+  /** 지난 apply 에서 턱에 쓴 남기는 비율 (1 = 루프 그대로) */
+  get appliedJaw(): number {
+    return this.jawKeep
+  }
+
   /**
    * 렌더 직전에 부른다. 원래 자세를 되찾은 뒤 command 만큼 더한다 (null·weight 0 이면 원래 자세 그대로).
-   * 뼈를 바꿨으면 true (그림자를 다시 찍는다)
+   * jawAllowed 가 false 면 (지금 클립이 대기 루프가 아님) 턱은 루프 그대로. 뼈를 바꿨으면 true (그림자를 다시 찍는다)
    */
-  apply(command: GazeCommand | null): boolean {
+  apply(command: GazeCommand | null, jawAllowed = true): boolean {
     const { bones } = this
     let changed = false
     const written = this.written
-    bones.forEach((bone, index) => {
+    this.tracked.forEach((bone, index) => {
       const now = readQuat(bone)
-      if (written && sameQuat(now, written[index])) {
+      const mine = written?.[index]
+      if (mine && sameQuat(now, mine)) {
         const [x, y, z, w] = this.base[index]
         bone.quaternion.set(x, y, z, w)
         changed = true
@@ -252,6 +283,7 @@ export class NeckAim {
       }
     })
     this.written = null
+    this.jawKeep = 1
     // 원래 자세의 월드 행렬 (pivot 부터 목·머리·눈·코까지)
     bones[0].updateWorldMatrix(true, true)
     const rootQ = rotationOf(this.frame.matrixWorld.elements)
@@ -270,7 +302,7 @@ export class NeckAim {
     const qWorld = normalize(multiply(multiply(rootQ, qRoot), conjugate(rootQ)))
     // 뼈마다 월드 회전 Q^(몫·weight) 를 더한다: L' = P⁻¹·Qᵢ·P·L (P = 부모 월드 회전, 앞 뼈를 돌린 뒤 값)
     let parent = rotationOf(bones[0].parent!.matrixWorld.elements)
-    const next: Quat[] = []
+    const next: (Quat | null)[] = []
     bones.forEach((bone, index) => {
       const q = power(qWorld, this.shares[index] * weight)
       const local = normalize(multiply(multiply(multiply(conjugate(parent), q), parent), this.base[index]))
@@ -278,6 +310,15 @@ export class NeckAim {
       next.push(readQuat(bone))
       parent = normalize(multiply(parent, local))
     })
+    // 턱: 쉼 자세 → 루프 값 사이 (머리 로컬이라 목 회전과 상관없다)
+    const jawKeep = Math.min(1, Math.max(0, command.jaw))
+    if (this.jawRest && jawAllowed && jawKeep < 1) {
+      const jawIndex = bones.length
+      const local = slerp(this.jawRest, this.base[jawIndex], jawKeep)
+      this.tracked[jawIndex].quaternion.set(local[0], local[1], local[2], local[3])
+      next.push(readQuat(this.tracked[jawIndex]))
+      this.jawKeep = jawKeep
+    }
     this.written = next
     bones[0].updateWorldMatrix(false, true)
     this.record(rootQ, animated, this.direction(rootQ, this.headVector()))
@@ -288,8 +329,9 @@ export class NeckAim {
   restore() {
     const written = this.written
     if (!written) return
-    this.bones.forEach((bone, index) => {
-      if (!sameQuat(readQuat(bone), written[index])) return
+    this.tracked.forEach((bone, index) => {
+      const mine = written[index]
+      if (!mine || !sameQuat(readQuat(bone), mine)) return
       const [x, y, z, w] = this.base[index]
       bone.quaternion.set(x, y, z, w)
     })

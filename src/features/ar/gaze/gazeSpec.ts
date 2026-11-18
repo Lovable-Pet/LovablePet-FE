@@ -98,10 +98,36 @@ export const BODY_TURN_COOLDOWN_S = 3
 /** 사용자가 개(발밑)에서 이만큼(m, 수평) 안이면 돌지 않는다 (방향이 마구 바뀐다) */
 export const BODY_TURN_MIN_M = 0.5
 
+// ── 고개를 들 때 턱 (대기 루프의 헥헥거림) ──
+/** 턱 뼈 (머리 뼈의 자식). 6종 모두 쉼(바인드) 자세 = 입 다문 자세 = 루프에서 가장 덜 벌어진 값 (0.02° 안) */
+export const GAZE_JAW_BONE = 'jaw_jnt'
+/** 턱 벌림을 줄이는 클립 (대기 루프만). 짖기·흔들기 등 입을 쓰는 클립은 그대로 */
+export const GAZE_JAW_CLIPS: ReadonlySet<string> = new Set(['standing', 'sitting', 'lying'])
+/**
+ * 턱 남기는 비율 = 1 − weight × clamp(위 pitch / fullUpDeg, 0, 1) × (1 − keep). 1 이면 루프 그대로, 0 이면 입 다묾.
+ * 수평·아래를 볼 때는 루프 그대로 (반가워 보인다), 위로 든 만큼만 줄인다
+ */
+export interface GazeJaw {
+  /** fullUpDeg 이상 들었을 때 남기는 비율 (0~1) */
+  keep: number
+  /** 이만큼(°) 들면 keep 까지 줄인다 */
+  fullUpDeg: number
+}
+export const GAZE_JAW: GazeJaw = { keep: 0.3, fullUpDeg: 30 }
+/** 템플릿별 턱. 없으면 GAZE_JAW */
+export const GAZE_JAW_BY_TEMPLATE: Readonly<Record<string, Partial<GazeJaw>>> = {
+  // 입이 커서 입속이 잘 보인다
+  jindo: { keep: 0.15 },
+}
+
+export function gazeJaw(template: string | null | undefined): GazeJaw {
+  return { ...GAZE_JAW, ...(template ? GAZE_JAW_BY_TEMPLATE[template] : undefined) }
+}
+
 /** 배포 빌드에서 켤지. 폰 확인 뒤 정한다 (개발 모드는 ?gaze=0 이 아니면 켬) */
 export const GAZE_IN_PRODUCTION = false
 
-/** 개발용 (?gazemax·?gazeup·?gazeon·?gazeoff·?bodyturn). 없으면 위 기본값 */
+/** 개발용 (?gazemax·?gazeup·?gazeon·?gazeoff·?bodyturn·?gazejaw·?gazejawup). 없으면 위 기본값 */
 export interface GazeTuning {
   yawDeg?: number
   upDeg?: number
@@ -109,4 +135,7 @@ export interface GazeTuning {
   awayMeanS?: number
   /** 몸 돌리기까지 (s). 0 이면 몸 돌리기 끔 */
   bodyTurnS?: number
+  /** 턱 keep · fullUpDeg (템플릿별 값보다 앞선다) */
+  jawKeep?: number
+  jawFullUpDeg?: number
 }
