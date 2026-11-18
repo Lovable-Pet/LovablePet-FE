@@ -189,7 +189,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const occlusion = useMemo(() => (import.meta.env.DEV ? readOcclusion(searchParams) : null), [searchParams])
   /**
    * 고개 바라보기: 개발 모드에서 기본 켬 (?gaze=0 끔), ?gazemax=70·?gazeup=45 한계, ?gazeon=4.5·?gazeoff=3 바라보기·딴청 평균 초,
-   * ?bodyturn=2.5 몸 돌리기까지 초 (0 끔). 배포 빌드는 GAZE_IN_PRODUCTION (지금 끔)이고 옵션은 들어가지 않는다
+   * ?bodyturn=1.5 몸 돌리기 기다리는 기준 초 (뒤쪽은 그 0.4 배, 0 끔), ?gazejaw·?gazejawup 턱, ?closesit=1 가까이 앉기. 배포 빌드는 GAZE_IN_PRODUCTION (지금 끔)이고 옵션은 들어가지 않는다
    */
   const gazeOptions = useMemo(
     () => (import.meta.env.DEV ? readGazeOptions(searchParams) : { enabled: GAZE_IN_PRODUCTION, tuning: undefined }),
@@ -223,6 +223,13 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     readAnimator: () => animatorRef.current?.state ?? { pose: 'stand', busy: false },
     readWalk: () => walkStateRef.current,
     walkHost: placement.walkHost,
+    // ?closesit: 가까이 붙으면 스스로 앉고, 물러나면 일어난다 (명령 칩 표시는 바꾸지 않는다)
+    requestPose: (next) => {
+      const animator = animatorRef.current
+      if (!animator?.hasCommands || walkStateRef.current.active) return false
+      animator.command(next)
+      return true
+    },
   })
   const walk = useArWalk(placement.walkHost, {
     canStart: dogReady && pose === 'stand' && !animBusy && !gaze.turning,
@@ -311,6 +318,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const runCommand = (commandId: CommandId) => {
     // 산책 중·몸 돌리기 중에는 클립을 산책·회전이 돌린다
     if (walking || gaze.isTurning()) return
+    gaze.userCommand()
     setActiveCommand(commandId)
     animatorRef.current?.command(commandId)
   }
@@ -868,8 +876,9 @@ function readWalkTuning(params: URLSearchParams): WalkTuning {
 
 /**
  * 개발용 고개 바라보기: ?gaze=0 끔 (기본 켬) · ?gazemax (좌우 한계 °, 10–120) · ?gazeup (위 한계 °, 0–80) ·
- * ?gazeon·?gazeoff (바라보기·딴청 평균 초, 0.5–30) · ?bodyturn (몸 돌리기까지 초, 0 이면 끔, 0–30) ·
- * ?gazejaw (위로 들었을 때 턱 남기는 비율, 0–1) · ?gazejawup (그 비율까지 줄이는 위 각 °, 1–80). 없거나 숫자가 아니면 기본값
+ * ?gazeon·?gazeoff (바라보기·딴청 평균 초, 0.5–30) · ?bodyturn (몸 돌리기 기다리는 기준 초: 한계를 막 넘었을 때, 뒤쪽 120° 는 그 0.4 배, 0 이면 끔, 0–30) ·
+ * ?gazejaw (위로 들었을 때 턱 남기는 비율, 0–1) · ?gazejawup (그 비율까지 줄이는 위 각 °, 1–80) ·
+ * ?closesit=1 (가까이 붙으면 스스로 앉아 올려다봄, 기본 끔). 없거나 숫자가 아니면 기본값
  */
 function readGazeOptions(params: URLSearchParams): { enabled: boolean; tuning: GazeTuning } {
   const read = numberParam(params)
@@ -883,6 +892,7 @@ function readGazeOptions(params: URLSearchParams): { enabled: boolean; tuning: G
       bodyTurnS: read('bodyturn', 30),
       jawKeep: read('gazejaw', 1),
       jawFullUpDeg: read('gazejawup', 80, 1),
+      closeSit: params.get('closesit') === '1',
     },
   }
 }

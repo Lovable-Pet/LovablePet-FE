@@ -14,6 +14,8 @@ export interface ArGaze {
   trigger: (kind: 'tap' | 'mic') => void
   /** 지금 몸을 돌리는 중인지 (상태 갱신을 기다리지 않고 읽는다) */
   isTurning: () => boolean
+  /** 사용자가 명령을 내림 ('스스로 앉음' 지우기) */
+  userCommand: () => void
 }
 
 export interface ArGazeOptions {
@@ -33,6 +35,8 @@ export interface ArGazeOptions {
   readWalk: () => { active: boolean; standing: boolean; requestTurn: (reason: string) => boolean }
   /** 산책 밖 몸 돌리기에 쓸 리그 (회전 클립이 없으면 고개만) */
   walkHost: WalkHost | null
+  /** 가까이 앉기·일어나기 (?closesit). 받아서 시작했으면 true */
+  requestPose?: (pose: 'sit' | 'stand') => boolean
 }
 
 const DEBUG_INTERVAL_MS = 200
@@ -79,6 +83,7 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
         if (walk.active) return walk.requestTurn(reason)
         return standTurnRef.current?.start(need) ?? false
       },
+      onPose: (pose) => latest.current.requestPose?.(pose) ?? false,
     })
     controllerRef.current = controller
     let lastDebugAt = -Infinity
@@ -114,10 +119,12 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
 
   const trigger = useCallback((kind: 'tap' | 'mic') => controllerRef.current?.trigger(kind), [])
   const isTurning = useCallback(() => !!standTurnRef.current?.turning, [])
+  const userCommand = useCallback(() => controllerRef.current?.userCommand(), [])
   return {
     turning,
     debugLine: !debug ? null : !enabled ? `고개: 꺼짐 (${offReason ?? '?'})` : host ? debugLine : null,
     trigger,
     isTurning,
+    userCommand,
   }
 }

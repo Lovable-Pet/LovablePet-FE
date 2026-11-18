@@ -55,10 +55,20 @@ export const GAZE_STILL_AWAY_SCALE = 1.75
 /** 산책 중 (walk): 바라보기 · 딴청 평균 (s). 앞을 주로 본다 */
 export const GAZE_WALK_LOOK_MEAN_S = 1.5
 export const GAZE_WALK_AWAY_MEAN_S = 4.5
-/** 한계 밖에 이만큼(s) 넘게 있으면 고개를 포기한다 (weight 0). 다시 들어오면 계기 */
+/**
+ * 한계 밖에 이만큼(s) 넘게 있으면 고개를 포기한다 (weight 0). 다시 들어오면 계기.
+ * 몸을 돌 수 있으면 (서 있음·회전 클립 있음·명령 없음·0.5 m 밖) 포기하지 않고 한계에 둔 채 몸 돌리기를 기다린다
+ */
 export const GAZE_GIVE_UP_S = 1.5
 /** 사용자가 눈에서 이만큼(m, 수평) 안이면 방향이 마구 바뀌어 목표를 그대로 둔다 */
 export const GAZE_NEAR_M = 0.25
+/**
+ * 머리 위 가까이 (안정화): 올려다보는 각이 위 한계 + ENTER 를 넘으면 좌우 목표를 그 순간 값에 고정하고 위 한계까지만 본다.
+ * 위 한계 + EXIT 아래로 내려오면 RELEASE_S 동안 smoothstep 으로 풀어 사용자 쪽으로 돌린다. 이러는 동안 한계 밖·몸 돌리기 시간은 멈춘다
+ */
+export const GAZE_OVERHEAD_ENTER_DEG = 15
+export const GAZE_OVERHEAD_EXIT_DEG = 10
+export const GAZE_OVERHEAD_RELEASE_S = 0.6
 
 /**
  * 동작별 세기 (클립 이름). 없는 클립은 0 (돌리지 않는다). 0 인 클립으로 바뀌면 GAZE_WEIGHT_RELEASE_S 안에 풀고
@@ -91,10 +101,18 @@ export const GAZE_LOOP_CLIPS: ReadonlySet<string> = new Set(['standing', 'sittin
 export const isTurnClip = (clip: string | null) => !!clip && clip.startsWith('turn_')
 
 // ── 몸 돌리기 (서 있을 때, 제자리 회전 클립이 있을 때만) ──
-/** 사용자가 좌우 한계 밖에 이만큼(s) 넘게 있으면 제자리 회전으로 돌아선다 */
-export const BODY_TURN_S = 2.5
-/** 회전이 끝난 뒤 이만큼(s) 다시 돌지 않는다 */
-export const BODY_TURN_COOLDOWN_S = 3
+/**
+ * 사용자가 좌우 한계 밖에 있으면 기다렸다가 제자리 회전으로 돌아선다. 기다리는 시간은 개 몸(발밑) 기준 사용자 각에 따라:
+ * 좌우 한계(70°) 이하면 BODY_TURN_S, BEHIND_DEG 이상(뒤쪽)이면 BODY_TURN_BEHIND_S, 그 사이 선형.
+ * 사용자가 움직이는 동안에도 맞게 '진행률 += dt / 지금 기다릴 시간' 으로 센다 (?bodyturn 은 BODY_TURN_S 를 바꾸고 뒤쪽 값도 같은 비율로)
+ */
+export const BODY_TURN_S = 1.5
+export const BODY_TURN_BEHIND_S = 0.6
+export const BODY_TURN_BEHIND_DEG = 120
+/** 이보다(s) 짧게 범위 안으로 들어왔다 나가면 처음부터 세지 않고 이어서 센다 */
+export const BODY_TURN_GRACE_S = 0.5
+/** 회전이 끝난 뒤 이만큼(s) 다시 돌지 않는다 (그동안에도 기다리는 시간은 센다) */
+export const BODY_TURN_COOLDOWN_S = 2
 /** 사용자가 개(발밑)에서 이만큼(m, 수평) 안이면 돌지 않는다 (방향이 마구 바뀐다) */
 export const BODY_TURN_MIN_M = 0.5
 
@@ -114,27 +132,38 @@ export interface GazeJaw {
   fullUpDeg: number
 }
 export const GAZE_JAW: GazeJaw = { keep: 0.3, fullUpDeg: 30 }
-/** 템플릿별 턱. 없으면 GAZE_JAW */
-export const GAZE_JAW_BY_TEMPLATE: Readonly<Record<string, Partial<GazeJaw>>> = {
-  // 입이 커서 입속이 잘 보인다
-  jindo: { keep: 0.15 },
-}
+/** 템플릿별 턱. 없으면 GAZE_JAW (진도도 폰에서 0.3 이 맞았다) */
+export const GAZE_JAW_BY_TEMPLATE: Readonly<Record<string, Partial<GazeJaw>>> = {}
 
 export function gazeJaw(template: string | null | undefined): GazeJaw {
   return { ...GAZE_JAW, ...(template ? GAZE_JAW_BY_TEMPLATE[template] : undefined) }
 }
 
+// ── 가까이 붙으면 앉아서 올려다보기 (개발용 ?closesit=1, 기본 끔) ──
+/**
+ * 서 있는 개(서기 루프만 돌 때) 발밑에서 사용자가 수평 SIT_M 안에 SIT_S 넘게 있으면 스스로 앉는다.
+ * 스스로 앉았을 때만 사용자가 STAND_M 밖으로 STAND_S 넘게 물러나면 일어난다. 명령·산책·회전 중에는 안 한다.
+ * 사용자가 명령을 내리면 '스스로 앉음' 을 지우고, STAND_M 밖으로 한 번 물러날 때까지 다시 앉지 않는다
+ */
+export const CLOSE_SIT_M = 0.6
+export const CLOSE_SIT_S = 2
+export const CLOSE_STAND_M = 1
+export const CLOSE_STAND_S = 2
+export const CLOSE_SIT_DEFAULT = false
+
 /** 배포 빌드에서 켤지. 폰 확인 뒤 정한다 (개발 모드는 ?gaze=0 이 아니면 켬) */
 export const GAZE_IN_PRODUCTION = false
 
-/** 개발용 (?gazemax·?gazeup·?gazeon·?gazeoff·?bodyturn·?gazejaw·?gazejawup). 없으면 위 기본값 */
+/** 개발용 (?gazemax·?gazeup·?gazeon·?gazeoff·?bodyturn·?gazejaw·?gazejawup·?closesit). 없으면 위 기본값 */
 export interface GazeTuning {
   yawDeg?: number
   upDeg?: number
   lookMeanS?: number
   awayMeanS?: number
-  /** 몸 돌리기까지 (s). 0 이면 몸 돌리기 끔 */
+  /** 몸 돌리기 기다리는 기준 시간 (한계를 막 넘었을 때, s). 0 이면 몸 돌리기 끔 */
   bodyTurnS?: number
+  /** 가까이 붙으면 앉아서 올려다보기 */
+  closeSit?: boolean
   /** 턱 keep · fullUpDeg (템플릿별 값보다 앞선다) */
   jawKeep?: number
   jawFullUpDeg?: number
