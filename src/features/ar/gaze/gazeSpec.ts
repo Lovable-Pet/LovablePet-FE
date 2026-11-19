@@ -63,12 +63,26 @@ export const GAZE_GIVE_UP_S = 1.5
 /** 사용자가 눈에서 이만큼(m, 수평) 안이면 방향이 마구 바뀌어 목표를 그대로 둔다 */
 export const GAZE_NEAR_M = 0.25
 /**
- * 머리 위 가까이 (안정화): 올려다보는 각이 위 한계 + ENTER 를 넘으면 좌우 목표를 그 순간 값에 고정하고 위 한계까지만 본다.
- * 위 한계 + EXIT 아래로 내려오면 RELEASE_S 동안 smoothstep 으로 풀어 사용자 쪽으로 돌린다. 이러는 동안 한계 밖·몸 돌리기 시간은 멈춘다
+ * 머리 위 가까이 (안정화): 눈에서 카메라까지 수평 거리가 ENTER_M 안이면 (좌우 방향이 불안정) 좌우 목표를 그 순간 사용자 쪽
+ * (한계로 자른 값, 월드 방향으로 저장해 몸이 조금 돌아도 같은 곳) 에 고정한다. EXIT_M 밖으로 나가거나 세기 0 인 클립
+ * (회전·자세 전환 등, 몸이 움직인다) 이 시작되면 RELEASE_S 동안 smoothstep 으로 풀어 사용자 쪽으로 돌린다. 세기 0 인 클립 동안은
+ * 켜지 않는다 (끝난 뒤 새 몸 기준으로 다시 판단). 고정된 동안 한계 밖·몸 돌리기 시간은 멈춘다.
+ * 올려다보는 각 (전에는 위 한계 + 15°) 으로 켜면 앉은 개 0.6 m 앞에서 서서 보기만 해도 켜져 (머리가 낮아 위 57~63°) 기준을 거리로 바꿨다
  */
-export const GAZE_OVERHEAD_ENTER_DEG = 15
-export const GAZE_OVERHEAD_EXIT_DEG = 10
+export const GAZE_OVERHEAD_ENTER_M = 0.25
+export const GAZE_OVERHEAD_EXIT_M = 0.35
 export const GAZE_OVERHEAD_RELEASE_S = 0.6
+/** 고정한 동안 원래 yaw (한계로 자름, 수평 GAZE_NEAR_M 밖이라 믿을 만할 때) 가 고정값에서 이만큼(°) 넘게 벗어나면 푼다 (사용자가 정말 옮겨 감) */
+export const GAZE_OVERHEAD_DRIFT_DEG = 30
+/**
+ * 사용자가 거의 바로 뒤 (몸 기준 180° − 이만큼 바깥) 면 좌우 한계 중 지금 쪽을 그대로 둔다. 뒤를 가로지를 때 (몸 위로 지나가는 폰의
+ * 작은 흔들림도) 원래 yaw 가 +180°↔−180° 로 뒤집혀 고개가 +70°↔−70° 로 휙 넘어가지 않게
+ */
+export const GAZE_BEHIND_HOLD_DEG = 30
+/** debug 경고: 원래 yaw 가 한계보다 이만큼(°) 넘게 안쪽인데 목표 yaw 가 한계에서 STUCK_EDGE_DEG 안에 STUCK_S 넘게 붙어 있으면 */
+export const GAZE_STUCK_INSIDE_DEG = 5
+export const GAZE_STUCK_EDGE_DEG = 1
+export const GAZE_STUCK_S = 1
 
 /**
  * 동작별 세기 (클립 이름). 없는 클립은 0 (돌리지 않는다). 0 인 클립으로 바뀌면 GAZE_WEIGHT_RELEASE_S 안에 풀고

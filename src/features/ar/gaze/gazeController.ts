@@ -14,6 +14,7 @@ import {
   GAZE_ANGLE_TAU_S,
   GAZE_APPROACH_M,
   GAZE_AWAY_MEAN_S,
+  GAZE_BEHIND_HOLD_DEG,
   GAZE_CLIP_WEIGHT,
   GAZE_GIVE_UP_S,
   GAZE_JAW_CLIPS,
@@ -23,8 +24,9 @@ import {
   GAZE_MOVE_OFF_MPS,
   GAZE_MOVE_ON_MPS,
   GAZE_NEAR_M,
-  GAZE_OVERHEAD_ENTER_DEG,
-  GAZE_OVERHEAD_EXIT_DEG,
+  GAZE_OVERHEAD_DRIFT_DEG,
+  GAZE_OVERHEAD_ENTER_M,
+  GAZE_OVERHEAD_EXIT_M,
   GAZE_OVERHEAD_RELEASE_S,
   GAZE_REACTION_S,
   GAZE_SPEED_TAU_S,
@@ -33,6 +35,9 @@ import {
   GAZE_STILL_LONG_S,
   GAZE_STILL_LOOK_SCALE,
   GAZE_STILL_MPS,
+  GAZE_STUCK_EDGE_DEG,
+  GAZE_STUCK_INSIDE_DEG,
+  GAZE_STUCK_S,
   GAZE_TRIGGER_HOLD_S,
   GAZE_WALK_AWAY_MEAN_S,
   GAZE_WALK_LOOK_MEAN_S,
@@ -149,6 +154,10 @@ export interface GazeDebug {
   pose: GazePose
   /** 몸 돌려 따라보기 (꺼지면 몸 돌리기·가까이 앉기·일어나기 없이 고개만) */
   follow: boolean
+  /** 눈에서 카메라까지 수평 거리 (m). 모르면 null */
+  horizontal: number | null
+  /** 이상 경고 (원래 yaw 는 한계 안인데 목표 yaw 가 한계에 붙어 있음 등). 없으면 null */
+  warn: string | null
 
   lastTrigger: GazeTrigger | null
   /** 오래 가만히 (바라보기 짧게·딴청 길게) */
@@ -188,6 +197,8 @@ const BODY_TURN_RETRY_S = 1
 const STAND_TURN_WAIT_S = 3
 /** 회전 요청 뒤 이만큼(s) 지나도 회전 클립이 안 보이면 기다림을 푼다 */
 const TURN_START_TIMEOUT_S = 1
+/** 포기한 고개를 다시 한계로 (몸 돌리기를 기다림) 되돌리려면 돌 수 있는 상태가 이만큼(s) 이어져야 한다 (막힘이 깜빡일 때 포기·보기가 번갈지 않게) */
+const UNGIVE_UP_S = 0.3
 /** 턱 남기는 비율이 1 에 이만큼 가까우면 1 (건드리지 않음) */
 const JAW_SNAP = 1e-3
 
@@ -200,8 +211,10 @@ const JAW_SNAP = 1e-3
  * - 좌우 한계 밖이면 한계까지만 돌린다. 몸을 돌 수 있으면 그대로 한계에 둔 채 몸 돌리기를 기다리고, 돌 수 없으면
  *   (앉기·엎드리기·회전 클립 없음·명령 중·0.5 m 안·회전 요청을 거절당함) 1.5초 넘게 밖이면 포기 (weight 0). 다시 들어오면 계기.
  *   위·아래는 한계까지만 (포기하지 않는다: 개 바로 옆에 선 사용자를 끝까지 올려다본다)
- * - 머리 위 가까이 (올려다보는 각이 위 한계 + 15° 넘음): 좌우 목표를 그 순간 값에 고정하고 위 한계까지만. 위 한계 + 10° 아래로
- *   내려오면 0.6초 동안 풀어 사용자 쪽으로. 그동안 한계 밖·몸 돌리기 시간은 멈춘다
+ * - 머리 위 가까이 (눈에서 폰까지 수평 0.25 m 안): 좌우 목표를 그 순간 사용자 쪽 (월드 방향) 에 고정. 0.35 m 밖이거나 세기 0 인
+ *   클립(회전·자세 전환)이 시작되거나 사용자 쪽이 고정값에서 30° 넘게 옮겨 가면 0.6초 동안 풀어 사용자 쪽으로, 세기 0 인 클립
+ *   동안은 켜지 않는다. 고정된 동안 한계 밖·몸 돌리기 시간은 멈춘다
+ * - 사용자가 거의 바로 뒤 (150° 밖) 면 좌우 한계 중 지금 쪽을 그대로 둔다 (뒤를 가로질러도 +70°↔−70° 로 휙 넘어가지 않게)
  * - 세기는 클립별 (GAZE_CLIP_WEIGHT): 0 인 클립(짖기·전환·walk_start·회전 등)이면 0.2초 안에 풀고 끝나면 다시 본다
  * - 몸 돌리기: 서기 루프만 돌 때 (명령 없음·서 있음) 사용자가 좌우 한계 밖이면 기다렸다가 onTurn 으로 제자리 회전을 맡긴다.
  *   기다리는 시간은 몸 기준 사용자 각 70° 이하 1.5초 ~ 120° 이상 0.6초 (선형, 진행률로 센다). 0.5초 안에 잠깐 범위 안으로
@@ -250,6 +263,8 @@ export class GazeController {
   private farthest = 0
   private outFor = 0
   private gaveUp = false
+  /** 한계 밖에서 몸 돌리기를 기다릴 수 있는 상태가 이어진 시간 (s) */
+  private holdFor = 0
   /** 이 때까지는 몸을 돌리지 않는다 (s) */
   private turnCooldownUntil = -Infinity
   /** 몸 돌리기 진행률 0~1 (dt / 기다릴 시간 을 더한다) */
@@ -261,8 +276,15 @@ export class GazeController {
   private turnRefusedAt: number | null = null
   /** 머리 위 안정화: on 고정 · release 푸는 중 */
   private overhead: 'on' | 'release' | null = null
-  private overheadYaw = 0
+  /** 고정한 사용자 쪽 (월드 yaw, rad: 한계로 자른 몸 기준 값 + 그때 개 방향) */
+  private overheadWorldYaw = 0
   private overheadFrom = 0
+  /** 눈에서 카메라까지 수평 거리 (m, 추적 중일 때 갱신) */
+  private horizontal: number | null = null
+  /** 원래 yaw 는 한계 안인데 목표 yaw 가 한계에 붙어 있은 시간 (s) */
+  private stuckFor = 0
+  /** 좌우 한계 밖일 때 고개를 둔 쪽 (+1 왼쪽, −1 오른쪽, 0 한계 안) */
+  private outSide = 0
   /** 가까이 앉기: 스스로 앉음 · 다시 앉을 수 있음 (명령 뒤 물러날 때까지 false) · 가까이·멀리 있은 시간 (s) */
   private selfSat = false
   private closeSitArmed = true
@@ -307,6 +329,8 @@ export class GazeController {
     sitReason: null,
     pose: 'stand',
     follow: true,
+    horizontal: null,
+    warn: null,
     lastTrigger: null,
     still: false,
   }
@@ -393,6 +417,9 @@ export class GazeController {
     this.turnRefused = false
     this.turnRefusedAt = null
     this.overhead = null
+    this.horizontal = null
+    this.stuckFor = 0
+    this.outSide = 0
     this.closeFor = 0
     this.farFor = 0
     this.endStandToTurn()
@@ -429,6 +456,7 @@ export class GazeController {
     const turnedAfterStand = this.standThenTurn(input, sample)
     const block = this.turnBlock(input, sample)
     const outOfRange = this.aim(input, sample, dt, !block?.hard && !this.turnRefused)
+    this.watchStuck(dt)
     this.schedule(input)
 
     const clipWeight = sample.clip ? (GAZE_CLIP_WEIGHT[sample.clip] ?? 0) : 0
@@ -473,6 +501,9 @@ export class GazeController {
       sitReason: input.pose === 'stand' ? null : this.selfSat ? '스스로' : '명령',
       pose: input.pose,
       follow: this.followOn,
+      horizontal: this.horizontal,
+      warn:
+        this.stuckFor > GAZE_STUCK_S ? `목표 yaw 가 한계에 붙음 (원래 yaw 는 한계 안, ${this.stuckFor.toFixed(1)}초)` : null,
       lastTrigger: this.lastTrigger,
       still: this.stillFor > GAZE_STILL_LONG_S,
     }
@@ -541,17 +572,40 @@ export class GazeController {
     const dx = camera.x - eye.x
     const dz = camera.z - eye.z
     const horizontal = Math.hypot(dx, dz)
+    if (input.tracking) this.horizontal = horizontal
     if (input.tracking && horizontal >= GAZE_NEAR_M) {
       this.rawYaw = wrapAngle(Math.atan2(dx, dz) - sample.yaw)
       this.rawPitch = Math.atan2(camera.y - eye.y, horizontal)
     }
     if (this.rawYaw === null || this.rawPitch === null) return false
-    // 머리 위 가까이: 좌우 목표를 고정 (폰을 조금 흔들어도 고개가 휙휙 돌지 않게)
-    if (this.overhead !== 'on' && this.rawPitch > this.upLimit + GAZE_OVERHEAD_ENTER_DEG * RAD) {
+    // 좌우 한계로 자른 사용자 쪽. 거의 바로 뒤면 지금 쪽을 그대로 (뒤를 가로질러도 반대 한계로 휙 넘어가지 않게)
+    let userYaw = clamp(this.rawYaw, -this.yawLimit, this.yawLimit)
+    if (Math.abs(this.rawYaw) > this.yawLimit) {
+      const side = Math.sign(this.rawYaw)
+      if (this.outSide !== 0 && side !== this.outSide && Math.abs(this.rawYaw) > Math.PI - GAZE_BEHIND_HOLD_DEG * RAD) {
+        userYaw = this.outSide * this.yawLimit
+      } else {
+        this.outSide = side
+      }
+    } else {
+      this.outSide = 0
+    }
+    // 머리 위 가까이: 좌우 목표를 고정 (폰을 조금 흔들어도 고개가 휙휙 돌지 않게). 세기 0 인 클립(회전·자세 전환 등)은 몸이 움직여
+    // 고정한 방향이 뜻을 잃으니 풀고, 그동안은 켜지 않는다 (끝나면 새 몸 기준으로 다시 판단)
+    const bodyMoving = !(sample.clip && (GAZE_CLIP_WEIGHT[sample.clip] ?? 0) > 0)
+    if (this.overhead !== 'on' && !bodyMoving && input.tracking && horizontal < GAZE_OVERHEAD_ENTER_M) {
       this.overhead = 'on'
       // 그 순간의 목표 (머리 위로 들어오는 길의 사용자 쪽). 고개는 거기까지 부드럽게 간 뒤 멈춘다
-      this.overheadYaw = clamp(this.rawYaw, -this.yawLimit, this.yawLimit)
-    } else if (this.overhead === 'on' && this.rawPitch < this.upLimit + GAZE_OVERHEAD_EXIT_DEG * RAD) {
+      this.overheadWorldYaw = userYaw + sample.yaw
+    } else if (
+      this.overhead === 'on' &&
+      (bodyMoving ||
+        (input.tracking && horizontal > GAZE_OVERHEAD_EXIT_M) ||
+        // 방향을 믿을 만한 거리에서 사용자가 고정한 쪽에서 크게 옮겨 감 (옆 → 앞 등)
+        (input.tracking &&
+          horizontal >= GAZE_NEAR_M &&
+          Math.abs(wrapAngle(userYaw + sample.yaw - this.overheadWorldYaw)) > GAZE_OVERHEAD_DRIFT_DEG * RAD))
+    ) {
       this.overhead = 'release'
       this.overheadFrom = this.now
     }
@@ -567,17 +621,18 @@ export class GazeController {
     if (input.tracking && !overhead) {
       if (outOfRange) {
         this.outFor += dt
+        this.holdFor = holdForTurn ? this.holdFor + dt : 0
         if (this.outFor > GAZE_GIVE_UP_S && !holdForTurn) this.gaveUp = true
         // 잠깐 못 돌던 때 (전환 클립 등) 포기했어도, 다시 몸 돌리기를 기다리는 동안은 한계에 둔다
-        else if (holdForTurn) this.gaveUp = false
+        else if (holdForTurn && (!this.gaveUp || this.holdFor >= UNGIVE_UP_S)) this.gaveUp = false
       } else {
         if (this.gaveUp) this.trigger('back')
         this.outFor = 0
         this.gaveUp = false
       }
     }
-    const userYaw = clamp(this.rawYaw, -this.yawLimit, this.yawLimit)
-    const targetYaw = hold > 0 ? userYaw + (this.overheadYaw - userYaw) * hold : userYaw
+    const lockedYaw = clamp(wrapAngle(this.overheadWorldYaw - sample.yaw), -this.yawLimit, this.yawLimit)
+    const targetYaw = hold > 0 ? userYaw + (lockedYaw - userYaw) * hold : userYaw
     const targetPitch = clamp(this.rawPitch, -this.downLimit, this.upLimit)
     if (!this.angleReady) {
       this.yaw = targetYaw
@@ -612,6 +667,13 @@ export class GazeController {
     this.yawSpeed = yawSpeed
     this.pitchSpeed = pitchSpeed
     return outOfRange
+  }
+
+  /** 원래 yaw 는 한계 안쪽인데 목표 yaw 가 한계에 붙어 있는 시간 (debug 경고: 머리 위 고정이 남는 것 같은 버그를 바로 보게) */
+  private watchStuck(dt: number) {
+    const inside = this.rawYaw !== null && Math.abs(this.rawYaw) < this.yawLimit - GAZE_STUCK_INSIDE_DEG * RAD
+    const atEdge = this.angleReady && Math.abs(this.yaw) > this.yawLimit - GAZE_STUCK_EDGE_DEG * RAD
+    this.stuckFor = inside && atEdge ? this.stuckFor + dt : 0
   }
 
   /** 계기·시간으로 보기·딴청을 바꾼다 */
@@ -915,6 +977,7 @@ export function describeGaze(debug: GazeDebug): string {
   if (debug.state === 'off') return `고개: 꺼짐 (${debug.offReason ?? '?'})`
   const deg = (value: number | null) => (value === null ? '?' : `${Math.round(value)}°`)
   const parts = [
+    debug.warn ? `⚠ ${debug.warn}` : '',
     `고개: ${state}`,
     `목표 yaw ${deg(debug.yaw)} pitch ${deg(debug.pitch)}` +
       (debug.rawYaw !== null && (debug.rawYaw !== debug.yaw || debug.rawPitch !== debug.pitch)
@@ -933,7 +996,7 @@ export function describeGaze(debug: GazeDebug): string {
         : debug.bodyTurnBlock
           ? `몸 회전 안 함 (${debug.bodyTurnBlock})`
           : '몸 회전 대기 아님',
-    debug.near ? `가까움: ${debug.near}` : '',
+    debug.near ? `가까움: ${debug.near}${debug.horizontal !== null && debug.horizontal < 0.5 ? ` (눈~폰 수평 ${debug.horizontal.toFixed(2)} m)` : ''}` : '',
     debug.sitReason ? `${debug.pose === 'down' ? '엎드림' : '앉음'}: ${debug.sitReason}` : '',
     debug.lastTrigger ? `계기 ${GAZE_TRIGGER_LABEL[debug.lastTrigger]}` : '',
     debug.still ? '오래 가만히' : '',
