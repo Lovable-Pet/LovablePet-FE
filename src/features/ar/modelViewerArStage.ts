@@ -1,5 +1,19 @@
 import type { ModelViewerElement } from '@google/model-viewer'
-import { CircleGeometry, DoubleSide, Group, Mesh, MeshBasicMaterial, RingGeometry, type BufferGeometry } from 'three'
+import {
+  AnimationMixer,
+  CircleGeometry,
+  DoubleSide,
+  Group,
+  Matrix4,
+  Mesh,
+  MeshBasicMaterial,
+  RingGeometry,
+  type PerspectiveCamera,
+  Vector3,
+  type AnimationClip,
+  type BufferGeometry,
+  type Object3D,
+} from 'three'
 import {
   YAW_MISMATCH_RAD,
   type ArStage,
@@ -16,11 +30,20 @@ import {
 import type { Ray, SurfaceHit, Vec3 } from './placement/types'
 import type { StageOccluder } from './depthOcclusion'
 import type { WalkPose, WalkRig } from './walk/walkStage'
+import type { GazeCommand } from './gaze/gazeController'
+import type { GazeRig } from './gaze/gazeStage'
+import { GAZE_JAW_CLIPS } from './gaze/gazeSpec'
+import { findNeckBones, NeckAim, type BoneLike } from './neckAim'
+import { PoseBlend, quietTailStart, type BlendBone, type BlendInfo, type TrackLike } from './poseBlend'
+import { HEAD_TILT_DEG, headTiltAmount, HEAD_TILT_S, rollLocal } from './headTilt'
+import { buildBodyProxy, type BodyProxy, type ProxyNode } from './bodyProxy'
+import type { NearFadeMode, NearRig } from './nearCamera'
+import { computeTurnSweep, type SweepCapsule } from './walk/turnSweep'
 import {
+  modelFeatures,
   parseTurnExtras,
   parseWalkExtras,
   STANDING_CLIP,
-  TURN_CLIPS,
   WALK_CLIPS,
   type ExtrasSource,
   type ScaleSource,
@@ -40,6 +63,10 @@ import { enabledFeaturesOf } from './xrDepthRequest'
 // - 요소의 Symbol('scene') → ModelScene (three 의 Scene, 장면 루트)
 //   - pivot: 개 위치·방향. target: 개·바닥 표시 상자(PlacementBox)·그림자의 부모 (target 만 숨기면 셋이 함께 숨는다)
 //   - 산책: mixer(AnimationMixer)·animationsByName(클립)·model(glTF 장면: userData 에 scenes[0].extras, children 이 루트 노드)
+//   - 자세 층(PoseLayers: 자세 섞기 → 고개 바라보기·턱): renderShadow 를 인스턴스에서 한 번 감싸 그 앞에 뼈를 바꾼다.
+//     Renderer.render(화면 안 3D)·ARRenderer.onWebXRFrame 모두 preRender(애니메이션 믹서) → renderShadow → render 순서라
+//     그림자와 화면이 같은 자세를 쓴다. 클립이 바뀐 것은 animationName·currentTime(·산책 리그의 drivingClip) 으로 본다
+//   - 반응 말풍선(headScreenPoint): getCamera()(AR 중이면 XR 카메라)·model 의 head_jnt·boundingBox. 화면 안 3D 에서도 쓴다
 // - 요소 프로토타입의 Symbol('renderer') getter → Renderer (싱글턴)
 //   - arRenderer(ARRenderer): currentSession, goalPosition·goalYaw, placementComplete, placementBox, initialHitSource
 //   - threeRenderer.xr.getReferenceSpace(): model-viewer 가 쓰는 'local' 기준 공간
@@ -164,6 +191,12 @@ interface ModelSceneLike extends NodeLike {
   setShadowIntensity(intensity: number): void
   setShadowOffset(offset: number): void
   queueShadowRender(): void
+  /** 그림자가 필요하면 찍는다. 애니메이션 뒤·그리기 전에 부른다 (자세 층 PoseLayers 가 감싼다) */
+  renderShadow?(renderer: unknown): void
+  /** 화면 안 3D 에서 다음 프레임도 그리게 한다 (isDirty) */
+  queueRender?(): void
+  /** 바닥 그림자 (shadow-intensity 가 0 이면 없다). floor 는 그림자 텍스처를 붙인 평면 */
+  shadow?: { floor?: { visible: boolean; material: { opacity: number } } } | null
 }
 interface PlacementBoxLike {
   show: boolean
@@ -413,9 +446,21 @@ export class ModelViewerArStage implements ArStage {
   private yawCheck = { frames: 0, mismatchFrames: 0, worst: 0 }
   private fadeTimer: ReturnType<typeof setInterval> | undefined
   private restoreMaterials: (() => void) | null = null
+  /** 산책 리그 (고개 바라보기가 산책이 돌리는 클립을 읽는다) */
+  private walkRig: ModelViewerWalkRig | null = null
+  /** 고개 바라보기. 만들지 않았으면 null */
+  private gaze: { rig: GazeRig; unhook: () => void } | null = null
+  /** 카메라가 가까울 때 개 몸 캡슐 (모델마다 한 번) */
+  private bodyProxy: BodyProxy | null | undefined = undefined
+  /** 가까워서 흐리거나 숨긴 동안 원래 값 (1 로 돌아오면 되돌린다) */
+  private nearSaved: {
+    materials: { material: MaterialLike; transparent: boolean; opacity: number }[]
+    floor: { visible: boolean; opacity: number } | null
+  } | null = null
   private disposed = false
 
-  private constructor(
+  /** attach (AR) 나 개발용 attachSceneStage (화면 안 3D 시뮬레이션) 로 만든다 */
+  constructor(
     mv: ModelViewerElement,
     scene: ModelSceneLike,
     ar: ArRendererLike,
@@ -567,6 +612,7 @@ export class ModelViewerArStage implements ArStage {
 
   hideDog() {
     if (this.disposed) return
+    this.restoreNear()
     this.stopFade()
     this.dogPlaced = false
     this.scene.target.visible = false
@@ -645,17 +691,83 @@ export class ModelViewerArStage implements ArStage {
     const scaleSource: ScaleSource = root !== null ? 'root' : 'size'
     if (!(scale > 0) || !Number.isFinite(scale)) return null
     const durations = Object.fromEntries(WALK_CLIPS.map((name) => [name, clips.get(name)!.duration])) as Record<WalkClip, number>
+    // 산책·회전을 쓸 수 있는지는 modelFeatures 하나로 정한다 (옛 GLB 막기, 단위 시험이 같은 함수를 본다)
+    const clipNames = [...scene.animationsByName].filter(([, clip]) => isClip(clip)).map(([name]) => name)
+    const features = modelFeatures(clipNames, { walk: extras, turn: turnExtras })
+    if (!features.walk) return null
     const turnClips = parseTurnExtras(turnExtras)
     const turns: TurnClipSpec[] = []
-    for (const name of TURN_CLIPS) {
+    for (const name of features.turns) {
       const entry = turnClips[name]
       const clip = scene.animationsByName.get(name)
       if (!entry || !isClip(clip)) continue
       clips.set(name, clip)
       turns.push({ clip: name, angle: (entry.angle_deg * Math.PI) / 180, duration: clip.duration, offset: entry.end_offset_m })
     }
+    // 회전 클립마다 개 몸이 쓸고 지나가는 바닥 자리 (몸 돌리기가 사용자 발과 겹치는지)
+    if (turns.length) {
+      try {
+        this.addTurnSweeps(turns, clips)
+      } catch (error) {
+        if (import.meta.env.DEV) console.warn('[ar] 회전 클립이 쓸고 지나가는 자리를 못 구함:', error)
+      }
+    }
     const info: WalkModelInfo = { extras, extrasSource, durations, scale, scaleSource, size: { ...this.dogSize }, turns }
-    return new ModelViewerWalkRig(mv, scene, scene, this.ar, info, clips)
+    const walkRig = new ModelViewerWalkRig(mv, scene, scene, this.ar, info, clips)
+    this.walkRig = walkRig
+    // 자세 층이 산책 리그가 돌리는 클립을 읽는다 (그동안은 새로 섞지 않는다)
+    const layers = poseLayersFor(mv, scene)
+    if (layers) layers.drivingClip = () => (this.walkRig === walkRig ? walkRig.drivingClip : null)
+    return walkRig
+  }
+
+  /**
+   * 고개 바라보기 리그. 목 아래·목 가운데·머리·두 눈·코 뼈가 다 있어야 만든다 (없으면 null → 그 개는 고개를 돌리지 않는다).
+   * 자세 층(PoseLayers) 의 바라보기 자리에 넣는다: 믹서와 자세 섞기가 이번 프레임 자세를 쓴 뒤이고, 그림자와 화면이
+   * 같은 자세로 그려진다. 산책 리그가 믹서를 직접 돌릴 때(model-viewer 애니메이션 멈춤)도 그 자세 위에 더한다
+   */
+  createGazeRig(): GazeRig | null {
+    if (this.disposed) return null
+    if (this.gaze) return this.gaze.rig
+    const { scene, mv } = this
+    const layers = poseLayersFor(mv, scene)
+    if (!layers || !isNode(scene.model)) return null
+    const parts = findNeckBones(scene.model as unknown as BoneLike)
+    if (!parts) return null
+    const aim = new NeckAim(parts, scene.pivot)
+    let command: GazeCommand | null = null
+    let clip: string | null = null
+    // 산책 리그가 돌리는 중이면 그 클립, 아니면 model-viewer 가 돌리는 클립 (자세 층이 넘겨준다)
+    const apply = (drawnClip: string | null) => {
+      clip = drawnClip
+      try {
+        // 턱은 지금 그리는 클립이 대기 루프일 때만 (판단 쪽 클립은 한 프레임 늦다: 짖기로 바뀐 첫 프레임에도 입은 그대로)
+        return aim.apply(command, clip !== null && GAZE_JAW_CLIPS.has(clip))
+      } catch (error) {
+        if (import.meta.env.DEV) console.warn('[ar] 고개 바라보기를 끈다:', error)
+        command = null
+        return false
+      }
+    }
+    layers.gaze = apply
+    const rig: GazeRig = {
+      sample: () => {
+        const sample = aim.sample
+        return sample ? { eye: sample.eye, root: sample.root, yaw: sample.yaw, clip } : null
+      },
+      set: (next) => {
+        command = next
+      },
+    }
+    this.gaze = {
+      rig,
+      unhook: () => {
+        aim.restore()
+        if (layers.gaze === apply) layers.gaze = null
+        scene.queueShadowRender()
+      },
+    }
+    return rig
   }
 
   /**
@@ -701,6 +813,10 @@ export class ModelViewerArStage implements ArStage {
     for (const set of [...this.probeSets]) set.cancel()
     this.occluder?.dispose()
     this.occluder = null
+    this.gaze?.unhook()
+    this.gaze = null
+    this.walkRig = null
+    this.restoreNear()
     this.removeRing()
     this.stopFade()
     this.scene.target.visible = true
@@ -878,8 +994,150 @@ export class ModelViewerArStage implements ArStage {
     return [...found]
   }
 
+  /**
+   * 카메라가 너무 가까울 때 (./nearCamera.ts, 배포 빌드에도): 몸 표면까지 거리와 개·그림자 불투명도.
+   * 몸 캡슐은 처음 부를 때 한 번 만든다 (몸통 뼈가 없으면 거리는 null)
+   */
+  createNearRig(): NearRig | null {
+    if (this.disposed) return null
+    return {
+      distance: (point) => {
+        const proxy = this.ensureBodyProxy()
+        return proxy && this.dogPlaced ? proxy.distance(point) : null
+      },
+      setOpacity: (opacity, mode) => this.setDogOpacity(opacity, mode),
+    }
+  }
+
+  /** 개 몸 캡슐 (모델마다 한 번). 몸통 뼈가 없으면 null */
+  private ensureBodyProxy(): BodyProxy | null {
+    if (this.bodyProxy === undefined) {
+      const { model } = this.scene
+      this.bodyProxy = isNode(model) ? buildBodyProxy(model as unknown as ProxyNode) : null
+    }
+    return this.bodyProxy
+  }
+
+  /**
+   * 회전 클립마다 쓸고 지나가는 바닥 자리를 turns[].sweep 에 넣는다. 모델을 복제해 (형상·재질은 같이 쓰고 뼈만 새로) 새 믹서로
+   * 클립을 41 프레임 재생하고, 몸 캡슐 양 끝을 pivot 기준 (= 회전을 시작할 때의 개 기준, m) 으로 옮겨 바닥에 내린다.
+   * 지금 보이는 개의 자세·믹서는 건드리지 않는다
+   */
+  private addTurnSweeps(turns: TurnClipSpec[], clips: Map<string, ClipLike>) {
+    const proxy = this.ensureBodyProxy()
+    const model = this.scene.model as Object3D | null
+    if (!proxy || !model || typeof model.clone !== 'function') return
+    const pivot = this.scene.pivot as unknown as Object3D
+    pivot.updateWorldMatrix(true, false)
+    model.updateWorldMatrix(true, false)
+    const clone = model.clone(true)
+    clone.updateMatrixWorld(true)
+    const bones = new Map<string, Object3D>()
+    clone.traverse((node) => {
+      if (!bones.has(node.name)) bones.set(node.name, node)
+    })
+    // 복제 월드 → 실제 모델 월드 → pivot 기준. pivot 배율을 곱해 m 로
+    const toPivot = new Matrix4().copy(pivot.matrixWorld).invert().multiply(model.matrixWorld).multiply(new Matrix4().copy(clone.matrixWorld).invert())
+    const pivotScale = new Vector3().setFromMatrixColumn(pivot.matrixWorld, 0).length()
+    const radiusScale = proxy.scale
+    const capsules = proxy.capsules
+      .map((capsule) => ({ a: bones.get(capsule.a.name), b: bones.get(capsule.b.name), radius: capsule.radius }))
+      .filter((capsule): capsule is { a: Object3D; b: Object3D; radius: number } => !!capsule.a && !!capsule.b)
+    const mixer = new AnimationMixer(clone)
+    const point = new Vector3()
+    const floor = (node: Object3D) => {
+      point.setFromMatrixPosition(node.matrixWorld).applyMatrix4(toPivot)
+      return { u: point.x * pivotScale, v: point.z * pivotScale }
+    }
+    for (const turn of turns) {
+      const clip = clips.get(turn.clip)
+      if (!clip) continue
+      const action = mixer.clipAction(clip as unknown as AnimationClip)
+      action.play()
+      turn.sweep = computeTurnSweep(
+        turn.duration,
+        (time) => {
+          action.time = time
+          mixer.update(0)
+          clone.updateMatrixWorld(true)
+        },
+        () =>
+          capsules.map(({ a, b, radius }): SweepCapsule => {
+            const pa = floor(a)
+            const pb = floor(b)
+            return { au: pa.u, av: pa.v, bu: pb.u, bv: pb.v, r: radius * radiusScale }
+          }),
+      )
+      action.stop()
+      mixer.uncacheAction(clip as unknown as AnimationClip)
+    }
+  }
+
+  /**
+   * 개와 그림자 불투명도. 1 이면 원래대로, 0 이면 모델과 그림자를 숨긴다. 사이 값은 fade 방식에서만
+   * (재질을 transparent 로, depthWrite 는 그대로 둬서 몸 안쪽이 덜 비친다). 다음 렌더부터 보인다
+   */
+  private setDogOpacity(opacity: number, mode: NearFadeMode) {
+    if (this.disposed || !this.dogPlaced) return
+    const { model } = this.scene
+    if (!isNode(model)) return
+    if (!(opacity < 1)) {
+      this.restoreNear()
+      return
+    }
+    if (!this.nearSaved) {
+      // 놓을 때의 페이드인이 돌고 있으면 끝낸다 (재질 원래 값을 같이 쓰지 않게)
+      this.stopFade()
+      const floor = this.scene.shadow?.floor
+      this.nearSaved = {
+        materials: this.materials().map((material) => ({ material, transparent: material.transparent, opacity: material.opacity })),
+        floor: floor ? { visible: floor.visible, opacity: floor.material.opacity } : null,
+      }
+    }
+    const saved = this.nearSaved
+    const floor = this.scene.shadow?.floor
+    if (opacity <= 0 || mode === 'hide') {
+      model.visible = false
+      if (floor) floor.visible = false
+      return
+    }
+    model.visible = true
+    for (const { material, opacity: base } of saved.materials) {
+      if (!material.transparent) {
+        material.transparent = true
+        material.needsUpdate = true
+      }
+      material.opacity = base * opacity
+    }
+    if (floor && saved.floor) {
+      floor.visible = saved.floor.visible
+      floor.material.opacity = saved.floor.opacity * opacity
+    }
+  }
+
+  private restoreNear() {
+    const saved = this.nearSaved
+    if (!saved) return
+    this.nearSaved = null
+    const { model } = this.scene
+    if (isNode(model)) model.visible = true
+    for (const { material, transparent, opacity } of saved.materials) {
+      if (material.transparent !== transparent) {
+        material.transparent = transparent
+        material.needsUpdate = true
+      }
+      material.opacity = opacity
+    }
+    const floor = this.scene.shadow?.floor
+    if (floor && saved.floor) {
+      floor.visible = saved.floor.visible
+      floor.material.opacity = saved.floor.opacity
+    }
+  }
+
   /** 투명에서 짧게 페이드인. 재질의 transparent·opacity 는 끝나면 원래대로 돌린다 */
   private revealDog() {
+    this.restoreNear()
     this.stopFade()
     const saved =
       REVEAL_FADE_MS > 0
@@ -942,6 +1200,8 @@ class ModelViewerWalkRig implements WalkRig {
   /** 출발 때 잡아 둔 서기 루프 시간 (섞을 때 그 자세로 멈춰 둔다) */
   private standingTime = 0
   private driving = false
+  /** 돌리는 중인 클립 (섞는 중이면 서기가 아닌 쪽). 돌려준 뒤에는 null */
+  drivingClip: string | null = null
 
   constructor(
     mv: ModelViewerElement,
@@ -996,6 +1256,7 @@ class ModelViewerWalkRig implements WalkRig {
     this.driving = false
     // walk_stop·제자리 회전의 끝 = 서기 루프 첫 프레임. 서기를 0초로 켜고 (남은 액션은 끈다) model-viewer 에 돌려준다
     this.apply([[STANDING_CLIP, 0, 1]])
+    this.drivingClip = null
     // 같은 액션이 model-viewer 의 지금 액션이라 섞지 않고 그 자리에서 이어 돈다 (재생 배율도 다시 맞춘다)
     this.mv.play()
   }
@@ -1018,6 +1279,7 @@ class ModelViewerWalkRig implements WalkRig {
       action.time = time
       used.add(action)
     }
+    this.drivingClip = layers[layers.length - 1][0]
     const names = others ? [...animationsByName.keys()] : [STANDING_CLIP, ...WALK_CLIPS, ...this.info.turns.map((turn) => turn.clip)]
     for (const name of names) {
       const clip = animationsByName.get(name)
@@ -1027,4 +1289,378 @@ class ModelViewerWalkRig implements WalkRig {
     mixer.update(0)
     this.scene.queueShadowRender()
   }
+}
+
+// ── 개발용 PC 시뮬레이션 (?sim=1, ./sim): 화면 안 3D 에서 XR 세션 없이 같은 스테이지 ──
+
+/** 시뮬레이션이 장면에 바라는 것 (그리기 직전 카메라를 가상 사용자 자리로, 바닥 격자를 넣고 빼기) */
+export interface SceneStageHandle {
+  /** 산책·고개·가까움 리그를 만들고 placeDog 로 개를 놓는 스테이지. start·createProbes 는 부르지 않는다 (프레임은 시뮬레이션이 만든다) */
+  stage: ModelViewerArStage
+  /** 화면 카메라 (three PerspectiveCamera). 그리기 직전에 바꾼다 */
+  camera: PerspectiveCamera
+  /** 그리기 직전 (자세 층·바라보기 뒤) 부를 함수. 돌려준 함수로 뺀다 */
+  beforeDraw(fn: () => void): () => void
+  /** 다음 프레임도 그리게 한다 (화면 안 3D 는 바뀐 프레임만 그린다) */
+  queueRender(): void
+  add(object: Object3D): void
+  remove(object: Object3D): void
+  /** 원래대로 (그리기 훅·카메라 목표) */
+  dispose(): void
+}
+
+const isCamera = (value: unknown): value is PerspectiveCamera =>
+  isRecord(value) && (value as { isPerspectiveCamera?: boolean }).isPerspectiveCamera === true
+
+/**
+ * 개발용 PC 시뮬레이션 (?sim=1, 화면 안 3D) 이 쓰는 스테이지. ARRenderer 처럼 모델 바닥 가운데를 pivot 에 맞추고 (setTarget),
+ * goalPosition·goalYaw 를 받는 가짜 ARRenderer 와 빈 세션으로 ModelViewerArStage 를 만든다 (산책·고개·가까움 리그와 placeDog 는 그대로).
+ * 배포 빌드에서는 부르는 곳(./sim)이 없어 빠진다. 내부 모양이 다르면 null
+ */
+export function attachSceneStage(mv: ModelViewerElement): SceneStageHandle | null {
+  const scene = readSymbol(mv, 'scene')
+  if (!isModelScene(scene)) return null
+  const raw = scene as unknown as Record<string, unknown>
+  const camera = raw.camera
+  if (!isCamera(camera) || typeof raw.setTarget !== 'function' || typeof scene.renderShadow !== 'function' || typeof scene.queueRender !== 'function') return null
+  const target = (scene as unknown as { getTarget(): Vector3 }).getTarget?.()
+  const { min, max } = scene.boundingBox
+  ;(scene as unknown as { setTarget(x: number, y: number, z: number): void }).setTarget((min.x + max.x) / 2, min.y, (min.z + max.z) / 2)
+  scene.jumpToGoal()
+  const ar: ArRendererLike = {
+    currentSession: null,
+    presentedScene: scene,
+    goalPosition: new Vector3(),
+    goalYaw: 0,
+    placementComplete: true,
+    placementBox: null,
+    initialHitSource: null,
+    dispatchEvent: () => {},
+  }
+  const session = {
+    requestReferenceSpace: () => Promise.reject(new Error('시뮬레이션')),
+    requestAnimationFrame: () => 0,
+    cancelAnimationFrame: () => {},
+  } as unknown as XrSession
+  const stage = new ModelViewerArStage(mv, scene, ar, session, {} as XrSpace)
+  const hooks = new Set<() => void>()
+  const inner = Object.prototype.hasOwnProperty.call(scene, 'renderShadow') ? scene.renderShadow : null
+  const draw = scene.renderShadow.bind(scene)
+  scene.renderShadow = (renderer: unknown) => {
+    draw(renderer)
+    for (const hook of hooks) hook()
+  }
+  const added = new Set<Object3D>()
+  return {
+    stage,
+    camera,
+    beforeDraw: (fn) => {
+      hooks.add(fn)
+      return () => hooks.delete(fn)
+    },
+    queueRender: () => scene.queueRender?.(),
+    add: (object) => {
+      added.add(object)
+      scene.add(object)
+    },
+    remove: (object) => {
+      added.delete(object)
+      object.removeFromParent()
+    },
+    dispose: () => {
+      hooks.clear()
+      for (const object of added) object.removeFromParent()
+      added.clear()
+      stage.dispose()
+      if (inner) scene.renderShadow = inner
+      else delete (scene as { renderShadow?: unknown }).renderShadow
+      if (target) (scene as unknown as { setTarget(x: number, y: number, z: number): void }).setTarget(target.x, target.y, target.z)
+      scene.pivot.position.set(0, 0, 0)
+      setPivotYaw(scene.pivot, 0)
+      scene.queueRender?.()
+    },
+  }
+}
+
+// ── 자세 층: 렌더 직전에 뼈를 바꾸는 것들 (화면 안 3D·AR 둘 다) ──
+// scene.renderShadow 를 인스턴스에서 한 번 감싸 그 앞에 순서대로: 자세 섞기(./poseBlend.ts) → 절차적 갸우뚱(./headTilt.ts) →
+// 고개 바라보기·턱(AR, createGazeRig) → 그리기. 갸우뚱은 '그린 자세'(다음 섞기의 출발)에 들어가고, 바라보기는 그 기울기를 남긴다.
+// 화면 안 3D 는 장면이 바뀐 프레임에만 그려서 (isDirty), 섞는 동안 애니메이션이 멈춰 있으면 다음 프레임도 그리게 한다.
+// 산책·제자리 회전 클립 사이는 산책 리그가 출발 때 서기 자세를 0.3 s 섞고 이음매가 같아 (walk_stop·회전 끝 = 서기 첫 프레임)
+// 여기서 다시 섞지 않는다 (그 전에 시작한 섞기는 이어서 줄인다)
+
+/** 시간이 처음으로 돌아가도 처음부터 다시가 아닌 루프 클립 (손 줘는 루프로 들고 있다) */
+const LOOPING_CLIPS: ReadonlySet<string> = new Set(['standing', 'sitting', 'lying', 'idle', 'shake', 'walk'])
+
+interface SkinnedLike {
+  isSkinnedMesh?: boolean
+  skeleton?: { bones: unknown[] }
+}
+
+const isBlendBone = (value: unknown): value is BlendBone =>
+  isRecord(value) &&
+  isRecord(value.quaternion) &&
+  typeof value.quaternion.set === 'function' &&
+  isVector(value.position) &&
+  isRecord(value.scale) &&
+  typeof value.scale.x === 'number'
+
+/** 모델의 스킨 뼈 전부 (스킨이 여럿이면 합친다). 모양이 다르면 null */
+function skinBonesOf(model: NodeLike): BlendBone[] | null {
+  const bones = new Set<unknown>()
+  model.traverse((node) => {
+    const skinned = node as unknown as SkinnedLike
+    if (skinned.isSkinnedMesh && Array.isArray(skinned.skeleton?.bones)) for (const bone of skinned.skeleton.bones) bones.add(bone)
+  })
+  const list = [...bones]
+  return list.length > 0 && list.every(isBlendBone) ? list : null
+}
+
+class PoseLayers {
+  private readonly mv: ModelViewerElement
+  private readonly scene: ModelSceneLike
+  /** 자세 섞기를 할지 (화면이 attachPoseLayers 로 켠다) */
+  blendOn = false
+  /** 산책 리그가 돌리는 클립 (AR 스테이지가 넣는다). 없으면 null */
+  drivingClip: () => string | null = () => null
+  /** 고개 바라보기·턱 (AR 스테이지가 넣는다). 지금 그리는 클립을 받고, 뼈를 바꿨으면 true */
+  gaze: ((clip: string | null) => boolean) | null = null
+  private blend: PoseBlend | null = null
+  /** blend 를 만든 모델 (모델이 바뀌면 다시 만든다) */
+  private model: unknown = undefined
+  /** 지난 프레임 클립 · 시간 · 산책 리그가 돌렸는지. 처음이면 undefined */
+  private clip: string | null | undefined = undefined
+  private time = 0
+  private walkDriven = false
+  /** 머리 뼈와 바라보는 축 (모델마다 한 번, 없으면 null: 갸우뚱 못 함) */
+  private head: { model: unknown; bone: BlendBone; axis: readonly [number, number, number] } | null = null
+  /** 절차적 갸우뚱: 시작 시각 (s) · 기울이는 쪽 (+1 / −1, 번갈아) */
+  private tilt: { start: number; side: number } | null = null
+  private tiltSide = 1
+
+  constructor(mv: ModelViewerElement, scene: ModelSceneLike, original: (renderer: unknown) => void) {
+    this.mv = mv
+    this.scene = scene
+    scene.renderShadow = (renderer: unknown) => {
+      this.run()
+      original.call(scene, renderer)
+    }
+  }
+
+  get lastBlend(): BlendInfo | null {
+    return this.blend?.last ?? null
+  }
+
+  get blending(): boolean {
+    return this.blend?.blending ?? false
+  }
+
+  /** 절차적 갸우뚱 시작 (섞기를 쓰는 중이고 머리 뼈·바라보는 축이 있을 때). 시작했으면 true */
+  tiltHead(): boolean {
+    if (!this.blendOn || !this.blend || !this.headParts()) return false
+    this.tilt = { start: performance.now() / 1000, side: this.tiltSide }
+    this.tiltSide = -this.tiltSide
+    this.scene.queueRender?.()
+    return true
+  }
+
+  private headParts() {
+    const model = this.scene.model
+    if (this.head?.model === model) return this.head
+    const parts = isNode(model) ? findNeckBones(model as unknown as BoneLike) : null
+    const bone = parts?.bones[2]
+    this.head = parts && isBlendBone(bone) ? { model, bone, axis: parts.gazeAxis } : null
+    return this.head
+  }
+
+  /** 섞기 뒤 머리 뼈를 바라보는 축 둘레로 기울인다 (섞기가 매 프레임 클립 값으로 되돌려 둬 쌓이지 않는다). 썼으면 true */
+  private applyTilt(now: number): boolean {
+    const tilt = this.tilt
+    if (!tilt) return false
+    const t = now - tilt.start
+    if (t >= HEAD_TILT_S) {
+      this.tilt = null
+      return false
+    }
+    const head = this.headParts()
+    const amount = headTiltAmount(t)
+    if (!head || !(amount > 0)) return false
+    const q = head.bone.quaternion
+    const [x, y, z, w] = rollLocal(q, head.axis, tilt.side * amount * HEAD_TILT_DEG * (Math.PI / 180))
+    q.set(x, y, z, w)
+    return true
+  }
+
+  private run() {
+    const { mv, scene } = this
+    const walkClip = this.drivingClip()
+    const clip = walkClip ?? (mv.animationName || null)
+    let wrote = false
+    if (this.blendOn) {
+      if (scene.model !== this.model) {
+        this.model = scene.model
+        this.blend = this.createBlend()
+        this.clip = undefined
+      }
+      const blend = this.blend
+      if (blend) {
+        const walkDriven = walkClip !== null
+        const time = walkDriven ? 0 : mv.currentTime
+        const switched =
+          this.clip !== undefined &&
+          !walkDriven &&
+          !this.walkDriven &&
+          (clip !== this.clip || (clip !== null && !LOOPING_CLIPS.has(clip) && time < this.time - 1e-4))
+        try {
+          const now = performance.now() / 1000
+          wrote = blend.apply(now, switched, switched ? { from: this.clip ?? null, to: clip } : undefined)
+          if (this.applyTilt(now)) wrote = true
+          blend.markDrawn()
+        } catch (error) {
+          if (import.meta.env.DEV) console.warn('[ar] 자세 섞기를 끈다:', error)
+          this.blend = null
+        }
+        this.clip = clip
+        this.time = time
+        this.walkDriven = walkDriven
+      }
+    }
+    if (this.gaze?.(clip)) wrote = true
+    this.blend?.commit()
+    if (wrote) scene.queueShadowRender()
+    // 화면 안 3D: 애니메이션이 멈춰 있어도 섞기·갸우뚱이 끝날 때까지 그린다 (그린 뒤 isDirty 가 풀리므로 그 다음에 건다)
+    if ((this.blend?.blending || this.tilt) && mv.paused) queueMicrotask(() => scene.queueRender?.())
+  }
+
+  private createBlend(): PoseBlend | null {
+    const model = this.scene.model
+    if (!isNode(model)) return null
+    const bones = skinBonesOf(model)
+    if (!bones) return null
+    // 스킨 루트의 부모 월드 배율 (glTF 루트 노드 배율 등). 관절 위치 어긋남을 m 로 잰다
+    const outer = bones.find((bone) => !bones.includes(bone.parent as BlendBone))?.parent
+    const outerScale = () => {
+      const elements = isRecord(outer) ? matrixElements(outer.matrixWorld) : null
+      return elements ? Math.hypot(elements[0], elements[1], elements[2]) : 1
+    }
+    return new PoseBlend(bones, { outerScale })
+  }
+}
+
+const poseLayers = new WeakMap<object, PoseLayers | null>()
+
+/** 장면의 자세 층 (처음 부를 때 renderShadow 를 감싼다). 모양이 다르면 null */
+function poseLayersFor(mv: ModelViewerElement, scene: ModelSceneLike): PoseLayers | null {
+  if (poseLayers.has(scene)) return poseLayers.get(scene)!
+  const original = scene.renderShadow
+  const layers = typeof original === 'function' ? new PoseLayers(mv, scene, original) : null
+  poseLayers.set(scene, layers)
+  return layers
+}
+
+/** 화면이 쓰는 자세 층 */
+export interface PoseLayersHandle {
+  /** 마지막으로 시작한 섞기 (?debug) */
+  lastBlend(): BlendInfo | null
+  /** 섞는 중인지 */
+  blending(): boolean
+  /** 절차적 갸우뚱 (앉거나 엎드린 개를 톡). 머리 뼈가 없으면 false */
+  tiltHead(): boolean
+}
+
+/**
+ * 클립 사이 자세 섞기를 켠다 (화면 안 3D·AR 둘 다, 모델을 불러온 뒤). 내부 모양이 다르면 null:
+ * 부르는 쪽은 model-viewer 크로스페이드를 그대로 쓴다
+ */
+export function attachPoseLayers(mv: ModelViewerElement): PoseLayersHandle | null {
+  const scene = readSymbol(mv, 'scene')
+  if (!isModelScene(scene)) return null
+  const layers = poseLayersFor(mv, scene)
+  if (!layers || !isNode(scene.model) || !skinBonesOf(scene.model)) return null
+  layers.blendOn = true
+  return { lastBlend: () => layers.lastBlend, blending: () => layers.blending, tiltHead: () => layers.tiltHead() }
+}
+
+interface TrackedClipLike extends ClipLike {
+  tracks: TrackLike[]
+}
+const isTrackedClip = (value: unknown): value is TrackedClipLike =>
+  isClip(value) &&
+  Array.isArray((value as unknown as Record<string, unknown>).tracks) &&
+  ((value as unknown as Record<string, unknown>).tracks as unknown[]).every(
+    (track) => isRecord(track) && typeof track.name === 'string' && typeof track.getValueSize === 'function' && isRecord(track.times) && isRecord(track.values),
+  )
+
+/**
+ * 클립의 빈 끝: 끝부분이 첫 프레임 자세로 돌아와 그대로인 시점 (s) 과 길이. 빈 끝이 없는 클립·없는 클립은 빼고 돌려준다
+ * (DogAnimator 가 거기서 끊고 다음으로 간다. 차이는 자세 섞기가 맡는다)
+ */
+export function clipQuietEnds(mv: ModelViewerElement, names: readonly string[]): Record<string, { end: number; duration: number }> {
+  const scene = readSymbol(mv, 'scene')
+  const out: Record<string, { end: number; duration: number }> = {}
+  if (!isAnimatedScene(scene)) return out
+  for (const name of names) {
+    const clip = scene.animationsByName.get(name)
+    if (!isTrackedClip(clip)) continue
+    const end = quietTailStart(clip.tracks, clip.duration)
+    // 한두 프레임 남는 것은 그대로 끝까지
+    if (end < clip.duration - 0.05) out[name] = { end, duration: clip.duration }
+  }
+  return out
+}
+
+// ── 반응 말풍선: 개 머리 위의 화면 위치 (화면 안 3D·AR 둘 다) ──
+// ModelScene.getCamera() 는 AR 중에는 XR 카메라(three 가 매 프레임 맞춘 것), 밖에서는 model-viewer 카메라다
+
+/** 말풍선 자리: 머리 뼈에서 모델 높이의 이만큼 위 */
+const BUBBLE_LIFT_RATIO = 0.18
+const HEAD_BONE = 'head_jnt'
+
+interface ObjectLike {
+  getObjectByName(name: string): unknown
+}
+const headOf = new WeakMap<object, { getWorldPosition(target: Vector3): Vector3 } | null>()
+const headVector = new Vector3()
+const viewMatrix = new Matrix4()
+const projectionMatrix = new Matrix4()
+const targetMatrix = new Matrix4()
+/** three 행렬 (model-viewer 쪽 three 와 같은 판인지 instanceof 로 보지 않고 elements 만 읽는다) */
+const matrixElements = (value: unknown) => {
+  const elements: unknown = isRecord(value) ? value.elements : null
+  return isRecord(elements) && elements.length === 16 ? Array.from(elements as unknown as ArrayLike<number>) : null
+}
+
+/**
+ * 개 머리 위 자리의 화면 위치. x·y 는 0~1 (model-viewer 화면 기준, 왼쪽 위 원점)이고 화면 밖이면 그 밖의 값.
+ * 카메라 뒤이거나 내부 모양이 다르면 null. 머리 뼈가 없는 모델은 모델 상자 윗면 가운데에서 잰다
+ */
+export function headScreenPoint(mv: ModelViewerElement): { x: number; y: number } | null {
+  const scene = readSymbol(mv, 'scene')
+  if (!isModelScene(scene) || !isRecord(scene) || typeof scene.getCamera !== 'function') return null
+  const camera = (scene.getCamera as () => unknown).call(scene)
+  const cameraWorld = isRecord(camera) ? matrixElements(camera.matrixWorld) : null
+  const projection = isRecord(camera) ? matrixElements(camera.projectionMatrix) : null
+  if (!cameraWorld || !projection) return null
+  const model = scene.model
+  if (!isRecord(model) || typeof model.getObjectByName !== 'function') return null
+  if (!headOf.has(model)) {
+    const head = (model as unknown as ObjectLike).getObjectByName(HEAD_BONE)
+    headOf.set(model, isRecord(head) && typeof head.getWorldPosition === 'function' ? (head as never) : null)
+  }
+  const { min, max } = scene.boundingBox
+  const height = max.y - min.y
+  const head = headOf.get(model)
+  if (head) head.getWorldPosition(headVector)
+  else {
+    headVector.x = (min.x + max.x) / 2
+    headVector.y = max.y
+    headVector.z = (min.z + max.z) / 2
+    headVector.applyMatrix4(targetMatrix.fromArray(Array.from(scene.target.matrixWorld.elements)))
+  }
+  headVector.y += height * BUBBLE_LIFT_RATIO
+  headVector.applyMatrix4(viewMatrix.fromArray(cameraWorld).invert())
+  // 카메라는 -z 를 본다
+  if (headVector.z >= 0) return null
+  headVector.applyMatrix4(projectionMatrix.fromArray(projection))
+  return { x: (headVector.x + 1) / 2, y: (1 - headVector.y) / 2 }
 }

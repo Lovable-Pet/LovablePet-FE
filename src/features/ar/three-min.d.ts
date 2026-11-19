@@ -1,4 +1,4 @@
-// three 0.172.0 은 타입을 싣지 않고 @types/three 도 없다. AR 바닥 원(modelViewerArStage.ts)과
+// three 0.172.0 은 타입을 싣지 않고 @types/three 도 없다. AR 바닥 원·회전 클립이 쓸고 지나가는 자리(modelViewerArStage.ts)와
 // 가림 시험(depthOcclusion.ts, 개발용)에 쓰는 것만 적는다. @types/three 를 들이면 이 파일을 지운다
 declare module 'three' {
   export const DoubleSide: number
@@ -12,10 +12,46 @@ declare module 'three' {
   export class Matrix4 {
     readonly elements: number[]
     fromArray(array: ArrayLike<number>, offset?: number): this
+    copy(matrix: Matrix4): this
+    multiply(matrix: Matrix4): this
     invert(): this
   }
 
+  export class Vector3 {
+    constructor(x?: number, y?: number, z?: number)
+    x: number
+    y: number
+    z: number
+    set(x: number, y: number, z: number): this
+    /** 카메라로 정규 장치 좌표(−1~1)에 투영 (개발용 시뮬레이션 겹친 그림) */
+    project(camera: Camera): this
+    setFromMatrixPosition(matrix: Matrix4): this
+    setFromMatrixColumn(matrix: Matrix4, index: number): this
+    applyMatrix4(matrix: Matrix4): this
+    length(): number
+  }
+
+  export class AnimationClip {
+    readonly name: string
+    readonly duration: number
+  }
+
+  export class AnimationAction {
+    time: number
+    play(): this
+    stop(): this
+  }
+
+  export class AnimationMixer {
+    constructor(root: Object3D)
+    clipAction(clip: AnimationClip): AnimationAction
+    uncacheAction(clip: AnimationClip): void
+    update(deltaTime: number): this
+  }
+
   export class Object3D {
+    readonly name: string
+    readonly matrixWorld: Matrix4
     visible: boolean
     renderOrder: number
     frustumCulled: boolean
@@ -23,12 +59,39 @@ declare module 'three' {
     readonly position: { set(x: number, y: number, z: number): unknown }
     add(...objects: Object3D[]): this
     removeFromParent(): this
+    clone(recursive?: boolean): this
+    traverse(callback: (node: Object3D) => void): void
+    updateWorldMatrix(updateParents: boolean, updateChildren: boolean): void
+    updateMatrixWorld(force?: boolean): void
     raycast(...args: unknown[]): void
     /** 그리기 바로 전 (카메라마다). camera 는 XR 뷰 카메라이거나 그림자 카메라 */
     onBeforeRender(renderer: unknown, scene: unknown, camera: unknown, geometry: unknown, material: unknown, group: unknown): void
   }
 
   export class Group extends Object3D {}
+
+  // 개발용 PC 시뮬레이션 (?sim=1): 화면 카메라를 가상 사용자 자리로, 바닥 격자
+  export class Camera extends Object3D {
+    readonly matrixWorldInverse: Matrix4
+    readonly projectionMatrix: Matrix4
+    readonly up: { set(x: number, y: number, z: number): unknown }
+    lookAt(x: number, y: number, z: number): void
+  }
+
+  export class PerspectiveCamera extends Camera {
+    constructor(fov?: number, aspect?: number, near?: number, far?: number)
+    readonly isPerspectiveCamera: true
+    fov: number
+    aspect: number
+    near: number
+    far: number
+    updateProjectionMatrix(): void
+  }
+
+  export class GridHelper extends Object3D {
+    constructor(size?: number, divisions?: number, color1?: number, color2?: number)
+    dispose(): void
+  }
 
   export class BufferAttribute {
     constructor(array: Float32Array, itemSize: number)
