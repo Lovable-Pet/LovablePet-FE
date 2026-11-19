@@ -165,6 +165,8 @@ export class DogAnimator {
   private readonly onLog?: (event: AnimatorLog) => void
   private disposed = false
   readonly hasCommands: boolean
+  /** 모델에 있는 클립 이름 */
+  private readonly clips: ReadonlySet<string>
   /** 개를 탭하면 갸우뚱하는지 (안내 문구용) */
   readonly tapIsHeadTilt: boolean
   /** 대기 루프. 진도 템플릿은 standing, 다른 템플릿은 idle */
@@ -208,6 +210,7 @@ export class DogAnimator {
     this.onLog = options.onLog
     this.clipEnds = options.clipEnds ?? {}
     const clips = new Set(mv.availableAnimations)
+    this.clips = clips
     this.hasCommands = COMMAND_CLIPS.every((clip) => clips.has(clip))
     this.idleClip = clips.has('standing') ? 'standing' : clips.has('idle') ? 'idle' : (mv.availableAnimations[0] ?? '')
     const hasHeadTilt = clips.has(HEAD_TILT)
@@ -440,10 +443,12 @@ export class DogAnimator {
         continue
       }
       this.stepIndex++
+      // 모델에 없는 클립 (옛 GLB) 은 조용히 건너뛴다: 틀면 finished 가 오지 않아 명령이 끝나지 않는다
+      if (!this.clips.has(step[1])) continue
       if (step[0] === 'play') return this.play(step[1], step[2] ?? 1)
       if (step[0] === 'react') {
         // 반응 클립은 서기 자세 클립이라 서 있을 때만 (차례가 왔을 때 다시 본다)
-        if (this.pose !== 'stand' || !step[1]) continue
+        if (this.pose !== 'stand') continue
         this.onReact?.(step[2])
         return this.play(step[1], 1)
       }

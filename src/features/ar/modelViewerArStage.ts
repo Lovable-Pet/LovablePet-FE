@@ -40,10 +40,10 @@ import { buildBodyProxy, type BodyProxy, type ProxyNode } from './bodyProxy'
 import type { NearFadeMode, NearRig } from './nearCamera'
 import { computeTurnSweep, type SweepCapsule } from './walk/turnSweep'
 import {
+  modelFeatures,
   parseTurnExtras,
   parseWalkExtras,
   STANDING_CLIP,
-  TURN_CLIPS,
   WALK_CLIPS,
   type ExtrasSource,
   type ScaleSource,
@@ -691,9 +691,13 @@ export class ModelViewerArStage implements ArStage {
     const scaleSource: ScaleSource = root !== null ? 'root' : 'size'
     if (!(scale > 0) || !Number.isFinite(scale)) return null
     const durations = Object.fromEntries(WALK_CLIPS.map((name) => [name, clips.get(name)!.duration])) as Record<WalkClip, number>
+    // 산책·회전을 쓸 수 있는지는 modelFeatures 하나로 정한다 (옛 GLB 막기, 단위 시험이 같은 함수를 본다)
+    const clipNames = [...scene.animationsByName].filter(([, clip]) => isClip(clip)).map(([name]) => name)
+    const features = modelFeatures(clipNames, { walk: extras, turn: turnExtras })
+    if (!features.walk) return null
     const turnClips = parseTurnExtras(turnExtras)
     const turns: TurnClipSpec[] = []
-    for (const name of TURN_CLIPS) {
+    for (const name of features.turns) {
       const entry = turnClips[name]
       const clip = scene.animationsByName.get(name)
       if (!entry || !isClip(clip)) continue

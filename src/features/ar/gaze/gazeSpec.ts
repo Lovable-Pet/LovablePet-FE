@@ -191,8 +191,11 @@ export function closeStandDistance(bodyLength: number | null | undefined): numbe
 /** 폰(진도·리트리버)에서 자연스러워 기본으로 켠다 */
 export const CLOSE_SIT_DEFAULT = true
 
-/** 배포 빌드에서 켤지. 폰 확인 뒤 정한다 (개발 모드는 ?gaze=0 이 아니면 켬) */
-export const GAZE_IN_PRODUCTION = false
+/**
+ * 배포 빌드에서 켤지 (개발 모드는 ?gaze=0 이 아니면 켬). 고개 바라보기·가까이 앉기·따라보기·몸 돌리기·회전 포기가 모두 이 스위치 하나를 따른다.
+ * false 로 되돌리면 배포 빌드에서는 바라보기 리그·렌더 훅을 만들지 않아 고개·몸 돌리기·가까이 앉기·따라보기 토글이 다 빠진다 (산책·명령·톡·꾹·음성은 그대로)
+ */
+export const GAZE_IN_PRODUCTION = true
 
 /** 개발용 (?gazemax·?gazeup·?gazeon·?gazeoff·?bodyturn·?gazejaw·?gazejawup·?closesit=0). 없으면 위 기본값 */
 export interface GazeTuning {

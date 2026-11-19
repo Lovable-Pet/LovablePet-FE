@@ -3,7 +3,7 @@ import { describeGaze, GazeController, type GazePose } from './gaze/gazeControll
 import type { GazeTuning } from './gaze/gazeSpec'
 import type { GazeHost } from './gaze/gazeStage'
 import { StandTurn, type TurnPlan } from './walk/standTurn'
-import { walkSpec } from './walk/walkSpec'
+import { modelButtons, walkSpec, type ModelFeatures } from './walk/walkSpec'
 import type { WalkHost } from './walk/walkStage'
 
 export interface ArGaze {
@@ -107,12 +107,13 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
     latest.current = options
   })
   /** 회전 클립이 있는 개 (StandTurn.available 과 같은 기준) · 산책 리그의 몸길이 (m, 가까이 앉은 뒤 일어나는 거리) */
-  const walkInfo = useMemo(() => {
-    if (!walkHost) return { hasTurns: false, bodyLength: null }
+  const walkInfo = useMemo((): { features: ModelFeatures; bodyLength: number | null } => {
+    if (!walkHost) return { features: { walk: false, turns: [] }, bodyLength: null }
     const spec = walkSpec(walkHost.rig.info)
-    return { hasTurns: (spec.turns?.length ?? 0) > 0, bodyLength: spec.bodyLength }
+    // 산책 리그는 modelFeatures 가 walk 일 때만 생기고, turns 는 그 회전 클립이다 (옛 GLB 면 리그가 없어 둘 다 꺼짐)
+    return { features: { walk: true, turns: (spec.turns ?? []).map((turn) => turn.clip) }, bodyLength: spec.bodyLength }
   }, [walkHost])
-  const canFollow = enabled && !!host && walkInfo.hasTurns && tuning?.bodyTurnS !== 0
+  const canFollow = !!host && modelButtons(walkInfo.features, { gaze: enabled, bodyTurn: tuning?.bodyTurnS !== 0 }).follow
   /** 토글이 없는 개 (회전 클립 없음) 는 늘 켜짐: 다른 개에서 끈 상태가 남아 가까이 앉기·일어나기를 막지 않게 */
   const effectiveFollow = follow || !canFollow
   const followRef = useRef(effectiveFollow)
