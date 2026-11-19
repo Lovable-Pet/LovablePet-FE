@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useFlashMessage } from '../../hooks/useFlashMessage'
 import { COMMANDS, type CommandId } from './dogAnimator'
-import { matchVoiceCommand } from './voiceWords'
+import { addVoiceLog, type VoiceLogEntry } from './voiceLog'
+import { matchVoiceAlternatives, voiceMissHint } from './voiceWords'
 
 // 마이크 버튼으로 말해서 명령한다 (Web Speech API).
 // - 한 번 누르면 한 번 듣고 끝난다 (continuous 를 쓰지 않는다). 듣는 중에 다시 누르면 멈춘다
-// - 말하는 중간 결과(interimResults)에서 단어가 잡히면 바로 명령하고 듣기를 멈춘다
+// - 후보(maxAlternatives)를 전부 보고 명령이 잡힌 후보 중 앞 순위를 쓴다 (voiceWords.matchVoiceAlternatives)
+// - 말하는 중간 결과(interimResults)에서 단어(includes)가 잡히면 바로 명령하고 듣기를 멈춘다.
+//   문장 전체로만 맞추는 말(exact)과 자모 비교는 최종 결과에서만
 // - 들린 말에서 명령을 못 찾으면 '알아듣지 못했어요' 를 띄우고 onMiss 를 부른다 (한 번 들을 때 한 번).
+//   한 글자 '손'류면 '손 줘처럼 말해 보세요', '빵'류면 '꾹 눌러도 돼요' 를 덧붙인다.
 //   중간 결과, 권한 거부·시작 실패 같은 오류, 아무 말도 안 들린 때는 부르지 않는다
+// - 개발 모드에서는 한 번 들을 때마다 후보·잡힌 규칙을 voiceLog 에 남긴다 (?debug 에서 보기·복사)
 // - 안드로이드 Chrome 의 음성 인식은 구글 서버를 거쳐 인터넷이 필요하다
 // - 아이폰 Quick Look AR 은 페이지 밖에서 돌아 음성이 안 된다 (화면 안 3D 에서만)
 
@@ -30,6 +35,9 @@ const isIos = () =>
 
 /** 들은 말·오류를 보이는 시간 */
 const VOICE_FLASH_MS = 2500
+
+/** 인식기에 달라는 후보 수 */
+const MAX_ALTERNATIVES = 5
 
 const ERROR_TEXT: Partial<Record<SpeechRecognitionErrorCode, string>> = {
   'no-speech': '목소리가 들리지 않았어요. 다시 눌러 말해 주세요',
@@ -141,29 +149,52 @@ export function useVoiceCommand({
     recognition.lang = 'ko-KR'
     recognition.continuous = false
     recognition.interimResults = true
-    // 맞춰 보는 건 첫 후보뿐이다. 나머지는 개발 모드에서 단어 표에 더할 말을 찾으라고 보인다
-    recognition.maxAlternatives = 3
+    recognition.maxAlternatives = MAX_ALTERNATIVES
     /** 명령을 찾았거나 결과·오류를 이미 알렸다 */
     let done = false
-    let lastText = ''
+    /** 마지막으로 들린 후보들 (최종 결과 없이 끝날 때 보인다) */
+    let lastAlternatives: VoiceLogEntry['alternatives'] = []
+    /** 개발 기록용: 지나간 중간 결과 (첫 후보) */
+    const interims: string[] = []
+    const log = (entry: Omit<VoiceLogEntry, 'at' | 'interims'>) => {
+      if (import.meta.env.DEV) addVoiceLog({ ...entry, at: Date.now(), interims: [...interims] })
+    }
+    /** '알아듣지 못했어요' 와 덧붙일 안내 */
+    const missText = (texts: readonly string[]) => {
+      const hint = voiceMissHint(texts)
+      return `“${texts[0] ?? ''}” · 알아듣지 못했어요${hint ? ` · ${hint}` : ''}`
+    }
 
     recognition.onresult = (event) => {
       if (done) return
       const result = event.results[event.results.length - 1]
-      const alternatives = Array.from(result, (alternative) => alternative.transcript.trim()).filter(Boolean)
-      const text = alternatives[0] ?? ''
-      lastText = text
+      const alternatives = Array.from(result, (alternative) => ({
+        text: alternative.transcript.trim(),
+        confidence: alternative.confidence ?? 0,
+      })).filter((alternative) => alternative.text)
+      const texts = alternatives.map((alternative) => alternative.text)
+      const text = texts[0] ?? ''
+      lastAlternatives = alternatives
       setHeard(text)
-      const command = matchVoiceCommand(text, result.isFinal)
-      if (!command && !result.isFinal) return
+      const match = matchVoiceAlternatives(texts, result.isFinal)
+      if (!match && !result.isFinal) {
+        if (import.meta.env.DEV && text && interims.at(-1) !== text) interims.push(text)
+        return
+      }
       done = true
-      const others = import.meta.env.DEV && alternatives.length > 1 ? ` (후보: ${alternatives.slice(1).join(' / ')})` : ''
-      if (command) {
-        latest.current.onCommand(command)
+      log({ kind: result.isFinal ? 'final' : 'interim', alternatives, match })
+      if (match) {
+        latest.current.onCommand(match.command)
         recognition.stop()
-        show(`“${text}” → ${labelOf(command)}${others}`)
+        const heardText = texts[match.alternative]
+        const rule = import.meta.env.DEV
+          ? ` [${match.rule}${match.distance !== undefined ? ` ${match.distance}` : ''}${match.alternative ? ` · 후보${match.alternative + 1}` : ''}]`
+          : ''
+        const others = import.meta.env.DEV && texts.length > 1 ? ` (후보: ${texts.filter((_, index) => index !== match.alternative).join(' / ')})` : ''
+        show(`“${heardText}” → ${labelOf(match.command)}${rule}${others}`)
       } else {
-        show(`“${text}” · 알아듣지 못했어요${others}`)
+        const others = import.meta.env.DEV && texts.length > 1 ? ` (후보: ${texts.slice(1).join(' / ')})` : ''
+        show(missText(texts) + others)
         if (text) latest.current.onMiss?.()
       }
     }
@@ -171,6 +202,7 @@ export function useVoiceCommand({
       // abort() 로 멈춘 것
       if (event.error === 'aborted') return
       done = true
+      log({ kind: 'error', alternatives: lastAlternatives, match: null, error: event.error })
       // AR 안에서 권한 창 없이 거절됐으면(아직 '거부'로 정하지 않았으면) AR 밖에서 허용하라고 안내한다
       const blockedInAr = event.error === 'not-allowed' && latest.current.inAr && latest.current.permission !== 'denied'
       show(blockedInAr ? AR_PERMISSION_TEXT : (ERROR_TEXT[event.error] ?? '음성 인식이 멈췄어요. 다시 눌러 주세요'))
@@ -183,8 +215,9 @@ export function useVoiceCommand({
       setListening(false)
       setHeard('')
       // 최종 결과 없이 끝났는데 들린 말이 있었으면 (말하다 버튼을 다시 누른 때 등) 보여 준다
-      if (!done && lastText) {
-        show(`“${lastText}” · 알아듣지 못했어요`)
+      if (!done && lastAlternatives.length) {
+        log({ kind: 'end', alternatives: lastAlternatives, match: null })
+        show(missText(lastAlternatives.map((alternative) => alternative.text)))
         latest.current.onMiss?.()
       }
     }
@@ -199,7 +232,7 @@ export function useVoiceCommand({
     silenceRef.current = () => {
       // onerror('aborted')·onend 가 결과나 '알아듣지 못했어요' 를 내지 않게
       done = true
-      lastText = ''
+      lastAlternatives = []
       recognition.abort()
     }
     setHeard('')

@@ -9,6 +9,8 @@ import {
   type PlacementPhase,
 } from './placement/placementController'
 import type { WalkHost, WalkRig } from './walk/walkStage'
+import type { GazeHost, GazeRig } from './gaze/gazeStage'
+import type { NearHost, NearRig } from './nearCamera'
 import { requestDepthWithArSessions } from './xrDepthRequest'
 import type { OccluderOptions } from './depthOcclusion'
 
@@ -42,6 +44,13 @@ export interface ArPlacement {
    * 아이폰 Quick Look·Scene Viewer·화면 안 3D·자동 착지에서는 null
    */
   walkHost: WalkHost | null
+  /**
+   * 고개 바라보기에 넘길 것. 직접 놓은 뒤(placed)이고 모델에 목·머리·눈·코 뼈가 있을 때만.
+   * 아이폰 Quick Look·Scene Viewer·화면 안 3D·자동 착지에서는 null
+   */
+  gazeHost: GazeHost | null
+  /** 카메라가 개에 너무 가까울 때 (안내·흐리기). 직접 놓은 뒤(placed)만, 배포 빌드에도 */
+  nearHost: NearHost | null
 }
 
 interface PlacementState {
@@ -66,8 +75,11 @@ export function useArPlacement(
   {
     debug,
     occlusion = null,
+    gazeEnabled = false,
   }: {
     debug: boolean
+    /** 고개 바라보기를 켤지 (끄면 목·머리 뼈를 찾지도, 렌더에 끼우지도 않는다). 다음 세션부터 */
+    gazeEnabled?: boolean
     /**
      * 개발용 ?occlusion=1·raw: 실제 물체가 개를 가리는 시험 (깊이만 쓰는 사각형). null 이면 끔. 다음 세션부터.
      * 배포 파일에서는 늘 꺼진다
@@ -80,13 +92,19 @@ export function useArPlacement(
   const controllerRef = useRef<PlacementController | null>(null)
   /** 이번 세션의 산책 리그 (모델에 걷기가 없으면 null) */
   const [walk, setWalk] = useState<{ controller: PlacementController; rig: WalkRig } | null>(null)
+  /** 이번 세션의 고개 바라보기 리그 (목·머리 뼈가 없으면 null) */
+  const [gaze, setGaze] = useState<{ controller: PlacementController; rig: GazeRig } | null>(null)
+  /** 이번 세션의 가까움 리그 */
+  const [near, setNear] = useState<{ controller: PlacementController; rig: NearRig } | null>(null)
   // 세션 중에 ?debug 를 바꾸면 다음 세션부터 적용된다
   const debugRef = useRef(debug)
   const occlusionRef = useRef(occlusion)
+  const gazeEnabledRef = useRef(gazeEnabled)
   useEffect(() => {
     debugRef.current = debug
     occlusionRef.current = occlusion
-  }, [debug, occlusion])
+    gazeEnabledRef.current = gazeEnabled
+  }, [debug, occlusion, gazeEnabled])
 
   // AR 세션을 열 때 깊이 센서도 요청한다 (이 화면에 있는 동안만)
   useEffect(() => requestDepthWithArSessions(), [])
@@ -99,6 +117,8 @@ export function useArPlacement(
       controllerRef.current?.dispose()
       controllerRef.current = null
       setWalk(null)
+      setGaze(null)
+      setNear(null)
     }
 
     /** 직접 놓기를 못 할 때: 개를 보이고 model-viewer 가 스스로 바닥에 놓게 둔다 */
@@ -143,6 +163,12 @@ export function useArPlacement(
             if (controllerRef.current === controller) stage.setOccluder(new DepthOccluder(options))
           })
         }
+        // 목·머리 뼈 (고개 바라보기, 켰을 때만)
+        const gazeRig = gazeEnabledRef.current ? stage.createGazeRig() : null
+        if (gazeRig) setGaze({ controller, rig: gazeRig })
+        // 카메라가 너무 가까울 때 (늘 켬)
+        const nearRig = stage.createNearRig()
+        if (nearRig) setNear({ controller, rig: nearRig })
         // 걷기 클립·extras.walk 를 읽는다 (GLB 를 다시 받아야 하면 늦게 온다)
         void stage.createWalkRig().then((rig) => {
           if (rig && controllerRef.current === controller) setWalk({ controller, rig })
@@ -189,10 +215,7 @@ export function useArPlacement(
     return {
       rig,
       dogPose: () => controller.placedPose(),
-      subscribe: (listener) => {
-        controller.setPlacedFrameListener(listener)
-        return () => controller.setPlacedFrameListener(null)
-      },
+      subscribe: (listener) => controller.addPlacedFrameListener(listener),
       dogMoved: (position, yaw) => controller.dogMoved(position, yaw),
       // ?debug: 발자취 점은 흰 점, 개가 겨누는 점은 진한 점 (표시 원의 디버그 점과 같은 방식)
       showPath: (path) =>
@@ -207,5 +230,17 @@ export function useArPlacement(
     }
   }, [walk, placed])
 
-  return { ...state, debug: debugInfo, place, replace, resetFloor, walkHost }
+  const gazeHost = useMemo<GazeHost | null>(() => {
+    if (!gaze || !placed) return null
+    const { controller, rig } = gaze
+    return { rig, subscribe: (listener) => controller.addPlacedFrameListener((frame) => listener(frame)) }
+  }, [gaze, placed])
+
+  const nearHost = useMemo<NearHost | null>(() => {
+    if (!near || !placed) return null
+    const { controller, rig } = near
+    return { rig, subscribe: (listener) => controller.addPlacedFrameListener((frame) => listener(frame)) }
+  }, [near, placed])
+
+  return { ...state, debug: debugInfo, place, replace, resetFloor, walkHost, gazeHost, nearHost }
 }

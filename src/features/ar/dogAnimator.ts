@@ -1,6 +1,6 @@
 import type { ModelViewerElement } from '@google/model-viewer'
 
-// 강아지 모델의 명령(앉아·엎드려·일어나·손·굴러·짖어·빵)과 탭 반응을 model-viewer 로 재생한다.
+// 강아지 모델의 명령(앉아·엎드려·일어나·손 줘·굴러·짖어·빵)과 탭 반응을 model-viewer 로 재생한다.
 // AI 저장소의 anim_preview.html(템플릿 애니메이션 확인 페이지) 흐름을 옮긴 것이다.
 // 클립 규칙은 AI 저장소 docs/ANIMATION.md, HANDOFF_ANIMATION.md 5절.
 //
@@ -43,7 +43,7 @@ export const COMMANDS = [
   { id: 'sit', label: '앉아', steps: [['to', 'sit']] },
   { id: 'down', label: '엎드려', steps: [['to', 'down']] },
   { id: 'stand', label: '일어나', steps: [['to', 'stand']] },
-  { id: 'shake', label: '손', steps: [['to', 'sit'], ['hold', 'shake']] },
+  { id: 'shake', label: '손 줘', steps: [['to', 'sit'], ['hold', 'shake']] },
   { id: 'rollover', label: '굴러', steps: [['to', 'down'], ['play', 'rollover']] },
   { id: 'bark', label: '짖어', steps: [['to', 'stand'], ['play', 'bark', 2]] },
   { id: 'play_dead', label: '빵!', steps: [['to', 'stand'], ['play', 'play_dead']] },
@@ -108,6 +108,11 @@ export class DogAnimator {
   dispose() {
     this.disposed = true
     this.run++
+  }
+
+  /** 지금 자세와 명령·반응을 재생하거나 기다리는 중인지 (고개 바라보기가 매 프레임 읽는다) */
+  get state(): { pose: Pose; busy: boolean } {
+    return { pose: this.pose, busy: this.pending > 0 }
   }
 
   /** 명령. 진행 중인 클립은 끝까지 재생하고(중간에 끊으면 자세가 튄다), 가장 마지막 명령만 이어서 한다 */

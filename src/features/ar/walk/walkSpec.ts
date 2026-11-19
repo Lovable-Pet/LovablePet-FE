@@ -1,3 +1,4 @@
+import type { TurnSweep } from './turnSweep'
 import type { Vec3 } from '../placement/types'
 
 // 산책(걷기) 클립의 약속. AI 저장소 ar_pipeline/walk_clips.py 머리 주석 (앱 계약, 11-14)
@@ -58,6 +59,8 @@ export interface TurnClipSpec {
   duration: number
   /** end_offset_m (m, 크기 배율 1) */
   offset: [number, number]
+  /** 도는 동안 개 몸이 쓸고 지나가는 바닥 자리 (렌더 쪽이 미리 계산, ./turnSweep.ts). 없으면 거리로만 판단 */
+  sweep?: TurnSweep
 }
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
@@ -77,6 +80,21 @@ export function parseTurnExtras(value: unknown): Partial<Record<TurnClip, TurnCl
     out[name] = { angle_deg, duration_s, end_offset_m: [end_offset_m[0], end_offset_m[1]] }
   }
   return out
+}
+
+/**
+ * 회전 클립이 끝난 프레임의 개 자리·방향: 위치 += R_y(돌기 전 yaw)·(end_offset x, 0, z)·s, yaw += angle.
+ * three R_y: x' = x cos + z sin, z' = −x sin + z cos (산책의 회전과 산책 밖 몸 돌리기가 같이 쓴다)
+ */
+export function turnEndPose(spec: TurnClipSpec, position: Vec3, yaw0: number, scale: number): { position: Vec3; yaw: number } {
+  const [ox, oz] = spec.offset
+  const cos = Math.cos(yaw0)
+  const sin = Math.sin(yaw0)
+  const yaw = yaw0 + spec.angle
+  return {
+    position: { x: position.x + (ox * cos + oz * sin) * scale, y: position.y, z: position.z + (-ox * sin + oz * cos) * scale },
+    yaw: Math.atan2(Math.sin(yaw), Math.cos(yaw)),
+  }
 }
 
 /** 90° 클립과 180° 클립을 가르는 각: 필요한 각이 이 안이면 같은 부호 90°, 넘으면 180° */
