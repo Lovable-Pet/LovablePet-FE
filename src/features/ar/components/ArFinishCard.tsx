@@ -6,8 +6,8 @@ import { AR_TEXT, FINISH_TEXT } from '../arText'
 import { blockXrSelectRef } from '../blockXrSelect'
 
 /**
- * 마무리 카드 (아래에서 올라온다). 발도장을 다 모았을 때('계속 보기'로 닫힘)와,
- * 다 모으지 않고 닫기(X)를 눌렀을 때 한 번('나가기'를 누르면 실제로 나감).
+ * 마무리 카드 (아래에서 올라온다). 발도장을 다 모았을 때('이름과 친해졌어요', '계속 보기'로 닫힘)와,
+ * 다 모으지 않고 닫기(X)를 눌렀을 때 한 번('이름이 기다리고 있어요', '나가기'를 누르면 실제로 나감).
  * model-viewer 의 자식으로 둬야 WebXR 화면(DOM overlay)에도 보이고 눌리며, 누를 때 XR select 가 되지 않게 막는다
  */
 export function ArFinishCard({
@@ -41,7 +41,7 @@ export function ArFinishCard({
         className="relative animate-sheet-up rounded-t-sheet bg-surface px-5 pt-6 pb-[calc(20px+env(safe-area-inset-bottom))] text-ink"
       >
         <h2 id="ar-finish-title" className="text-title font-bold">
-          {FINISH_TEXT.title(name)}
+          {mode === 'complete' ? FINISH_TEXT.title(name) : FINISH_TEXT.exitTitle(name)}
         </h2>
         <p className="mt-1.5 text-body-lg text-ink-secondary">{FINISH_TEXT.body(name, careName)}</p>
         <div className="mt-5 flex gap-2">

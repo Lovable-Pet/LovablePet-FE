@@ -64,6 +64,51 @@ const OFFSET_EPSILON_M = 1e-9
 /** 0~1 → 0~1, 처음과 끝 기울기 0 */
 const smoothstep = (u: number) => u * u * (3 - 2 * u)
 
+// ── 클립의 빈 끝: 끝부분이 첫 프레임 자세로 돌아와 그대로면 그 시점에서 끊고 다음으로 (차이는 섞기가 맡는다) ──
+
+/** 첫 프레임과 이만큼 안이면 같은 자세로 본다 (회전 °, 이동 모델 단위, 배율 비율. 숨쉬기 배율 0.3% 는 무시) */
+export const QUIET_TAIL_DEG = 1
+export const QUIET_TAIL_MOVE = 0.002
+export const QUIET_TAIL_SCALE = 0.01
+
+/** three KeyframeTrack 중 쓰는 것 (이름 '뼈.quaternion' · '.position' · '.scale', 선형 보간) */
+export interface TrackLike {
+  readonly name: string
+  readonly times: ArrayLike<number>
+  readonly values: ArrayLike<number>
+  getValueSize(): number
+}
+
+/**
+ * 모든 트랙이 첫 프레임 값으로 돌아와 끝까지 그 안에 머무는 첫 시점 (s). 끝까지 움직이면 duration.
+ * 키 사이는 선형이라 마지막으로 벗어난 키 다음 키의 시각이다
+ */
+export function quietTailStart(tracks: readonly TrackLike[], duration: number): number {
+  let quiet = 0
+  for (const track of tracks) {
+    const size = track.getValueSize()
+    const { times, values } = track
+    const kind = track.name.slice(track.name.lastIndexOf('.') + 1)
+    for (let k = times.length - 1; k > 0; k--) {
+      let off: boolean
+      if (kind === 'quaternion' && size === 4) {
+        const dot = Math.abs(values[4 * k] * values[0] + values[4 * k + 1] * values[1] + values[4 * k + 2] * values[2] + values[4 * k + 3] * values[3])
+        off = (2 * Math.acos(Math.min(1, dot))) / RAD > QUIET_TAIL_DEG
+      } else if (kind === 'position' && size === 3) {
+        off = Math.hypot(values[3 * k] - values[0], values[3 * k + 1] - values[1], values[3 * k + 2] - values[2]) > QUIET_TAIL_MOVE
+      } else {
+        off = false
+        for (let c = 0; c < size; c++) if (Math.abs(values[size * k + c] - values[c]) > QUIET_TAIL_SCALE) off = true
+      }
+      if (off) {
+        quiet = Math.max(quiet, k + 1 < times.length ? times[k + 1] : duration)
+        break
+      }
+    }
+  }
+  return Math.min(duration, quiet)
+}
+
 /** 어긋남 → 섞는 시간. 크면 비율만큼 늘려 최대까지 */
 export function blendDuration(angleDeg: number, moveM: number): number {
   const ratio = Math.max(angleDeg / POSE_BLEND_BIG_DEG, moveM / POSE_BLEND_BIG_M)

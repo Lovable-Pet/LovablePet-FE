@@ -176,6 +176,8 @@ interface TurnBlock {
   reason: string
   /** 곧 풀리지 않는 까닭 (앉음·명령 중·회전 클립 없음·너무 가까움 등) */
   hard: boolean
+  /** 쓸고 지나가는 자리와 사용자 발이 겹쳐 기다림 (물러나면 돈다) */
+  sweep?: boolean
 }
 
 export interface GazeControllerOptions {
@@ -207,6 +209,8 @@ const MAX_FRAME_S = 0.1
 const BODY_TURN_RETRY_S = 1
 /** 돌려고 일어났는데 사용자가 쓸고 지나가는 자리에 있으면 선 채 이만큼(s) 기다린다 */
 const STAND_TURN_WAIT_S = 3
+/** 쓸고 지나가는 자리 때문에 이만큼(s) 넘게 못 돌면 '한 걸음 물러나면 돌아봐요' */
+export const STEP_BACK_HINT_S = 3
 /** 회전 요청 뒤 이만큼(s) 지나도 회전 클립이 안 보이면 기다림을 푼다 */
 const TURN_START_TIMEOUT_S = 1
 /** 포기한 고개를 다시 한계로 (몸 돌리기를 기다림) 되돌리려면 돌 수 있는 상태가 이만큼(s) 이어져야 한다 (막힘이 깜빡일 때 포기·보기가 번갈지 않게) */
@@ -319,9 +323,12 @@ export class GazeController {
   private standToTurn = false
   /** 스스로 앉았다가 돌려고 일어남: 회전이 끝나면 사용자가 아직 가까우면 바로 다시 앉는다 */
   private resitAfterTurn = false
-  /** 돌려고 일어나 선 때 (s) · 선 채 기다리는 까닭 */
+  /** 돌려고 일어나 선 때 (s) · 선 채 기다리는 까닭 · 그 까닭이 쓸고 지나가는 자리와 겹침인지 */
   private standReadyAt: number | null = null
   private standWaitReason: string | null = null
+  private standWaitSweep = false
+  /** 따라보기 켜짐인데 쓸고 지나가는 자리와 사용자 발이 겹쳐 못 돈 시간 (s, '한 걸음 물러나면' 안내) */
+  private sweepBlockedFor = 0
   /** 이번 프레임 turnCheck 가 고른 클립 (돌 수 있을 때) */
   private turnClip: string | null = null
   /** 회전 요청이 받아들여져 회전 클립이 끝나기를 기다리는 중 (요청 시각, s) */
@@ -424,6 +431,11 @@ export class GazeController {
     return this.followOn
   }
 
+  /** 따라보기 켜짐인데 쓸고 지나가는 자리에 사용자가 있어 STEP_BACK_HINT_S 넘게 못 돌았다 ('한 걸음 물러나면 돌아봐요') */
+  get stepBackHint(): boolean {
+    return this.sweepBlockedFor > STEP_BACK_HINT_S
+  }
+
   get debug(): GazeDebug {
     return this.snapshot
   }
@@ -452,6 +464,7 @@ export class GazeController {
     this.outSide = 0
     this.closeFor = 0
     this.farFor = 0
+    this.sweepBlockedFor = 0
     this.endStandToTurn()
     this.turnRequestedAt = null
     this.lastCamera = null
@@ -497,6 +510,9 @@ export class GazeController {
     const turn = turnedAfterStand
       ? { waitFor: null, angle: null, wait: null, grace: null, block: '일어나서 도는 중', started: true }
       : this.bodyTurn(input, sample, outOfRange, block, dt)
+    // 따라보기 켜짐인데 쓸고 지나가는 자리 때문에 못 돈다 (서서 기다림·스스로 앉았다 일어나 기다림)
+    const sweepWait = this.followOn && input.tracking && ((outOfRange && !!block?.sweep) || this.standWaitSweep)
+    this.sweepBlockedFor = sweepWait && !turn.started ? this.sweepBlockedFor + dt : 0
     const sit = turn.started ? this.describeCloseSit() : this.closeSitStep(input, sample, dt)
     this.followKick = false
     const jaw = this.jaw(sample.clip)
@@ -895,7 +911,7 @@ export class GazeController {
     }
     // 쓸고 지나가는 자리와 사용자 발이 겹치면 기다린다 (고개는 한계에서 포기하지 않고, 비켜서면 바로 돈다)
     const check = this.check(input, sample)
-    if (check && !check.ok) return { reason: check.reason ?? '쓸고 지나가는 자리와 겹침', hard: false }
+    if (check && !check.ok) return { reason: check.reason ?? '쓸고 지나가는 자리와 겹침', hard: false, sweep: true }
     return null
   }
 
@@ -942,6 +958,7 @@ export class GazeController {
     // 그래도 막히면 돌지 않고 끝낸다 (closeSitStep 이 가까우면 다시 앉힌다)
     const check = input.canTurn && input.tracking ? this.check(input, sample) : null
     const blocked = !input.canTurn || !input.tracking || (check ? !check.ok : this.userDistance(input, sample) < BODY_TURN_MIN_M)
+    this.standWaitSweep = blocked && !!check && !check.ok
     if (blocked) {
       this.standWaitReason = check?.reason ?? (input.tracking ? '너무 가까움' : '추적 끊김')
       if (this.now - this.standReadyAt >= STAND_TURN_WAIT_S) this.endStandToTurn()
@@ -961,6 +978,7 @@ export class GazeController {
     this.standToTurn = false
     this.standReadyAt = null
     this.standWaitReason = null
+    this.standWaitSweep = false
   }
 
   /** 가까이 앉기 (?closesit). 상태 한 줄 (없으면 null) */

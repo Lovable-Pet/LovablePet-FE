@@ -2,7 +2,7 @@ import { Footprints, Heart, Mic, Sparkles } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { cn } from '../../../components/utils/cn'
 import { AR_TEXT } from '../arText'
-import { COMMANDS, type CommandId } from '../dogAnimator'
+import { COMMANDS, POSE_COMMAND, type CommandId, type Pose, type ReserveId } from '../dogAnimator'
 
 /** 묘기 트레이 (3×2). 굴러는 칩에서만 뺀다 (클립·음성 '굴러'는 그대로) */
 const TRAY_COMMANDS = COMMANDS.filter((command) => command.id !== 'rollover')
@@ -22,7 +22,9 @@ export interface TalkState {
 /**
  * AR 화면 아래: [묘기 | 말 걸기 | 산책] 세 버튼과 그 위 묘기 트레이·들은 말 말풍선.
  * 가운데 말 걸기가 가장 크다. 없는 버튼(음성 인식 없음·걷기 클립 없음)은 빼고 남은 버튼을 가운데로 모은다.
- * 명령 클립이 없는 모델은 묘기 자리에 '꼬리 흔들기' 하나
+ * 명령 클립이 없는 모델은 묘기 자리에 '꼬리 흔들기' 하나.
+ * 버튼은 놓기 전·불러오는 중에만 꺼 둔다. 바로 못 하는 입력은 예약되어 그 칩·버튼이 눌린 모양(테두리)으로 남고,
+ * 다시 누르면 취소된다. 트레이의 자세 칩 중 지금 자세에는 '지금' 표시
  */
 export function ArControls({
   hasCommands,
@@ -33,6 +35,8 @@ export function ArControls({
   tricksDisabled,
   commandsDisabled,
   active,
+  reserved = null,
+  pose,
   onCommand,
   onWag,
   wagDisabled,
@@ -46,10 +50,14 @@ export function ArControls({
   trayOpen: boolean
   onToggleTray: () => void
   tricksDisabled: boolean
-  /** 트레이 안 명령 칩 (불러오는 중·놓기 전·몸 돌리는 중) */
+  /** 트레이 안 명령 칩 (불러오는 중·놓기 전) */
   commandsDisabled: boolean
-  /** 마지막으로 누른 명령 (칩 강조) */
+  /** 마지막으로 시작한 명령 (칩 강조) */
   active: CommandId | null
+  /** 예약된 명령·산책 (눌린 모양으로 남는다) */
+  reserved?: ReserveId | null
+  /** 지금 자세 (트레이 자세 칩의 '지금' 표시) */
+  pose: Pose
   onCommand: (id: CommandId) => void
   onWag: () => void
   wagDisabled: boolean
@@ -80,20 +88,32 @@ export function ArControls({
           aria-label={AR_TEXT.tricksTray}
           className="pointer-events-auto grid w-full animate-rise-in grid-cols-3 gap-2 rounded-card bg-black/45 p-2"
         >
-          {TRAY_COMMANDS.map((command) => (
-            <button
-              key={command.id}
-              type="button"
-              disabled={commandsDisabled}
-              onClick={() => onCommand(command.id)}
-              className={cn(
-                'h-11 rounded-full px-2 text-body font-semibold transition active:scale-97 disabled:opacity-45',
-                active === command.id ? 'bg-measure text-ink' : 'bg-black/55 text-white',
-              )}
-            >
-              {command.label}
-            </button>
-          ))}
+          {TRAY_COMMANDS.map((command) => {
+            const isReserved = reserved === command.id
+            const isNow = POSE_COMMAND[command.id] === pose
+            return (
+              <button
+                key={command.id}
+                type="button"
+                disabled={commandsDisabled}
+                onClick={() => onCommand(command.id)}
+                aria-pressed={isReserved}
+                className={cn(
+                  'flex h-11 items-center justify-center gap-1 rounded-full px-2 text-body font-semibold transition active:scale-97 disabled:opacity-45',
+                  isReserved
+                    ? 'bg-measure text-ink ring-2 ring-white ring-offset-2 ring-offset-black/40'
+                    : active === command.id
+                      ? 'bg-measure text-ink'
+                      : 'bg-black/55 text-white',
+                )}
+              >
+                {command.label}
+                {isNow && (
+                  <span className="rounded-full bg-white/25 px-1.5 text-caption font-medium leading-5">{AR_TEXT.poseNow}</span>
+                )}
+              </button>
+            )
+          })}
         </div>
       )}
 
@@ -132,6 +152,7 @@ export function ArControls({
             icon={<Footprints className="size-6" strokeWidth={2} aria-hidden />}
             onClick={walk.onStart}
             disabled={walk.disabled}
+            reserved={reserved === 'walk'}
             pulse={highlight === 'walk'}
           />
         )}
@@ -149,6 +170,7 @@ function RoundButton({
   pressed,
   controls,
   listening = false,
+  reserved,
   pulse = false,
 }: {
   label: string
@@ -161,6 +183,8 @@ function RoundButton({
   controls?: string
   /** 말 걸기: 듣는 중 */
   listening?: boolean
+  /** 예약됨 (산책: 하던 동작이 끝나면 출발). 눌린 모양으로 남는다 */
+  reserved?: boolean
   /** 다음 할 일 (둘레 약하게 강조, '동작 줄이기'면 끔) */
   pulse?: boolean
 }) {
@@ -171,14 +195,15 @@ function RoundButton({
       disabled={disabled}
       aria-expanded={pressed}
       aria-controls={controls}
-      aria-pressed={big ? listening : undefined}
+      aria-pressed={big ? listening : reserved}
       className="group pointer-events-auto flex w-20 flex-col items-center gap-1 disabled:opacity-45"
     >
       <span
         className={cn(
           'relative flex items-center justify-center rounded-full transition group-active:scale-97',
           big ? 'size-18' : 'size-14',
-          big || pressed || listening ? 'bg-measure text-ink' : 'bg-black/55 text-white',
+          big || pressed || listening || reserved ? 'bg-measure text-ink' : 'bg-black/55 text-white',
+          reserved && 'ring-2 ring-white ring-offset-2 ring-offset-black/40',
           big && !pulse && 'shadow-[0_2px_10px_rgb(0_0_0/0.35)]',
           pulse && !disabled && 'animate-soft-pulse motion-reduce:animate-none',
         )}

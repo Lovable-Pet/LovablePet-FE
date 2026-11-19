@@ -10,7 +10,7 @@ import {
 import type { WalkHost } from './walk/walkStage'
 
 export interface ArWalk {
-  /** '산책' 버튼을 보일지: 놓은 뒤 + 서기 루프만 도는 중 + 걷기 클립·extras.walk 가 있음 (안드로이드 WebXR 만) */
+  /** 산책을 시작할 수 있는지: 놓은 뒤 + 걷기 클립·extras.walk 가 있음 (안드로이드 WebXR 만) + 산책 중 아님 */
   available: boolean
   /** 산책 중 (명령 칩·음성·개 탭 반응을 막는다) */
   active: boolean
@@ -31,11 +31,12 @@ const IDLE: WalkSnapshot = { phase: 'standing', ending: false, notice: null }
 
 /**
  * AR 산책 모드. host 는 useArPlacement 의 walkHost (개를 놓은 뒤에만 있다).
- * canStart: 개가 서기 루프만 돌고 있는지 (명령·반응이 재생 중이면 걷기 클립으로 바꾸면 튄다)
+ * start 는 개가 서기 루프만 돌 때 불러야 한다 (명령·반응 중이면 걷기 클립으로 바꾸면 튄다): 화면은 DogAnimator.walk 의
+ * onReady (일어나기·예약이 끝나 서기 루프가 돌기 시작함) 에서 부른다
  */
 export function useArWalk(
   host: WalkHost | null,
-  { canStart, debug, tuning }: { canStart: boolean; debug: boolean; /** 개발용 ?floor·?keep·?tight·?turnspeed (다음 산책부터) */ tuning?: WalkTuning },
+  { debug, tuning }: { debug: boolean; /** 개발용 ?floor·?keep·?tight·?turnspeed (다음 산책부터) */ tuning?: WalkTuning },
 ): ArWalk {
   const controllerRef = useRef<WalkController | null>(null)
   /** 돌고 있는 산책이 받은 host. 지금 host 와 다르면(다시 놓기·AR 끝) 산책은 끝난 것이다 */
@@ -68,7 +69,7 @@ export function useArWalk(
   )
 
   const start = useCallback(() => {
-    if (!host || controllerRef.current || !canStart) return
+    if (!host || controllerRef.current) return
     const controller = new WalkController(host, {
       onChange: setSnapshot,
       onFinished: () => {
@@ -86,14 +87,14 @@ export function useArWalk(
     setDebugInfo(null)
     setOwner(host)
     controller.start()
-  }, [host, canStart])
+  }, [host])
 
   const end = useCallback(() => controllerRef.current?.end(), [])
   const requestTurn = useCallback((reason: string) => controllerRef.current?.requestTurn(reason) ?? false, [])
 
   const active = owner !== null && owner === host
   return {
-    available: !!host && canStart && !active,
+    available: !!host && !active,
     active,
     phase: active ? snapshot.phase : null,
     ending: active && snapshot.ending,

@@ -33,7 +33,8 @@ import type { GazeCommand } from './gaze/gazeController'
 import type { GazeRig } from './gaze/gazeStage'
 import { GAZE_JAW_CLIPS } from './gaze/gazeSpec'
 import { findNeckBones, NeckAim, type BoneLike } from './neckAim'
-import { PoseBlend, type BlendBone, type BlendInfo } from './poseBlend'
+import { PoseBlend, quietTailStart, type BlendBone, type BlendInfo, type TrackLike } from './poseBlend'
+import { HEAD_TILT_DEG, headTiltAmount, HEAD_TILT_S, rollLocal } from './headTilt'
 import { buildBodyProxy, type BodyProxy, type ProxyNode } from './bodyProxy'
 import type { NearFadeMode, NearRig } from './nearCamera'
 import { computeTurnSweep, type SweepCapsule } from './walk/turnSweep'
@@ -1285,7 +1286,8 @@ class ModelViewerWalkRig implements WalkRig {
 }
 
 // ── 자세 층: 렌더 직전에 뼈를 바꾸는 것들 (화면 안 3D·AR 둘 다) ──
-// scene.renderShadow 를 인스턴스에서 한 번 감싸 그 앞에 순서대로: 자세 섞기(./poseBlend.ts) → 고개 바라보기·턱(AR, createGazeRig) → 그리기.
+// scene.renderShadow 를 인스턴스에서 한 번 감싸 그 앞에 순서대로: 자세 섞기(./poseBlend.ts) → 절차적 갸우뚱(./headTilt.ts) →
+// 고개 바라보기·턱(AR, createGazeRig) → 그리기. 갸우뚱은 '그린 자세'(다음 섞기의 출발)에 들어가고, 바라보기는 그 기울기를 남긴다.
 // 화면 안 3D 는 장면이 바뀐 프레임에만 그려서 (isDirty), 섞는 동안 애니메이션이 멈춰 있으면 다음 프레임도 그리게 한다.
 // 산책·제자리 회전 클립 사이는 산책 리그가 출발 때 서기 자세를 0.3 s 섞고 이음매가 같아 (walk_stop·회전 끝 = 서기 첫 프레임)
 // 여기서 다시 섞지 않는다 (그 전에 시작한 섞기는 이어서 줄인다)
@@ -1333,6 +1335,11 @@ class PoseLayers {
   private clip: string | null | undefined = undefined
   private time = 0
   private walkDriven = false
+  /** 머리 뼈와 바라보는 축 (모델마다 한 번, 없으면 null: 갸우뚱 못 함) */
+  private head: { model: unknown; bone: BlendBone; axis: readonly [number, number, number] } | null = null
+  /** 절차적 갸우뚱: 시작 시각 (s) · 기울이는 쪽 (+1 / −1, 번갈아) */
+  private tilt: { start: number; side: number } | null = null
+  private tiltSide = 1
 
   constructor(mv: ModelViewerElement, scene: ModelSceneLike, original: (renderer: unknown) => void) {
     this.mv = mv
@@ -1349,6 +1356,42 @@ class PoseLayers {
 
   get blending(): boolean {
     return this.blend?.blending ?? false
+  }
+
+  /** 절차적 갸우뚱 시작 (섞기를 쓰는 중이고 머리 뼈·바라보는 축이 있을 때). 시작했으면 true */
+  tiltHead(): boolean {
+    if (!this.blendOn || !this.blend || !this.headParts()) return false
+    this.tilt = { start: performance.now() / 1000, side: this.tiltSide }
+    this.tiltSide = -this.tiltSide
+    this.scene.queueRender?.()
+    return true
+  }
+
+  private headParts() {
+    const model = this.scene.model
+    if (this.head?.model === model) return this.head
+    const parts = isNode(model) ? findNeckBones(model as unknown as BoneLike) : null
+    const bone = parts?.bones[2]
+    this.head = parts && isBlendBone(bone) ? { model, bone, axis: parts.gazeAxis } : null
+    return this.head
+  }
+
+  /** 섞기 뒤 머리 뼈를 바라보는 축 둘레로 기울인다 (섞기가 매 프레임 클립 값으로 되돌려 둬 쌓이지 않는다). 썼으면 true */
+  private applyTilt(now: number): boolean {
+    const tilt = this.tilt
+    if (!tilt) return false
+    const t = now - tilt.start
+    if (t >= HEAD_TILT_S) {
+      this.tilt = null
+      return false
+    }
+    const head = this.headParts()
+    const amount = headTiltAmount(t)
+    if (!head || !(amount > 0)) return false
+    const q = head.bone.quaternion
+    const [x, y, z, w] = rollLocal(q, head.axis, tilt.side * amount * HEAD_TILT_DEG * (Math.PI / 180))
+    q.set(x, y, z, w)
+    return true
   }
 
   private run() {
@@ -1372,7 +1415,9 @@ class PoseLayers {
           !this.walkDriven &&
           (clip !== this.clip || (clip !== null && !LOOPING_CLIPS.has(clip) && time < this.time - 1e-4))
         try {
-          wrote = blend.apply(performance.now() / 1000, switched, switched ? { from: this.clip ?? null, to: clip } : undefined)
+          const now = performance.now() / 1000
+          wrote = blend.apply(now, switched, switched ? { from: this.clip ?? null, to: clip } : undefined)
+          if (this.applyTilt(now)) wrote = true
           blend.markDrawn()
         } catch (error) {
           if (import.meta.env.DEV) console.warn('[ar] 자세 섞기를 끈다:', error)
@@ -1386,8 +1431,8 @@ class PoseLayers {
     if (this.gaze?.(clip)) wrote = true
     this.blend?.commit()
     if (wrote) scene.queueShadowRender()
-    // 화면 안 3D: 애니메이션이 멈춰 있어도 섞기가 끝날 때까지 그린다 (그린 뒤 isDirty 가 풀리므로 그 다음에 건다)
-    if (this.blend?.blending && mv.paused) queueMicrotask(() => scene.queueRender?.())
+    // 화면 안 3D: 애니메이션이 멈춰 있어도 섞기·갸우뚱이 끝날 때까지 그린다 (그린 뒤 isDirty 가 풀리므로 그 다음에 건다)
+    if ((this.blend?.blending || this.tilt) && mv.paused) queueMicrotask(() => scene.queueRender?.())
   }
 
   private createBlend(): PoseBlend | null {
@@ -1416,12 +1461,14 @@ function poseLayersFor(mv: ModelViewerElement, scene: ModelSceneLike): PoseLayer
   return layers
 }
 
-/** 화면이 쓰는 자세 층 (?debug) */
+/** 화면이 쓰는 자세 층 */
 export interface PoseLayersHandle {
-  /** 마지막으로 시작한 섞기 */
+  /** 마지막으로 시작한 섞기 (?debug) */
   lastBlend(): BlendInfo | null
   /** 섞는 중인지 */
   blending(): boolean
+  /** 절차적 갸우뚱 (앉거나 엎드린 개를 톡). 머리 뼈가 없으면 false */
+  tiltHead(): boolean
 }
 
 /**
@@ -1434,7 +1481,35 @@ export function attachPoseLayers(mv: ModelViewerElement): PoseLayersHandle | nul
   const layers = poseLayersFor(mv, scene)
   if (!layers || !isNode(scene.model) || !skinBonesOf(scene.model)) return null
   layers.blendOn = true
-  return { lastBlend: () => layers.lastBlend, blending: () => layers.blending }
+  return { lastBlend: () => layers.lastBlend, blending: () => layers.blending, tiltHead: () => layers.tiltHead() }
+}
+
+interface TrackedClipLike extends ClipLike {
+  tracks: TrackLike[]
+}
+const isTrackedClip = (value: unknown): value is TrackedClipLike =>
+  isClip(value) &&
+  Array.isArray((value as unknown as Record<string, unknown>).tracks) &&
+  ((value as unknown as Record<string, unknown>).tracks as unknown[]).every(
+    (track) => isRecord(track) && typeof track.name === 'string' && typeof track.getValueSize === 'function' && isRecord(track.times) && isRecord(track.values),
+  )
+
+/**
+ * 클립의 빈 끝: 끝부분이 첫 프레임 자세로 돌아와 그대로인 시점 (s) 과 길이. 빈 끝이 없는 클립·없는 클립은 빼고 돌려준다
+ * (DogAnimator 가 거기서 끊고 다음으로 간다. 차이는 자세 섞기가 맡는다)
+ */
+export function clipQuietEnds(mv: ModelViewerElement, names: readonly string[]): Record<string, { end: number; duration: number }> {
+  const scene = readSymbol(mv, 'scene')
+  const out: Record<string, { end: number; duration: number }> = {}
+  if (!isAnimatedScene(scene)) return out
+  for (const name of names) {
+    const clip = scene.animationsByName.get(name)
+    if (!isTrackedClip(clip)) continue
+    const end = quietTailStart(clip.tracks, clip.duration)
+    // 한두 프레임 남는 것은 그대로 끝까지
+    if (end < clip.duration - 0.05) out[name] = { end, duration: clip.duration }
+  }
+  return out
 }
 
 // ── 반응 말풍선: 개 머리 위의 화면 위치 (화면 안 3D·AR 둘 다) ──

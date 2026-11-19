@@ -239,5 +239,19 @@ export function useVoiceCommand({
     setListening(true)
   }, [show])
 
-  return { supported, listening, heard, flash, toggle }
+  /**
+   * 마이크 권한을 미리 받는다 (AR 시작 안내 화면, AR 안에서 권한 창이 뜨지 않게). 결과는 permission 이 바뀌어 알린다.
+   * 거부·마이크 없음이면 말 걸기를 눌렀을 때 지금 안내 그대로
+   */
+  const askPermission = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices?.getUserMedia({ audio: true })
+      stream?.getTracks().forEach((track) => track.stop())
+    } catch {
+      // 거부·기기 없음
+    }
+  }, [])
+
+  /** 마이크 권한 상태 (Permissions API 가 없거나 microphone 을 모르면 null) */
+  return { supported, listening, heard, flash, toggle, permission, askPermission }
 }

@@ -29,7 +29,26 @@ export const AR_TEXT = {
   callShelter: '보호소 전화',
   keepWatching: '계속 보기',
   leave: '나가기',
+  /** 묘기 트레이에서 지금 자세 칩 */
+  poseNow: '지금',
+  micAsk: '말로 명령하려면 마이크를 허용해 주세요',
+  micAllow: '허용',
 } as const
+
+/**
+ * 막힌 입력의 까닭 (위 안내 줄, 산책 문구 다음). reserved: 빵·구르기·자세 전환·몸 돌리기 중 누른 것을 끝나면 한다 ·
+ * standToWalk: 앉거나 엎드린 개가 산책 전에 일어나는 중 · stepBack: 따라보기 켜짐인데 쓸고 지나가는 자리에 사용자가 있어 3초 넘게 못 돎
+ */
+export const NOTICE_TEXT = {
+  reserved: '하던 동작을 마치고 할게요',
+  standToWalk: '일어나서 같이 걸을게요',
+  stepBack: '한 걸음 물러나면 돌아봐요',
+} as const
+
+/** 같은 자세 명령 (앉아 있는데 '앉아') */
+export const SAME_POSE_TEXT = { stand: '이미 서 있어요', sit: '이미 앉아 있어요', down: '이미 엎드려 있어요' } as const
+/** 같은 자세 안내를 보이는 시간 (ms) */
+export const SAME_POSE_MS = 2500
 
 // ── 한국어 조사: 앞 글자 받침에 따라 (이에요/예요, 과/와, 은/는) ──
 
@@ -48,8 +67,9 @@ export const josa = (word: string, withBatchim: string, without: string) => word
 
 // ── 등장 연출과 마무리 카드 ──
 
-/** 처음 놓았을 때 위 안내 자리에 보이는 시간 (ms, 인사·체고 비교 각각) */
+/** 처음 놓았을 때 위 안내 자리에 보이는 시간 (ms, 인사·체고 비교 각각) · 새끼면 그 뒤 새끼 안내 */
 export const INTRO_STEP_MS = 2000
+export const INTRO_PUPPY_MS = 3000
 
 /**
  * 체고 비교 (어른 기준 높이). 앞에서부터 maxCm 이하인 첫 줄. 경계는 기준 높이 사이쯤:
@@ -70,7 +90,10 @@ export const INTRO_TEXT = {
 }
 
 export const FINISH_TEXT = {
+  /** 발도장을 다 모음 */
   title: (name: string) => `${josa(name, '과', '와')} 친해졌어요`,
+  /** 다 모으기 전에 닫기 */
+  exitTitle: (name: string) => `${josa(name, '이', '가')} 기다리고 있어요`,
   body: (name: string, shelter: string) => `실제 ${josa(name, '은', '는')} ${shelter}에서 기다리고 있어요`,
 }
 
@@ -115,18 +138,20 @@ export const REACTION_MS = 1200
 
 /**
  * 위 안내 한 줄. 앞에서부터 처음 있는 것을 보인다:
- * 배치 전 안내 > 너무 가까워요 > 산책 문구 > 등장 인사·체고 비교(처음 놓은 4초) > 따라보기 3초 문구 > 발도장 다음 할 일 > 지금 자세
+ * 배치 전 안내 > 너무 가까워요 > 산책 문구 > 예약·까닭 (NOTICE_TEXT·SAME_POSE_TEXT) > 따라보기 3초 문구 >
+ * 등장 인사·체고 비교·새끼 안내 (처음 놓은 4~7초) > 발도장 다음 할 일 > 지금 자세
  */
 export interface HintSources {
   placement: string | null
   near: string | null
   walk: string | null
-  intro?: string | null
+  notice?: string | null
   follow: string | null
+  intro?: string | null
   paw?: string | null
   pose: string
 }
 
-export function pickHint({ placement, near, walk, intro, follow, paw, pose }: HintSources): string {
-  return placement ?? near ?? walk ?? intro ?? follow ?? paw ?? pose
+export function pickHint({ placement, near, walk, notice, follow, intro, paw, pose }: HintSources): string {
+  return placement ?? near ?? walk ?? notice ?? follow ?? intro ?? paw ?? pose
 }

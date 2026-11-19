@@ -19,6 +19,8 @@ export interface ArGaze {
   userCommand: () => void
   /** 몸 돌려 따라보기를 할 수 있는 개인지 (바라보기 켜짐 + 제자리 회전 클립 + 몸 돌리기 켜짐): '따라보기' 토글을 보일지 */
   canFollow: boolean
+  /** 따라보기 켜짐인데 쓸고 지나가는 자리에 사용자가 있어 3초 넘게 못 돎 ('한 걸음 물러나면 돌아봐요') */
+  stepBack: boolean
 }
 
 export interface ArGazeOptions {
@@ -44,6 +46,8 @@ export interface ArGazeOptions {
   follow: boolean
   /** 카메라가 너무 가까워 개를 숨긴 동안: 판단을 멈춘다 (고개는 그 자리, 몸 돌리기·가까이 앉기 없음) */
   isHidden?: () => boolean
+  /** 산책 밖 몸 돌리기가 시작·끝날 때 바로 (상태 갱신을 기다리지 않는다: 그동안 명령을 예약한다) */
+  onTurning?: (turning: boolean) => void
 }
 
 const DEBUG_INTERVAL_MS = 200
@@ -76,16 +80,21 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
   const standTurnRef = useRef<StandTurn | null>(null)
   const [turning, setTurning] = useState(false)
   const [debugLine, setDebugLine] = useState<string | null>(null)
+  const [stepBack, setStepBack] = useState(false)
 
   // 산책 밖 몸 돌리기. 다시 놓거나 AR 이 끝나면 버린다 (도는 중이면 서기로 바로 돌려준다)
   useEffect(() => {
     if (!walkHost) return
-    const standTurn = new StandTurn(walkHost, { turnSpeed, onChange: setTurning })
+    const onChange = (next: boolean) => {
+      setTurning(next)
+      latest.current.onTurning?.(next)
+    }
+    const standTurn = new StandTurn(walkHost, { turnSpeed, onChange })
     standTurnRef.current = standTurn
     return () => {
       standTurn.dispose()
       if (standTurnRef.current === standTurn) standTurnRef.current = null
-      setTurning(false)
+      onChange(false)
     }
   }, [walkHost, turnSpeed])
 
@@ -137,6 +146,8 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
         turnCheck,
       })
       host.rig.set(command)
+      // 같은 값이면 React 가 다시 그리지 않는다
+      setStepBack(controller.stepBackHint)
       // ?debug: 몸 돌리기를 기다리는 동안 처음 고른 클립이 쓸고 지나가는 자리 윤곽 (흰 점) 과 사용자 발 (진한 점)
       if (debug && walkHost?.showPath && !walk.active) {
         const waiting = controller.debug.bodyTurnIn !== null || /겹침/.test(controller.debug.bodyTurnBlock ?? '')
@@ -161,6 +172,7 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
       host.rig.set(null)
       if (controllerRef.current === controller) controllerRef.current = null
       setDebugLine(null)
+      setStepBack(false)
     }
   }, [host, enabled, debug, template, tuning, walkHost, walkInfo])
 
@@ -179,5 +191,6 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
     isTurning,
     userCommand,
     canFollow,
+    stepBack: stepBack && enabled && !!host,
   }
 }

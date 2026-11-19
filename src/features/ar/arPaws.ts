@@ -45,11 +45,13 @@ export const pawsFor = (features: PawFeatures) => PAW_ORDER.filter((id) => featu
 
 /** 발도장을 찍는 일 */
 export type PawEvent =
+  /** 개를 톡: 반응이 무엇이든 (클립·절차적 갸우뚱·손 내리기·말풍선만) */
+  | { type: 'tap' }
   /** 반응 클립이 실제로 재생됨 (DogAnimator.onReact) */
   | { type: 'react'; source: ReactSource }
-  /** 3초 누르기가 다 참. accepted: 명령으로 받아짐 (산책·몸 돌리는 중이면 false) */
+  /** 3초 누르기가 다 참. accepted: 명령으로 받아짐 (바로 또는 예약) */
   | { type: 'hold'; accepted: boolean }
-  /** 음성에서 명령을 찾음. accepted: 명령으로 받아짐 */
+  /** 음성에서 명령을 찾음. accepted: 명령으로 받아짐 (바로·예약·이미 그 자세) */
   | { type: 'voiceCommand'; accepted: boolean }
   /** 산책 단계가 바뀜. walk_start 부터 (start·walk·stop) 걸은 것으로 본다 */
   | { type: 'walkPhase'; phase: WalkPhase | null }
@@ -59,6 +61,8 @@ const WALKED: readonly (WalkPhase | null)[] = ['start', 'walk', 'stop']
 /** 이 일이 찍는 발도장. 없으면 null */
 export function pawOf(event: PawEvent): PawId | null {
   switch (event.type) {
+    case 'tap':
+      return 'tap'
     case 'react':
       return event.source === 'tap' ? 'tap' : null
     case 'hold':

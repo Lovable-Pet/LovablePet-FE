@@ -1,7 +1,7 @@
 import '@google/model-viewer'
 import type { ModelViewerElement } from '@google/model-viewer'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { Box, Camera, ChevronLeft, ChevronRight, Footprints, Smartphone } from 'lucide-react'
+import { Box, Camera, ChevronLeft, ChevronRight, Footprints, Mic, Smartphone } from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { ApiError } from '../apis/apiError'
 import type { PetDetail, PetModelView } from '../apis/dto/pet.dto'
@@ -9,7 +9,7 @@ import { resolveModelUrl } from '../apis/pet'
 import { Button } from '../components/Button/Button'
 import { buttonStyles } from '../components/Button/buttonStyles'
 import { StateView } from '../components/StateView/StateView'
-import { SEX_LABEL } from '../constants/pet'
+import { PUPPY_NOTICE, SEX_LABEL } from '../constants/pet'
 import { ArControls } from '../features/ar/components/ArControls'
 import { ArFinishCard } from '../features/ar/components/ArFinishCard'
 import { ArFloorHint } from '../features/ar/components/ArFloorHint'
@@ -35,17 +35,30 @@ import { VoiceLogDebug } from '../features/ar/components/VoiceLogDebug'
 import {
   AR_TEXT,
   FOLLOW_NOTICE,
+  INTRO_PUPPY_MS,
   INTRO_STEP_MS,
   INTRO_TEXT,
+  NOTICE_TEXT,
   pickHint,
   POSE_HINT,
   REACTION_BY_CLIP,
+  SAME_POSE_MS,
+  SAME_POSE_TEXT,
   type ReactionKind,
 } from '../features/ar/arText'
-import { DogAnimator, POSE_LABEL, type CommandId, type Pose, type ReactSource } from '../features/ar/dogAnimator'
+import {
+  DogAnimator,
+  POSE_LABEL,
+  type CommandId,
+  type Pose,
+  type ReactSource,
+  type RequestResult,
+  type ReserveId,
+  type TapResult,
+} from '../features/ar/dogAnimator'
 import { useVoiceCommand } from '../features/ar/useVoiceCommand'
 import { STANDING_CLIP, WALK_CLIPS } from '../features/ar/walk/walkSpec'
-import { attachPoseLayers } from '../features/ar/modelViewerArStage'
+import { attachPoseLayers, clipQuietEnds, type PoseLayersHandle } from '../features/ar/modelViewerArStage'
 import { useArPlacement, type ArOcclusionOptions, type ArPlacement } from '../features/ar/useArPlacement'
 import { useArWalk, type ArWalk } from '../features/ar/useArWalk'
 import { useArGaze } from '../features/ar/useArGaze'
@@ -57,7 +70,7 @@ import { LONG_PRESS_MS, useLongPress } from '../features/ar/useLongPress'
 import { PetPhoto } from '../features/pet/components/PetPhoto'
 import { usePetDetail } from '../features/pet/queries'
 import { useGoBack } from '../hooks/useGoBack'
-import { formatWeight, toWithersCm } from '../utils/pet'
+import { formatWeight, isLikelyPuppy, toWithersCm } from '../utils/pet'
 import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 
 // /pets/:petId/ar — 캔버스 06 AR 시작 안내 → 07·08 실제 크기로 놓기
@@ -65,7 +78,7 @@ import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 // model-viewer 가 기기에 맞는 AR을 고른다 (ar-modes 순서대로)
 // - 안드로이드 Chrome: WebXR. 이 페이지 안에서 카메라가 열려 아래 오버레이(명령 버튼)가 그대로 보인다.
 //   바닥 원을 보고 탭한 자리에 사용자를 바라보게 놓는다 (useArPlacement). 놓기 전에는 명령·음성·개 탭을 막는다.
-//   놓은 뒤 서 있을 때 '산책'을 누르면 개가 사용자를 따라 걷는다 (useArWalk, 걷기 클립이 있는 모델만). 그동안 명령·음성·개 탭은 숨기거나 막는다.
+//   놓은 뒤 '산책'을 누르면 (앉아 있으면 일어난 뒤) 개가 사용자를 따라 걷는다 (useArWalk, 걷기 클립이 있는 모델만). 그동안 명령·음성·개 탭은 숨기거나 막는다.
 //   놓은 뒤에는 고개를 돌려 가끔 사용자(휴대폰)를 바라본다 (useArGaze, 지금은 개발 모드만. 제자리 회전 클립이 있으면 오래 옆·뒤에 있는 사용자 쪽으로 돌아선다)
 // - WebXR 이 안 되는 안드로이드: Scene Viewer 앱으로 넘어간다 (명령·탭 반응 없음)
 // - 아이폰: Quick Look 으로 USDZ 를 연다. USDZ 에는 대기 루프 하나만 있어 명령·탭 반응이 안 된다
@@ -76,6 +89,10 @@ import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 // - 가운데: 개 머리 위 반응 말풍선 ('?', 하트, '멍!', '빵!')
 // - 아래: [묘기 | 말 걸기 | 산책]. 묘기는 명령 트레이(3×2)를 펼친다. 명령 클립이 없으면 묘기 자리에 꼬리 흔들기 하나.
 //   산책 중에는 '산책 끝' 하나
+//
+// 입력은 막지 않는다 (버튼을 꺼 두는 것은 놓기 전·불러오는 중뿐, 규칙은 DogAnimator): 반응·짖기·손 줘는 끊고 바로,
+// 빵·구르기·자세 전환·몸 돌리기 중이면 예약 (누른 칩·버튼이 눌린 모양으로 남고 위에 '하던 동작을 마치고 할게요', 다시 누르면 취소).
+// 아무 일도 안 일어나는 입력은 없다: 앉은 개 톡은 절차적 갸우뚱, 끊지 않는 동작 중 톡은 '?' 말풍선, 같은 자세 명령은 '이미 앉아 있어요'
 //
 // 크기: GLB 가 이미 미터 단위 실제 크기라 ar-scale="fixed" 로 손가락 확대·축소를 막는다
 
@@ -91,6 +108,11 @@ const TAP_SLOP_PX = 8
 const STUCK_HINT_MS = 10_000
 /** 개를 3초 누르면 하는 명령. 짖기는 음성과 묘기 트레이로 */
 const HOLD_COMMAND: CommandId = 'play_dead'
+/** 끝부분이 첫 프레임 자세로 돌아와 비어 있으면 거기서 끊는 클립 (목업은 갸우뚱만 비어 있다) */
+const REACTION_CLIPS = ['head_tilt', 'tail_wag', 'bark']
+
+/** 명령이 받아들여졌는지 (발도장): 바로 · 예약 · 이미 그 자세 · 이미 하는 중 */
+const accepted = (result: RequestResult) => result === 'started' || result === 'reserved' || result === 'same' || result === 'running'
 
 /** '따라보기' 토글을 누른 뒤 위 안내 문구를 보이는 시간 (ms) */
 const FOLLOW_NOTICE_MS = 3000
@@ -250,13 +272,26 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   /** 반응 클립이 실제로 재생될 때 (load 때 만든 애니메이터가 부른다) */
   const onReact = useCallback((source: ReactSource) => stamp({ type: 'react', source }), [stamp])
   const onReactRef = useRef(onReact)
-  /** 처음 놓은 순간(AR)·처음 3D 로 본 순간의 인사와 체고 비교 (위 안내 자리에 2초씩) */
-  const [intro, setIntro] = useState<'hello' | 'height' | null>(null)
+  /** 처음 놓은 순간(AR)·처음 3D 로 본 순간의 인사와 체고 비교 (위 안내 자리에 2초씩), 새끼면 새끼 안내 3초 */
+  const [intro, setIntro] = useState<'hello' | 'height' | 'puppy' | null>(null)
   const greetedRef = useRef({ ar: false, preview: false })
   /** 마무리 카드. complete: 발도장을 다 모음 · exit: 닫기를 눌렀을 때 한 번 */
   const [card, setCard] = useState<'complete' | 'exit' | null>(null)
   const cardSeenRef = useRef(false)
   const [celebrated, setCelebrated] = useState(false)
+  /** 예약된 명령·산책 (누른 칩·버튼을 눌린 모양으로 두고, 위 안내 '하던 동작을 마치고 할게요') */
+  const [reserved, setReserved] = useState<ReserveId | null>(null)
+  /** 산책을 눌렀는데 앉거나 엎드려 있어 일어나는 중 ('일어나서 같이 걸을게요') */
+  const [walkPrep, setWalkPrep] = useState(false)
+  /** 같은 자세 명령 ('이미 앉아 있어요', SAME_POSE_MS 동안) */
+  const [samePose, setSamePose] = useState<{ pose: Pose; at: number } | null>(null)
+  useEffect(() => {
+    if (!samePose) return
+    const timer = window.setTimeout(() => setSamePose(null), SAME_POSE_MS)
+    return () => window.clearTimeout(timer)
+  }, [samePose])
+  /** 자세 층 (클립 사이 섞기·절차적 갸우뚱). 내부 모양이 다르면 null */
+  const poseLayersRef = useRef<PoseLayersHandle | null>(null)
 
   const withersCm = toWithersCm(model.withersM)
   const inAr = arStatus === 'session-started' || arStatus === 'object-placed'
@@ -330,16 +365,18 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     requestPose: (next) => {
       const animator = animatorRef.current
       if (!animator?.hasCommands || walkStateRef.current.active) return false
-      animator.command(next)
-      return true
+      return animator.command(next) === 'started'
     },
     isHidden: near.isHidden,
     follow,
+    // 몸 돌리는 동안 명령·산책은 예약하고 끝나면 한다
+    onTurning: (turning) => animatorRef.current?.setBlocked(turning),
   })
-  const walk = useArWalk(placement.walkHost, {
-    canStart: dogReady && pose === 'stand' && !animBusy && !gaze.turning,
-    debug,
-    tuning: walkTuning,
+  const walk = useArWalk(placement.walkHost, { debug, tuning: walkTuning })
+  /** 산책 출발 (애니메이터가 서기 루프로 돌려 둔 뒤 부른다) */
+  const walkStartRef = useRef(walk.start)
+  useEffect(() => {
+    walkStartRef.current = walk.start
   })
   useEffect(() => {
     walkStateRef.current = { active: walk.active, standing: walk.phase === 'standing', requestTurn: walk.requestTurn }
@@ -388,8 +425,11 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
       setPose('stand')
       setAnimBusy(false)
       setActiveCommand(null)
-      // 클립 사이 자세 섞기 (화면 안 3D·AR). 못 쓰면 model-viewer 크로스페이드 그대로
+      setReserved(null)
+      setWalkPrep(false)
+      // 클립 사이 자세 섞기 (화면 안 3D·AR). 못 쓰면 model-viewer 크로스페이드 그대로 (빈 끝에서 끊지도 않는다)
       const poseLayers = attachPoseLayers(mv)
+      poseLayersRef.current = poseLayers
       const animator = new DogAnimator(mv, {
         tapAnimation: behaviorRef.current.tapAnimation,
         playbackRate: behaviorRef.current.playbackRate,
@@ -397,7 +437,9 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         onBusy: setAnimBusy,
         onClipStart: (clip) => clipStartRef.current(clip),
         onReact: (source) => onReactRef.current(source),
+        onReserve: setReserved,
         poseBlend: poseLayers !== null,
+        clipEnds: poseLayers ? clipQuietEnds(mv, REACTION_CLIPS) : undefined,
       })
       animatorRef.current = animator
       setHasCommands(animator.hasCommands)
@@ -441,46 +483,59 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     if (mvRef.current?.canActivateAR) void mvRef.current.activateAR()
   }
 
-  /** 명령. 산책 중·몸 돌리는 중이면 받지 않고 false */
-  const runCommand = (commandId: CommandId) => {
-    // 산책 중·몸 돌리기 중에는 클립을 산책·회전이 돌린다
-    if (walking || gaze.isTurning()) return false
+  /**
+   * 명령. 반응·짖기·손 줘 중이면 끊고 바로, 빵·구르기·자세 전환·몸 돌리기 중이면 예약 (toggle: 같은 칩을 다시 누르면 예약 취소).
+   * 이미 그 자세면 '이미 앉아 있어요'. 산책 중에는 받지 않는다 (아래 버튼이 '산책 끝' 하나)
+   */
+  const runCommand = (commandId: CommandId, { toggle = false }: { toggle?: boolean } = {}): RequestResult => {
+    const animator = animatorRef.current
+    if (walking || !animator) return 'ignored'
     gaze.userCommand()
-    setActiveCommand(commandId)
-    animatorRef.current?.command(commandId)
-    return true
+    const result = animator.command(commandId, { toggle })
+    if (result === 'started') setActiveCommand(commandId)
+    if (result === 'same') setSamePose({ pose: animator.state.pose, at: Date.now() })
+    return result
   }
 
-  /** 개 탭. head_tilt 가 있으면 갸우뚱, 없으면 꼬리 흔들기. 묘기 트레이는 닫는다 */
+  /**
+   * 톡·꼬리 흔들기·음성 실패의 결과: 클립이면 그 클립이 말풍선을 띄우고 (onClipStart), 앉거나 엎드려 있으면 절차적 갸우뚱 + '?',
+   * 손 줘 중이면 손을 내리고 하트, 빵·구르기·자세 전환·몸 돌리기 중이면 '?' 말풍선만
+   */
+  const showTapResult = (result: TapResult) => {
+    if (result === 'tilt') {
+      poseLayersRef.current?.tiltHead()
+      showReaction('puzzled')
+    } else if (result === 'lowerPaw') showReaction('heart')
+    else if (result === 'bubble') showReaction('puzzled')
+  }
+
+  /** 개 탭. 어느 반응이든 '톡' 발도장. 묘기 트레이는 닫는다 */
   const tapReaction = () => {
-    if (walking) return
+    const animator = animatorRef.current
+    if (walking || !animator) return
     setTrayOpen(false)
     gaze.trigger('tap')
-    if (gaze.isTurning()) return
-    setActiveCommand(null)
-    animatorRef.current?.tap()
+    showTapResult(animator.tap())
+    stamp({ type: 'tap' })
   }
 
   /** '꼬리 흔들기' 버튼 (명령 클립이 없는 모델). 늘 꼬리 흔들기 */
   const wagReaction = () => {
-    if (walking || gaze.isTurning()) return
+    const animator = animatorRef.current
+    if (walking || !animator) return
     setActiveCommand(null)
-    animatorRef.current?.wag()
+    showTapResult(animator.wag())
   }
 
-  /**
-   * 음성 명령을 못 알아들었을 때. head_tilt 가 있으면 갸우뚱 (그 클립이 '?' 말풍선을 띄운다).
-   * 없으면 개가 쉬고 있을 때만 '?' 말풍선. '알아듣지 못했어요' 문구는 말 걸기 쪽에서 띄운다
-   */
+  /** 음성 명령을 못 알아들었을 때 ('알아듣지 못했어요' 문구는 말 걸기 쪽에서 띄운다) */
   const puzzledReaction = () => {
     const animator = animatorRef.current
-    if (walking || gaze.isTurning() || !animator) return
-    if (!animator.canPuzzle && !animator.state.busy) showReaction('puzzled')
-    animator.puzzled()
+    if (walking || !animator) return
+    showTapResult(animator.puzzled())
   }
 
-  /** 개 3초 누르기가 다 참: 빵 ('꾹' 발도장) */
-  const holdDog = () => stamp({ type: 'hold', accepted: runCommand(HOLD_COMMAND) })
+  /** 개 3초 누르기가 다 참: 빵 ('꾹' 발도장, 예약이어도) */
+  const holdDog = () => stamp({ type: 'hold', accepted: accepted(runCommand(HOLD_COMMAND)) })
 
   /** 인사: 서 있고 꼬리 흔들기가 있으면 한 번 흔들고, 위 안내 자리에 인사 → 체고 비교 */
   const startIntro = () => {
@@ -501,11 +556,14 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     greetedRef.current.preview = true
     startIntro()
   }
+  /** 아직 어린 유기견 (다 자라면 크기가 달라진다): 등장 연출에서 체고 다음에 한 번 */
+  const puppy = isLikelyPuppy(pet.birthYear)
   useEffect(() => {
     if (!intro) return
-    const timer = window.setTimeout(() => setIntro(intro === 'hello' ? 'height' : null), INTRO_STEP_MS)
+    const next = intro === 'hello' ? 'height' : intro === 'height' && puppy ? 'puppy' : null
+    const timer = window.setTimeout(() => setIntro(next), intro === 'puppy' ? INTRO_PUPPY_MS : INTRO_STEP_MS)
     return () => window.clearTimeout(timer)
-  }, [intro])
+  }, [intro, puppy])
 
   /** 마무리 카드를 띄운다 (한 번 보면 닫기가 바로 나가기) */
   const openCard = (mode: 'complete' | 'exit') => {
@@ -518,11 +576,12 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     else openCard('exit')
   }
 
-  /** 다시 놓기: 개를 숨기고 바닥 원으로 돌아간다 */
+  /** 다시 놓기: 개를 숨기고 바닥 원으로 돌아간다 (예약은 버린다) */
   const replaceDog = () => {
     setActiveCommand(null)
     setTrayOpen(false)
     setInfoOpen(false)
+    animatorRef.current?.cancelReserved()
     placement.replace()
   }
 
@@ -538,11 +597,11 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     onLongPress: () => holdDog(),
   })
 
-  // 말 걸기 (음성 명령). 놓기 전·산책 중에는 막혀 듣던 것도 조용히 멈춘다
+  // 말 걸기 (음성 명령). 놓기 전·산책 중에는 막혀 듣던 것도 조용히 멈춘다. 같은 말을 다시 해도 예약은 그대로 (취소는 칩으로)
   const voice = useVoiceCommand({
     inAr,
     disabled: arLocked || walking,
-    onCommand: (id) => stamp({ type: 'voiceCommand', accepted: runCommand(id) }),
+    onCommand: (id) => stamp({ type: 'voiceCommand', accepted: accepted(runCommand(id)) }),
     onMiss: puzzledReaction,
   })
   // 듣기 시작하면 개가 사용자를 바라본다
@@ -570,22 +629,34 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   }
 
   /**
-   * '산책' 버튼: AR 에서 걷기 클립이 있는 개만 (화면 안 3D·아이폰은 산책이 없다).
-   * 놓기 전에는 자리만 잡아 두고(눌리지 않음), 놓은 뒤에는 산책 리그가 있을 때만. 서 있지 않거나 명령 중이면 눌리지 않는다
+   * 산책: 반응·짖기·손 줘 중이면 끊고, 앉거나 엎드려 있으면 일어난 뒤 ('일어나서 같이 걸을게요'), 빵·구르기·자세 전환·몸 돌리기 중이면
+   * 예약하고 끝나면 출발한다 (다시 누르면 예약 취소). 스스로 앉은 개도 같다
    */
-  const walkButton =
-    inAr && hasWalkClips && (placement.walkHost !== null || !dogReady)
-      ? {
-          onStart: () => {
-            setTrayOpen(false)
-            walk.start()
-          },
-          disabled: !walk.available,
-        }
-      : null
+  const startWalk = () => {
+    setTrayOpen(false)
+    const animator = animatorRef.current
+    if (!animator || !walk.available) return
+    gaze.userCommand()
+    const result = animator.walk({
+      onBegin: (from) => setWalkPrep(from !== 'stand'),
+      onReady: () => {
+        setWalkPrep(false)
+        walkStartRef.current()
+      },
+      onCancel: () => setWalkPrep(false),
+    })
+    if (result === 'unreserved') setWalkPrep(false)
+  }
+
+  /**
+   * '산책' 버튼: AR 에서 걷기 클립이 있는 개만 (화면 안 3D·아이폰은 산책이 없다).
+   * 놓기 전에는 자리만 잡아 두고(눌리지 않음), 놓은 뒤에는 늘 눌린다
+   */
+  const hasWalkButton = inAr && hasWalkClips && (placement.walkHost !== null || !dogReady)
+  const walkButton = hasWalkButton ? { onStart: startWalk, disabled: !walk.available } : null
 
   // 발도장: 이 개·이 화면에서 할 수 있는 것만 보이고, 남은 것 중 첫 번째를 권한다
-  const paws = pawsFor({ tap: canTap, hold: hasCommands, talk: hasCommands && voice.supported, walk: walkButton !== null })
+  const paws = pawsFor({ tap: canTap, hold: hasCommands, talk: hasCommands && voice.supported, walk: hasWalkButton })
   const nextPawId = nextPaw(paws, pawsDone)
   const pawsComplete = allPawsDone(paws, pawsDone)
   // 산책 = 개가 실제로 한 번 걸음 (walk_start 부터)
@@ -614,7 +685,24 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     placement: arLocked ? placementHint(placement) : null,
     near: near.hint ? NEAR_HINT_TEXT : null,
     walk: walking ? walkHint(walk) : null,
-    intro: intro === 'hello' ? INTRO_TEXT.hello(pet.kindName) : intro === 'height' ? INTRO_TEXT.height(withersCm) : null,
+    // 막힌 입력의 까닭: 예약 > 일어나서 산책 > 같은 자세 > 물러나면 돌아봄
+    notice: reserved
+      ? NOTICE_TEXT.reserved
+      : walkPrep
+        ? NOTICE_TEXT.standToWalk
+        : samePose
+          ? SAME_POSE_TEXT[samePose.pose]
+          : gaze.stepBack && follow
+            ? NOTICE_TEXT.stepBack
+            : null,
+    intro:
+      intro === 'hello'
+        ? INTRO_TEXT.hello(pet.kindName)
+        : intro === 'height'
+          ? INTRO_TEXT.height(withersCm)
+          : intro === 'puppy'
+            ? PUPPY_NOTICE
+            : null,
     follow: followNotice ? FOLLOW_NOTICE[followNotice.on ? 'on' : 'off'] : null,
     paw: nextPawId && !arLocked ? PAW_HINT[nextPawId] : null,
     pose: hasCommands
@@ -746,11 +834,13 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                 trayOpen={trayOpen}
                 onToggleTray={() => setTrayOpen((open) => !open)}
                 tricksDisabled={!loaded || arLocked}
-                commandsDisabled={!loaded || arLocked || gaze.turning}
+                commandsDisabled={!loaded || arLocked}
                 active={activeCommand}
-                onCommand={runCommand}
+                reserved={reserved}
+                pose={pose}
+                onCommand={(id) => runCommand(id, { toggle: true })}
                 onWag={wagReaction}
-                wagDisabled={!loaded || arLocked || pose !== 'stand'}
+                wagDisabled={!loaded || arLocked}
                 walk={walkButton}
                 highlight={nextPawId && !arLocked ? (PAW_BUTTON[nextPawId] ?? null) : null}
               />
@@ -810,6 +900,12 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           canAr={canAr}
           onStart={startAr}
           onPreview={startPreview}
+          // AR 안에서 권한 창이 뜨지 않게 여기서 미리 (음성이 되고 아직 정하지 않았을 때만, 건너뛸 수 있음)
+          mic={
+            loaded && hasCommands && voice.supported && voice.permission === 'prompt'
+              ? { onAllow: () => void voice.askPermission() }
+              : null
+          }
         />
       )}
     </div>
@@ -826,6 +922,7 @@ function ArGuide({
   canAr,
   onStart,
   onPreview,
+  mic,
 }: {
   pet: PetDetail
   withersCm: number
@@ -835,6 +932,8 @@ function ArGuide({
   canAr: boolean
   onStart: () => void
   onPreview: () => void
+  /** 마이크 권한을 미리 받는 줄 (음성이 되고 권한을 아직 정하지 않았을 때). 아니면 null */
+  mic: { onAllow: () => void } | null
 }) {
   const steps = [
     ['밝은 곳에서 바닥을 비춰요', '유기견이 지낼 거실이나 방의 넓고 평평한 바닥이 좋아요.'],
@@ -897,6 +996,19 @@ function ArGuide({
       </div>
 
       <div className="mt-auto px-5 pt-6 pb-7">
+        {mic && (
+          <div className="mb-2.5 flex items-center gap-2.5 rounded-input bg-muted py-1 pr-1 pl-3.5">
+            <Mic className="size-4.5 shrink-0 text-ink-tertiary" strokeWidth={2} aria-hidden />
+            <p className="flex-1 text-label text-ink-secondary">{AR_TEXT.micAsk}</p>
+            <button
+              type="button"
+              onClick={mic.onAllow}
+              className="h-11 shrink-0 rounded-full bg-surface px-4 text-label font-semibold text-ink active:scale-97"
+            >
+              {AR_TEXT.micAllow}
+            </button>
+          </div>
+        )}
         <div className="mb-3.5 flex gap-2.5 rounded-input bg-muted px-3.5 py-3">
           <Smartphone className="mt-0.5 size-4.5 shrink-0 text-ink-tertiary" strokeWidth={2} aria-hidden />
           <p className="text-label text-ink-secondary">
