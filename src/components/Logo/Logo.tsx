@@ -1,30 +1,27 @@
-import logoMark from '../../assets/logo-mark.png'
-import logoWordmark from '../../assets/logo-wordmark.png'
+import { PawPrint } from 'lucide-react'
+import wordmark from '../../assets/logo-wordmark.png'
 import { cn } from '../utils/cn'
 
-export interface LogoProps {
-  /** 강아지 얼굴 크기 (px) */
-  size?: number
-  /** 글자 로고 'LovablePet'도 함께 (밝은 바탕용. 글자가 갈색이라 어두운 바탕에서는 글자를 따로 쓴다) */
-  withText?: boolean
-  className?: string
-}
-
-/** 브랜드 로고. 강아지 얼굴 + 글자 로고 (원본: 2026-11-11 받은 로고 이미지에서 잘라 배경을 투명하게) */
-export function Logo({ size = 26, withText = false, className }: LogoProps) {
+/** 머리 영역 로고: 발바닥 + Lovable Pet 글자 그림 */
+export function Logo({ className }: { className?: string }) {
   return (
     <span className={cn('inline-flex items-center gap-1.5', className)}>
-      <img src={logoMark} width={size} height={size} alt="" aria-hidden className="shrink-0" draggable={false} />
-      {withText && (
-        // 원본 글자 로고 비율 330:63
-        <img
-          src={logoWordmark}
-          height={Math.round(size * 0.82)}
-          style={{ height: Math.round(size * 0.82), width: 'auto' }}
-          alt="LovablePet"
-          draggable={false}
-        />
-      )}
+      <PawPrint aria-hidden className="size-6 fill-apricot text-apricot" strokeWidth={1.5} />
+      <img src={wordmark} alt="Lovable Pet" className="h-6 w-auto" />
+    </span>
+  )
+}
+
+/** 시작 화면의 큰 로고 (두 줄) */
+export function LogoStacked({ className }: { className?: string }) {
+  return (
+    <span role="img" aria-label="Lovable Pet" className={cn('block text-center font-display leading-[0.95]', className)}>
+      <span aria-hidden className="block text-[4.25rem] text-ink">
+        Lovable
+      </span>
+      <span aria-hidden className="block text-[4.25rem] text-primary">
+        Pet
+      </span>
     </span>
   )
 }

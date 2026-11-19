@@ -1,89 +1,99 @@
 import { Link } from 'react-router'
+import type { PetSummary } from '../apis/dto/pet.dto'
+import { Badge } from '../components/Badge/Badge'
 import { Button } from '../components/Button/Button'
-import { buttonStyles } from '../components/Button/buttonStyles'
-import { StateView } from '../components/StateView/StateView'
-import { useAuth } from '../features/auth/useAuth'
-import { FavoriteCard, FavoriteCardSkeleton } from '../features/favorite/components/FavoriteCard'
-import { useFavoriteList } from '../features/favorite/queries'
+import { buttonClass } from '../components/Button/buttonClass'
 import { LoadMore } from '../components/LoadMore/LoadMore'
-import { useEntranceStagger } from '../hooks/useEntranceStagger'
+import { LoadingDog } from '../components/LoadingScreen/LoadingScreen'
+import { StateView } from '../components/StateView/StateView'
+import { cn } from '../components/utils/cn'
+import { FavoriteButton } from '../features/favorite/components/FavoriteButton'
+import { useFavoriteList } from '../features/favorite/queries'
+import { petFacts } from '../features/pet/petFacts'
+import { PetPhoto } from '../features/pet/components/PetPhoto'
 
-/** 찜한 아이 (RequireAuth 안에서만 보인다) */
+// /favorites — 내가 찜한 유기견 (최근에 찜한 순). 로그인해야 들어온다
 export function FavoritesPage() {
-  const { isLoggedIn } = useAuth()
-  const list = useFavoriteList(isLoggedIn)
-
+  const list = useFavoriteList(true)
   const pages = list.data?.pages ?? []
-  const pets = pages.flatMap((page) => page.items)
   const total = pages[0]?.totalElements
-  const entrance = useEntranceStagger(pages.length, 'favorites')
 
   return (
-    <div className="pb-6">
-      <header className="flex h-14 items-center px-5">
-        <h1 className="text-title font-bold">
-          찜한 유기견{' '}
-          {total !== undefined && <span className="font-mono text-accent">{total.toLocaleString()}</span>}
-        </h1>
-      </header>
+    <main className="px-5 pt-[calc(20px+env(safe-area-inset-top))]">
+      <h1 className="font-display text-title">관심목록</h1>
+      {total !== undefined && total > 0 && (
+        <p className="mt-1 text-body text-ink-soft">
+          <span className="font-bold tabular-nums">{total}</span>마리를 찜했어요
+        </p>
+      )}
 
-      <p className="mx-5 mt-1 mb-4 text-body text-ink-tertiary">
-        찜해 둔 유기견을 우리 집에 다시 놓아 보고,
-        <br />
-        마음이 정해지면 보호소에 연락해 보세요.
-      </p>
-
-      <div className="px-4">
-        {list.isPending ? (
-          <div className="flex flex-col gap-3" aria-busy="true" aria-label="찜 목록 불러오는 중">
-            {Array.from({ length: 3 }, (_, index) => (
-              <FavoriteCardSkeleton key={index} />
+      {list.isPending ? (
+        <LoadingDog description="찜한 유기견을 불러오고 있어요" />
+      ) : list.isError && pages.length === 0 ? (
+        <StateView
+          tone="error"
+          title="찜 목록을 불러오지 못했어요"
+          description="잠시 후 다시 시도해 주세요."
+          action={
+            <Button variant="outline" onClick={() => list.refetch()}>
+              다시 시도
+            </Button>
+          }
+        />
+      ) : total === 0 ? (
+        <StateView
+          character="love"
+          title="아직 찜한 유기견이 없어요"
+          description="마음이 가는 유기견의 하트를 누르면 여기에 모여요."
+          action={
+            <Link to="/" className={buttonClass()}>
+              유기견 둘러보기
+            </Link>
+          }
+        />
+      ) : (
+        <>
+          <ul className="mt-5 flex flex-col gap-3">
+            {pages.flatMap((page) => page.items).map((pet) => (
+              <li key={pet.id}>
+                <FavoriteRow pet={pet} />
+              </li>
             ))}
-          </div>
-        ) : list.isError ? (
-          <StateView
-            tone="error"
-            title="찜 목록을 불러오지 못했어요"
-            description="잠시 후 다시 시도해 주세요."
-            action={
-              <Button variant="outline" size="md" onClick={() => list.refetch()}>
-                다시 시도
-              </Button>
-            }
+          </ul>
+          <LoadMore
+            hasNext={list.hasNextPage}
+            isLoading={list.isFetchingNextPage}
+            isError={list.isFetchNextPageError}
+            onLoad={() => list.fetchNextPage()}
           />
-        ) : pets.length === 0 ? (
-          <StateView
-            title="아직 찜한 유기견이 없어요"
-            description="마음에 남는 유기견을 찜해 두면 여기서 다시 볼 수 있어요."
-            action={
-              <Link to="/" className={buttonStyles({ variant: 'dark', size: 'md' })}>
-                유기견 둘러보기
-              </Link>
-            }
-          />
-        ) : (
-          <>
-            <ul className="flex flex-col gap-3">
-              {pages.flatMap((page, pageIndex) =>
-                page.items.map((pet, index) => {
-                  const enter = entrance(pageIndex, index)
-                  return (
-                    <li key={pet.id} className={enter?.className} style={enter?.style}>
-                      <FavoriteCard pet={pet} />
-                    </li>
-                  )
-                }),
-              )}
-            </ul>
-            <LoadMore
-              hasNextPage={list.hasNextPage}
-              isFetching={list.isFetchingNextPage}
-              isError={list.isFetchNextPageError}
-              onLoadMore={() => list.fetchNextPage()}
-            />
-          </>
-        )}
+        </>
+      )}
+    </main>
+  )
+}
+
+function FavoriteRow({ pet }: { pet: PetSummary }) {
+  return (
+    <Link
+      to={`/pets/${pet.id}`}
+      className="flex items-center gap-3.5 rounded-card bg-surface p-2 shadow-soft transition-[scale] duration-150 active:scale-[0.98]"
+    >
+      <PetPhoto
+        src={pet.thumbnailUrl}
+        alt={`${pet.kindName} 공고 사진`}
+        seed={pet.id}
+        className={cn('size-24 shrink-0 rounded-tile', !pet.adoptable && 'opacity-60 grayscale-[0.4]')}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap gap-1">
+          {pet.adoptable ? <Badge tone="success">입양 가능</Badge> : <Badge>보호 종료</Badge>}
+          {pet.hasModel && <Badge tone="info">AR</Badge>}
+        </div>
+        <h2 className="mt-1.5 truncate text-body font-extrabold">{pet.kindName}</h2>
+        <p className="truncate text-label text-ink-soft">{petFacts(pet)}</p>
+        <p className="truncate text-caption text-ink-mute">{pet.careName}</p>
       </div>
-    </div>
+      <FavoriteButton petId={pet.id} favorited={pet.favorited} name={pet.kindName} className="mr-1" />
+    </Link>
   )
 }

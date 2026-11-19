@@ -1,61 +1,46 @@
-import { Link, Outlet, useLocation } from 'react-router'
+import { ChevronLeft } from 'lucide-react'
+import { Link, NavLink, Outlet } from 'react-router'
 import { Badge } from '../../components/Badge/Badge'
-import { Logo } from '../../components/Logo/Logo'
 import { cn } from '../../components/utils/cn'
 
-const NAV = [
-  // AR 만들기(/admin/pets/:id/model)도 'AR 모델 만들기' 메뉴 안이다
-  { to: '/admin', label: 'AR 모델 만들기', match: (path: string) => path === '/admin' || path.startsWith('/admin/pets') },
-  { to: '/admin/models', label: '생성 기록', match: (path: string) => path.startsWith('/admin/models') },
-]
+const TABS = [
+  { to: '/admin', label: '유기견 목록', end: true },
+  { to: '/admin/models', label: '생성 기록', end: false },
+] as const
 
-/**
- * 관리자 화면 (목록·관리). 진한 상단 바 + 본문 최대 1160px 가운데.
- * 좌우 여백은 모바일 20 / 태블릿 32 / 데스크톱 40 (box-content 라 1160 은 여백을 뺀 본문 폭)
- */
-const CONTAINER = 'mx-auto box-content max-w-[1160px] px-5 tablet:px-8 desktop:px-10'
-
+/** 관리자 화면 틀. 표와 사진을 넓게 봐야 해서 앱 기둥(480px)보다 넓다 */
 export function AdminLayout() {
-  const { pathname } = useLocation()
-
   return (
-    <div className="min-h-dvh bg-canvas">
-      <header className="bg-ink pt-[env(safe-area-inset-top)] text-white">
-        <div className={`${CONTAINER} flex min-h-16 flex-wrap items-center gap-x-6 gap-y-2 py-2`}>
-          <div className="flex items-center gap-2">
-            <Logo size={24} />
-            <span className="text-emphasis font-bold">LovablePet</span>
-            <Badge tone="measure" size="sm">
-              관리자
-            </Badge>
-          </div>
-          <nav aria-label="관리자 메뉴" className="flex flex-1 gap-1">
-            {NAV.map(({ to, label, match }) => {
-              const active = match(pathname)
-              return (
-                <Link
-                  key={to}
-                  to={to}
-                  aria-current={active ? 'page' : undefined}
-                  className={cn(
-                    'flex h-11 items-center rounded-button-sm px-3.5 text-body whitespace-nowrap transition',
-                    'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-measure',
-                    active ? 'bg-white/12 font-semibold text-white' : 'text-on-dark-secondary hover:bg-white/6 hover:text-white',
-                  )}
-                >
-                  {label}
-                </Link>
-              )
-            })}
-          </nav>
-          <Link to="/" className="text-label text-on-dark-secondary touch-target hover:text-white">
-            앱으로 돌아가기
+    <div className="mx-auto min-h-dvh w-full max-w-[860px] bg-canvas pb-16">
+      <header className="sticky top-0 z-30 bg-canvas/90 px-4 pt-[env(safe-area-inset-top)] backdrop-blur sm:px-6">
+        <div className="flex h-14 items-center gap-2">
+          <Link to="/" aria-label="앱으로 돌아가기" className="-ml-2 flex size-11 items-center justify-center rounded-full hover:bg-pink-soft">
+            <ChevronLeft className="size-6" strokeWidth={2} aria-hidden />
           </Link>
+          <p className="text-emphasis font-extrabold">러버블펫</p>
+          <Badge tone="info">관리자</Badge>
         </div>
+        <nav aria-label="관리자 화면" className="flex gap-1 border-b border-line">
+          {TABS.map((tab) => (
+            <NavLink
+              key={tab.to}
+              to={tab.to}
+              end={tab.end}
+              className={({ isActive }) =>
+                cn(
+                  '-mb-px flex h-11 items-center border-b-[3px] px-3 text-body font-bold transition-colors duration-150',
+                  isActive ? 'border-primary-deep text-ink' : 'border-transparent text-ink-mute hover:text-ink',
+                )
+              }
+            >
+              {tab.label}
+            </NavLink>
+          ))}
+        </nav>
       </header>
-      <main className={`${CONTAINER} pt-7 pb-[calc(48px+env(safe-area-inset-bottom))]`}>
+      <div className="px-4 pt-6 sm:px-6">
         <Outlet />
-      </main>
+      </div>
     </div>
   )
 }

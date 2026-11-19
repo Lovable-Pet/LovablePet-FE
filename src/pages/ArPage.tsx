@@ -7,7 +7,8 @@ import { ApiError } from '../apis/apiError'
 import type { PetDetail, PetModelView } from '../apis/dto/pet.dto'
 import { resolveModelUrl } from '../apis/pet'
 import { Button } from '../components/Button/Button'
-import { buttonStyles } from '../components/Button/buttonStyles'
+import { Character } from '../components/Character/Character'
+import { buttonClass } from '../components/Button/buttonClass'
 import { StateView } from '../components/StateView/StateView'
 import { cn } from '../components/utils/cn'
 import { PUPPY_NOTICE, SEX_LABEL } from '../constants/pet'
@@ -24,7 +25,7 @@ import { useGoBack } from '../hooks/useGoBack'
 import { formatWeight, isLikelyPuppy, toWithersCm } from '../utils/pet'
 import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 
-// /pets/:petId/ar — 캔버스 06 AR 시작 안내 → 07·08 실제 크기로 놓기
+// /pets/:petId/ar — AR 시작 안내 → 실제 크기로 놓기
 //
 // model-viewer 가 기기에 맞는 AR을 고른다 (ar-modes 순서대로)
 // - 안드로이드 Chrome: WebXR. 이 페이지 안에서 카메라가 열려 아래 오버레이(명령 버튼)가 그대로 보인다
@@ -56,7 +57,7 @@ export function ArPage() {
           title="공고를 찾을 수 없어요"
           description="공고가 내려갔거나 주소가 잘못됐어요."
           action={
-            <Link to="/" replace className={buttonStyles({ variant: 'dark', size: 'md' })}>
+            <Link to="/" replace className={buttonClass()}>
               둘러보기로 가기
             </Link>
           }
@@ -72,7 +73,7 @@ export function ArPage() {
           title="공고를 불러오지 못했어요"
           description="잠시 후 다시 시도해 주세요."
           action={
-            <Button variant="outline" size="md" onClick={() => refetch()}>
+            <Button variant="outline" onClick={() => refetch()}>
               다시 시도
             </Button>
           }
@@ -88,7 +89,7 @@ export function ArPage() {
           title="아직 3D 모델이 없어요"
           description="모델이 준비되면 우리 집에 놓아 볼 수 있어요."
           action={
-            <Button variant="dark" size="md" onClick={goBack}>
+            <Button variant="primary" onClick={goBack}>
               상세로 돌아가기
             </Button>
           }
@@ -241,7 +242,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           title="3D 모델을 불러오지 못했어요"
           description="인터넷 연결을 확인하고 다시 시도해 주세요."
           action={
-            <Button variant="outline" size="md" onClick={() => window.location.reload()}>
+            <Button variant="outline" onClick={() => window.location.reload()}>
               다시 시도
             </Button>
           }
@@ -258,6 +259,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         ios-src={model.usdzUrl ? resolveModelUrl(model.usdzUrl) : undefined}
         alt={`${pet.kindName} 3D 모델, 체고 ${withersCm}cm`}
         ar
+        // 시작 안내가 덮고 있는 동안에는 뒤에 있는 버튼으로 초점이 가지 않게 한다
+        inert={showGuide}
         // usdzUrl 이 없으면 아이폰 AR 을 끈다. 그냥 두면 model-viewer 가 GLB 에서 USDZ 를 즉석으로 만드는데 뼈대 있는 모델은 깨진다
         ar-modes={model.usdzUrl ? 'webxr scene-viewer quick-look' : 'webxr scene-viewer'}
         ar-scale="fixed"
@@ -300,24 +303,30 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           <div className="flex w-full items-center justify-between">
             {/* WebXR 중에는 model-viewer 의 닫기 버튼을 쓴다 */}
             {inAr ? (
-              <span className="size-11" aria-hidden />
+              <span className="size-12" aria-hidden />
             ) : (
               <button
                 type="button"
                 onClick={onBack}
                 aria-label="AR 닫기"
-                className="pointer-events-auto flex size-11 items-center justify-center rounded-full bg-black/45"
+                className="pointer-events-auto flex size-12 items-center justify-center rounded-full bg-surface/95 text-ink shadow-float transition-[scale] duration-150 active:scale-[0.96]"
               >
                 <X className="size-5.5" strokeWidth={2} aria-hidden />
               </button>
             )}
-            <span className="flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-measure px-3.5 text-body font-bold whitespace-nowrap text-ink">
-              <Ruler className="size-4" strokeWidth={2.2} aria-hidden />
-              실제 크기 · 체고 <span className="font-mono">{withersCm}cm</span>
+            <span className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-surface/95 px-4 text-body font-extrabold whitespace-nowrap text-ink shadow-float">
+              <Box className="size-4.5 text-primary" strokeWidth={2.2} aria-hidden />
+              AR 모드
+              <span className="flex items-center gap-1 border-l border-line pl-2 font-bold text-ink-soft">
+                <Ruler className="size-4" strokeWidth={2.2} aria-hidden />
+                체고 <span className="tabular-nums">{withersCm}cm</span>
+              </span>
             </span>
-            <span className="size-11" aria-hidden />
           </div>
-          <p aria-live="polite" className="text-center text-body text-on-dark [text-shadow:0_1px_3px_rgb(0_0_0/0.6)]">
+          <p
+            aria-live="polite"
+            className="relative mt-1 max-w-[300px] rounded-[1.25rem] bg-surface/95 px-4 py-2.5 text-center text-body font-bold text-ink shadow-float after:absolute after:top-full after:left-1/2 after:-ml-2 after:border-8 after:border-transparent after:border-t-surface/95"
+          >
             {arStatus === 'session-started'
               ? '바닥을 천천히 비춰 주세요. 바닥을 찾으면 유기견이 놓여요'
               : hasCommands
@@ -327,8 +336,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                   : '유기견을 탭하면 꼬리를 흔들어요'}
           </p>
           {isLikelyPuppy(pet.birthYear) && (
-            <p className="flex max-w-[340px] gap-1.5 rounded-input bg-dark-notice px-3 py-2 text-label text-dark-notice-ink">
-              <AlertCircle className="mt-0.5 size-4 shrink-0 text-measure" strokeWidth={2} aria-hidden />
+            <p className="flex max-w-[340px] gap-1.5 rounded-input bg-overlay px-3 py-2 text-label text-on-dark backdrop-blur">
+              <AlertCircle className="mt-0.5 size-4 shrink-0 text-pink" strokeWidth={2} aria-hidden />
               {PUPPY_NOTICE}
             </p>
           )}
@@ -357,18 +366,18 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
             <button
               type="button"
               onClick={onBack}
-              className="pointer-events-auto flex items-center gap-3 rounded-card bg-overlay px-3 py-2.5 text-left"
+              className="pointer-events-auto flex items-center gap-3 rounded-card bg-overlay px-4 py-3 text-left backdrop-blur"
             >
               <span className="block min-w-0 flex-1">
-                <span className="block truncate text-body font-semibold">
+                <span className="block truncate text-body font-bold">
                   {pet.kindName} · {SEX_LABEL[pet.sex]}
-                  {pet.weightKg !== null && <span className="font-mono"> · {formatWeight(pet.weightKg)}</span>}
+                  {pet.weightKg !== null && <span className="tabular-nums"> · {formatWeight(pet.weightKg)}</span>}
                 </span>
-                <span className="mt-0.5 block truncate text-caption text-on-dark-secondary">
+                <span className="mt-0.5 block truncate text-caption text-on-dark-soft">
                   {pet.careName}에서 기다리고 있어요
                 </span>
               </span>
-              <span className="flex shrink-0 items-center gap-0.5 text-label font-semibold text-measure">
+              <span className="flex shrink-0 items-center gap-0.5 text-label font-extrabold text-pink">
                 만나러 가기
                 <ChevronRight className="size-4" strokeWidth={2} aria-hidden />
               </span>
@@ -380,14 +389,14 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
               <button
                 type="button"
                 onClick={startAr}
-                className={buttonStyles({ variant: 'measure', size: 'xl', fullWidth: true, className: 'pointer-events-auto' })}
+                className={buttonClass({ variant: 'sky', size: 'lg', full: true, className: 'pointer-events-auto' })}
               >
                 <Box className="size-5" strokeWidth={2} aria-hidden />
                 우리 집 바닥에 놓기
               </button>
             ) : (
               loaded && (
-                <p className="rounded-input bg-overlay px-3 py-2.5 text-center text-label text-on-dark-secondary">
+                <p className="rounded-input bg-overlay px-3 py-2.5 text-center text-label text-on-dark-soft">
                   이 기기에서는 AR을 열 수 없어 화면 안 3D로 보여 드려요.
                   {!isTouchDevice() && ' 휴대폰으로 열면 우리 집 바닥에 놓을 수 있어요.'}
                 </p>
@@ -435,7 +444,7 @@ function CommandBar({
   tapHold: LongPressHandlers<ReactPointerEvent>
 }) {
   return (
-    <div role="group" aria-label="유기견에게 명령하기" className="pointer-events-auto -mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none]">
+    <div role="group" aria-label="유기견에게 명령하기" className="pointer-events-auto -mx-4 -my-1.5 flex scroll-px-4 gap-2 overflow-x-auto px-4 py-1.5 [scrollbar-width:none]">
       {hasCommands &&
         COMMANDS.map((command) => (
           <ChipButton
@@ -475,8 +484,8 @@ function ChipButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'h-11 shrink-0 rounded-full px-4 text-body font-semibold transition active:scale-97 disabled:opacity-45',
-        highlighted ? 'bg-measure text-ink' : 'bg-black/55 text-white',
+        'h-11 shrink-0 rounded-full px-4 text-body font-extrabold transition-[background-color,scale] duration-150 active:scale-[0.96] disabled:opacity-45',
+        highlighted ? 'bg-primary text-white' : 'bg-surface/95 text-ink shadow-soft',
       )}
     >
       {children}
@@ -484,7 +493,7 @@ function ChipButton({
   )
 }
 
-/** 캔버스 06. 모델은 이 화면 뒤에서 미리 불러온다 */
+/** 시작 안내. 모델은 이 화면 뒤에서 미리 불러온다 */
 function ArGuide({
   pet,
   withersCm,
@@ -519,31 +528,32 @@ function ArGuide({
       </header>
 
       <div className="px-5 pt-1">
-        <div className="flex items-center gap-3 rounded-card bg-surface p-2.5">
+        <div className="flex items-center gap-3 rounded-card bg-surface p-2.5 shadow-soft">
           <PetPhoto
             src={pet.photoUrls[0] ?? null}
             alt={`${pet.kindName} 공고 사진`}
-            className="size-12 shrink-0 rounded-input"
-            showPlaceholderLabel={false}
-            lazy={false}
+            className="size-12 shrink-0 rounded-[0.875rem]"
+            seed={pet.id}
+            eager
           />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-body font-semibold">
+            <p className="truncate text-body font-bold">
               {pet.kindName} · {SEX_LABEL[pet.sex]}
             </p>
-            <p className="mt-0.5 text-label text-ink-tertiary">
-              체고 <span className="font-mono">{withersCm}cm</span>
+            <p className="mt-0.5 text-label text-ink-mute">
+              체고 <span className="tabular-nums">{withersCm}cm</span>
               {pet.weightKg !== null && (
                 <>
                   {' · '}
-                  <span className="font-mono">{formatWeight(pet.weightKg)}</span>
+                  <span className="tabular-nums">{formatWeight(pet.weightKg)}</span>
                 </>
               )}
             </p>
           </div>
         </div>
 
-        <h1 className="mt-6 text-headline font-bold">
+        <Character name="measuring" size={128} className="mt-3 -mb-1" />
+        <h1 className="font-display text-title">
           우리 집 바닥에
           <br />
           실제 크기로 놓아 볼게요
@@ -552,12 +562,12 @@ function ArGuide({
         <ol className="mt-6 flex flex-col gap-4.5">
           {steps.map(([title, body], index) => (
             <li key={title} className="flex gap-3.5">
-              <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink font-mono text-body font-semibold text-measure">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-body font-extrabold text-white tabular-nums">
                 {index + 1}
               </span>
               <div>
-                <p className="text-emphasis font-semibold">{title}</p>
-                <p className="mt-0.5 text-body text-ink-tertiary">{body}</p>
+                <p className="font-display text-emphasis">{title}</p>
+                <p className="mt-0.5 text-body text-ink-mute">{body}</p>
               </div>
             </li>
           ))}
@@ -565,9 +575,9 @@ function ArGuide({
       </div>
 
       <div className="mt-auto px-5 pt-6 pb-7">
-        <div className="mb-3.5 flex gap-2.5 rounded-input bg-muted px-3.5 py-3">
-          <Smartphone className="mt-0.5 size-4.5 shrink-0 text-ink-tertiary" strokeWidth={2} aria-hidden />
-          <p className="text-label text-ink-secondary">
+        <div className="mb-3.5 flex gap-2.5 rounded-input bg-pink-soft px-3.5 py-3">
+          <Smartphone className="mt-0.5 size-4.5 shrink-0 text-ink-mute" strokeWidth={2} aria-hidden />
+          <p className="text-label text-ink-soft">
             아이폰은 놓고 보기까지 돼요. 명령과 탭 반응은 안드로이드 Chrome이나 화면 안 3D에서 볼 수 있어요.
           </p>
         </div>
@@ -575,7 +585,7 @@ function ArGuide({
           type="button"
           onClick={canAr ? onStart : onPreview}
           disabled={!loaded}
-          className={buttonStyles({ variant: 'primary', size: 'xl', fullWidth: true })}
+          className={buttonClass({ size: 'lg', full: true })}
         >
           {loaded ? (
             canAr ? (
@@ -597,12 +607,12 @@ function ArGuide({
           <button
             type="button"
             onClick={onPreview}
-            className="mt-1 flex h-11 w-full items-center justify-center text-body text-ink-secondary"
+            className="mt-1 flex h-11 w-full items-center justify-center text-body text-ink-soft"
           >
             카메라 없이 3D로 먼저 보기
           </button>
         )}
-        <p className="mt-2.5 text-center text-caption text-ink-caption">
+        <p className="mt-2.5 text-center text-caption text-ink-mute">
           {canAr || !loaded
             ? '카메라 권한이 필요해요'
             : isTouchDevice()
@@ -616,7 +626,7 @@ function ArGuide({
 
 function MessageShell({ onBack, children }: { onBack: () => void; children: ReactNode }) {
   return (
-    <div className="mx-auto min-h-dvh w-full max-w-[480px] bg-canvas px-5 pt-[env(safe-area-inset-top)]">
+    <div className="app-column px-5 pt-[env(safe-area-inset-top)]">
       <header className="-mx-3 flex h-14 items-center">
         <button type="button" onClick={onBack} aria-label="뒤로" className="flex size-11 items-center justify-center">
           <ChevronLeft className="size-5.5" strokeWidth={2} aria-hidden />

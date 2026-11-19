@@ -1,120 +1,97 @@
 import { useState } from 'react'
-import { ChevronRight, Heart, UserRound } from 'lucide-react'
-import { Link, useNavigate } from 'react-router'
+import { ChevronRight, Heart, LogOut, Wand2 } from 'lucide-react'
+import { Link } from 'react-router'
 import { authApi } from '../apis/auth'
 import { tokenStorage } from '../apis/tokenStorage'
+import { useFlash } from '../app/flash'
+import { Character } from '../components/Character/Character'
 import { Badge } from '../components/Badge/Badge'
-import { Button } from '../components/Button/Button'
-import { buttonStyles } from '../components/Button/buttonStyles'
+import { buttonClass } from '../components/Button/buttonClass'
 import { useAuth } from '../features/auth/useAuth'
 
-/** 마이 (캔버스 15). 로그인 전·일반 회원·관리자 세 모양 */
+// /me — 내 정보. 로그인하지 않았으면 로그인·가입으로 안내한다
 export function MePage() {
   const { isLoggedIn, isAdmin } = useAuth()
-
-  return (
-    <div className="pb-6">
-      <header className="flex h-14 items-center px-5">
-        <h1 className="text-title font-bold">마이</h1>
-      </header>
-      <div className="flex flex-col gap-3 px-4 pt-1">{isLoggedIn ? <SignedIn isAdmin={isAdmin} /> : <Guest />}</div>
-    </div>
-  )
-}
-
-function Guest() {
-  return (
-    <section className="rounded-card-lg bg-surface px-5 py-7 text-center">
-      <Heart className="mx-auto mb-3 size-11 text-accent" strokeWidth={1.6} aria-hidden />
-      <p className="text-emphasis font-semibold">로그인하면 찜한 유기견을 모아 볼 수 있어요</p>
-      <p className="mt-1.5 mb-5 text-body text-ink-tertiary">둘러보기와 AR은 로그인 없이도 쓸 수 있어요.</p>
-      <Link to="/login?redirect=%2Fme" className={buttonStyles({ variant: 'dark', fullWidth: true })}>
-        로그인
-      </Link>
-      <Link
-        to="/signup?redirect=%2Fme"
-        className="mt-3.5 inline-block text-body text-ink-secondary underline underline-offset-3 touch-target hover:text-ink"
-      >
-        아이디로 회원가입
-      </Link>
-    </section>
-  )
-}
-
-function SignedIn({ isAdmin }: { isAdmin: boolean }) {
-  const navigate = useNavigate()
+  const showFlash = useFlash()
   const [loggingOut, setLoggingOut] = useState(false)
 
-  // 서버 호출이 실패해도 이 기기의 토큰은 지우고 둘러보기로 간다
   const logout = async () => {
     setLoggingOut(true)
     const refreshToken = tokenStorage.getRefreshToken()
     try {
+      // 서버에서 리프레시 토큰을 지운다. 실패해도 이 기기에서는 로그아웃한다
       if (refreshToken) await authApi.logout({ refreshToken })
     } catch {
       // 무시
-    } finally {
-      tokenStorage.clear()
-      navigate('/', { replace: true })
     }
+    tokenStorage.clear()
+    setLoggingOut(false)
+    showFlash('로그아웃했어요')
   }
 
   return (
-    <>
-      <section className="flex items-center gap-3.5 rounded-card-lg bg-surface px-5 py-4.5">
-        <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">
-          <UserRound className="size-6" strokeWidth={1.9} aria-hidden />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-emphasis font-semibold">로그인되어 있어요</p>
-          <p className="mt-0.75 text-label text-ink-tertiary">{isAdmin ? '관리자 계정' : '일반 회원'}</p>
+    <main className="px-5 pt-[calc(20px+env(safe-area-inset-top))]">
+      <h1 className="font-display text-title">마이페이지</h1>
+
+      {isLoggedIn ? (
+        <>
+          <div className="mt-5 flex items-center gap-4 rounded-card bg-pink-soft p-5">
+            <Character name="sitting" size={72} />
+            <div>
+              <p className="text-emphasis font-extrabold">로그인했어요</p>
+              <Badge tone={isAdmin ? 'info' : 'neutral'} className="mt-1 bg-surface">
+                {isAdmin ? '관리자' : '일반 회원'}
+              </Badge>
+            </div>
+          </div>
+
+          <ul className="mt-4 overflow-hidden rounded-card bg-surface shadow-soft">
+            <MenuLink to="/favorites" icon={<Heart className="size-5" strokeWidth={2} aria-hidden />} label="찜한 유기견" />
+            {isAdmin && (
+              <MenuLink to="/admin" icon={<Wand2 className="size-5" strokeWidth={2} aria-hidden />} label="관리자 화면 (AR 모델 만들기)" />
+            )}
+            <li>
+              <button
+                type="button"
+                onClick={logout}
+                disabled={loggingOut}
+                className="flex h-14 w-full items-center gap-3 px-4 text-left text-body font-bold text-pink-deep -outline-offset-4 transition-colors duration-150 hover:bg-pink-soft disabled:opacity-50"
+              >
+                <LogOut className="size-5" strokeWidth={2} aria-hidden />
+                {loggingOut ? '로그아웃하는 중' : '로그아웃'}
+              </button>
+            </li>
+          </ul>
+        </>
+      ) : (
+        <div className="relative mt-5 rounded-card bg-pink-soft p-6">
+          <div aria-hidden className="pointer-events-none absolute -top-7 right-3">
+            <Character name="love" size={104} />
+          </div>
+          <h2 className="max-w-[60%] font-display text-heading">로그인하면 찜할 수 있어요</h2>
+          <p className="mt-1.5 text-body text-ink-soft">마음이 가는 유기견을 모아 두고 다시 볼 수 있어요.</p>
+          <div className="mt-5 flex flex-col gap-2">
+            <Link to="/login?redirect=%2Fme" className={buttonClass({ size: 'lg', full: true })}>
+              로그인
+            </Link>
+            <Link to="/signup?redirect=%2Fme" className={buttonClass({ variant: 'outline', size: 'lg', full: true })}>
+              회원가입
+            </Link>
+          </div>
         </div>
-      </section>
-
-      <Link
-        to="/favorites"
-        className="group flex h-15 items-center justify-between rounded-card-lg bg-surface px-5 text-body-lg font-medium transition hover:bg-surface-hover active:scale-99"
-      >
-        찜한 유기견 보기
-        <ForwardIcon className="text-ink-caption" />
-      </Link>
-
-      {isAdmin && (
-        <Link
-          to="/admin"
-          className="group flex items-center gap-3.5 rounded-card-lg bg-ink px-5 py-4 text-white transition hover:bg-ink-hover active:scale-99"
-        >
-          <Badge tone="measure" size="sm">
-            관리자
-          </Badge>
-          <span className="min-w-0 flex-1">
-            <span className="block text-body-lg font-semibold">관리자 화면</span>
-            <span className="mt-0.5 block text-label text-on-dark-secondary">AR 모델 만들기 · 생성 기록</span>
-          </span>
-          <ForwardIcon className="text-on-dark-secondary" />
-        </Link>
       )}
-
-      <Button
-        variant="outline-subtle"
-        size="md"
-        className="mt-2"
-        onClick={logout}
-        disabled={loggingOut}
-      >
-        {loggingOut ? '로그아웃하는 중…' : '로그아웃'}
-      </Button>
-    </>
+    </main>
   )
 }
 
-/** 앞으로 화살표. 감싼 링크에 마우스를 올리면 진행 방향(오른쪽)으로 2px */
-function ForwardIcon({ className }: { className: string }) {
+function MenuLink({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
   return (
-    <ChevronRight
-      className={`size-4.5 shrink-0 transition group-hover:translate-x-0.5 ${className}`}
-      strokeWidth={2}
-      aria-hidden
-    />
+    <li className="border-b border-line">
+      <Link to={to} className="flex h-14 items-center gap-3 px-4 text-body font-bold -outline-offset-4 transition-colors duration-150 hover:bg-pink-soft">
+        <span className="text-primary-deep">{icon}</span>
+        <span className="flex-1">{label}</span>
+        <ChevronRight className="size-5 text-ink-mute" strokeWidth={2} aria-hidden />
+      </Link>
+    </li>
   )
 }

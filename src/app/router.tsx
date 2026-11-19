@@ -5,7 +5,9 @@ import { KakaoCallbackPage } from '../pages/KakaoCallbackPage'
 import { LoginPage } from '../pages/LoginPage'
 import { MePage } from '../pages/MePage'
 import { PetDetailPage } from '../pages/PetDetailPage'
+import { SearchPage } from '../pages/SearchPage'
 import { SignUpPage } from '../pages/SignUpPage'
+import { WelcomePage } from '../pages/WelcomePage'
 import { NotFoundPage } from '../pages/NotFoundPage'
 import { AdminAttemptsPage } from '../pages/admin/AdminAttemptsPage'
 import { AdminCreatePage } from '../pages/admin/AdminCreatePage'
@@ -27,6 +29,7 @@ export const router = createBrowserRouter([
         errorElement: <NotFoundPage />,
         children: [
           { index: true, element: <BrowsePage /> },
+          { path: 'search', element: <SearchPage /> },
           {
             path: 'favorites',
             element: (
@@ -38,6 +41,7 @@ export const router = createBrowserRouter([
           { path: 'me', element: <MePage /> },
         ],
       },
+      { path: 'welcome', element: <WelcomePage /> },
       { path: 'pets/:petId', element: <PetDetailPage /> },
       // AR 은 3D 라이브러리(model-viewer, three.js)가 커서 이 화면에 들어올 때 불러온다
       {

@@ -1,25 +1,12 @@
 import type { ButtonHTMLAttributes } from 'react'
-import { buttonStyles, type ButtonSize, type ButtonVariant } from './buttonStyles'
+import { buttonClass, type ButtonSize, type ButtonVariant } from './buttonClass'
 
-export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant
   size?: ButtonSize
-  fullWidth?: boolean
+  full?: boolean
 }
 
-export function Button({
-  variant,
-  size,
-  fullWidth,
-  type = 'button',
-  className,
-  ...props
-}: ButtonProps) {
-  return (
-    <button
-      type={type}
-      className={buttonStyles({ variant, size, fullWidth, className })}
-      {...props}
-    />
-  )
+export function Button({ variant, size, full, className, type = 'button', ...rest }: ButtonProps) {
+  return <button type={type} className={buttonClass({ variant, size, full, className })} {...rest} />
 }

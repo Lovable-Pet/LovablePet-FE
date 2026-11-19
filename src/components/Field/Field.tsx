@@ -1,53 +1,42 @@
-import { useId, type ComponentProps, type ReactNode } from 'react'
+import { useId, type InputHTMLAttributes, type ReactNode } from 'react'
 import { cn } from '../utils/cn'
 
-export interface FieldProps extends ComponentProps<'input'> {
-  label?: string
-  /** 아래 안내 문구 (오류·성공 문구가 없을 때만 보임) */
+interface FieldProps extends InputHTMLAttributes<HTMLInputElement> {
+  label: string
+  /** 입력 규칙 안내 (오류가 없을 때 보인다) */
   hint?: string
-  /** 오류 문구. 있으면 테두리가 빨간색이 되고 role="alert"로 읽힌다 */
-  error?: string
-  /** 성공 문구 (예: 사용할 수 있는 아이디예요) */
-  success?: string
-  /** 입력칸 오른쪽에 붙는 요소 (예: 중복 확인 버튼) */
+  error?: string | null
+  /** 사용할 수 있어요 같은 확인 문구 */
+  success?: string | null
+  /** 입력칸 오른쪽에 놓는 것 (비밀번호 보기 버튼 등) */
   trailing?: ReactNode
 }
 
-export function Field({
-  label,
-  hint,
-  error,
-  success,
-  trailing,
-  id,
-  className,
-  ...props
-}: FieldProps) {
-  const generatedId = useId()
-  const inputId = id ?? generatedId
+/** 이름표·입력칸·안내 문구 한 묶음 */
+export function Field({ label, hint, error, success, trailing, className, id, ...rest }: FieldProps) {
+  const autoId = useId()
+  const inputId = id ?? autoId
   const messageId = `${inputId}-message`
   const message = error ?? success ?? hint
 
   return (
-    <div className="flex w-full flex-col gap-1.5">
-      {label && (
-        <label htmlFor={inputId} className="text-label font-semibold text-ink-secondary">
-          {label}
-        </label>
-      )}
-      <div className="flex gap-2">
+    <div className={className}>
+      <label htmlFor={inputId} className="mb-1.5 block text-label font-bold text-ink-soft">
+        {label}
+      </label>
+      <div
+        className={cn(
+          'flex h-13 items-center rounded-input bg-surface pr-1.5 transition-shadow duration-150',
+          'focus-within:shadow-[inset_0_0_0_2px_var(--color-primary-deep)]',
+          error ? 'shadow-[inset_0_0_0_2px_var(--color-pink-deep)]' : 'shadow-[inset_0_0_0_1.5px_var(--color-line)]',
+        )}
+      >
         <input
           id={inputId}
           aria-invalid={error ? true : undefined}
           aria-describedby={message ? messageId : undefined}
-          className={cn(
-            // 16px: 아이폰에서 입력할 때 화면이 확대되지 않게
-            'h-12.5 w-full min-w-0 flex-1 rounded-input border bg-surface px-3.5 text-emphasis text-ink',
-            'placeholder:text-ink-caption focus:outline-2 focus:outline-offset-0 focus:outline-accent',
-            error ? 'border-danger' : success ? 'border-success-line' : 'border-line-strong',
-            className,
-          )}
-          {...props}
+          className="h-full min-w-0 flex-1 rounded-input bg-transparent px-4 text-body text-ink outline-none placeholder:text-ink-mute"
+          {...rest}
         />
         {trailing}
       </div>
@@ -56,8 +45,8 @@ export function Field({
           id={messageId}
           role={error ? 'alert' : undefined}
           className={cn(
-            'text-label',
-            error ? 'text-danger' : success ? 'text-success-ink' : 'text-ink-caption',
+            'mt-1.5 text-caption',
+            error ? 'font-bold text-pink-deep' : success ? 'font-bold text-mint-deep' : 'text-ink-mute',
           )}
         >
           {message}

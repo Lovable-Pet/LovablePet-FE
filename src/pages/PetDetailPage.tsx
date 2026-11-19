@@ -1,251 +1,304 @@
-import type { ReactNode } from 'react'
-import { ChevronLeft, Info, Phone, Share } from 'lucide-react'
+import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { Box, Cake, CalendarDays, ChevronRight, Link2, MapPin, PawPrint, Phone, Ruler, Wand2 } from 'lucide-react'
 import { Link, useParams } from 'react-router'
 import { ApiError } from '../apis/apiError'
 import type { PetDetail } from '../apis/dto/pet.dto'
-import { Badge, type BadgeTone } from '../components/Badge/Badge'
-import { Button } from '../components/Button/Button'
-import { buttonStyles } from '../components/Button/buttonStyles'
-import { IconButton } from '../components/IconButton/IconButton'
-import { StateView } from '../components/StateView/StateView'
-import { NEUTERED_LABEL, SEX_LABEL } from '../constants/pet'
-import { FavoriteButton } from '../features/favorite/components/FavoriteButton'
-import { PhotoGallery } from '../features/pet/components/detail/PhotoGallery'
-import { ShelterCard } from '../features/pet/components/detail/ShelterCard'
-import { InNoticeBanner, SizeCard } from '../features/pet/components/detail/SizeCard'
-import { similarSizeLinkOf } from '../features/pet/browseQuery'
-import { usePetDetail } from '../features/pet/queries'
 import { useFlash } from '../app/flash'
+import { Badge } from '../components/Badge/Badge'
+import { Button } from '../components/Button/Button'
+import { buttonClass } from '../components/Button/buttonClass'
+import { IconButton } from '../components/IconButton/IconButton'
+import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
+import { PageHeader } from '../components/PageHeader/PageHeader'
+import { StateView } from '../components/StateView/StateView'
+import { cn } from '../components/utils/cn'
+import { NEUTERED_LABEL, PUPPY_NOTICE, TEMPLATE_LABEL } from '../constants/pet'
+import { useAuth } from '../features/auth/useAuth'
+import { FavoriteButton } from '../features/favorite/components/FavoriteButton'
+import { similarSizeLinkOf } from '../features/pet/browseQuery'
+import { PetPhoto } from '../features/pet/components/PetPhoto'
+import { SexSymbol } from '../features/pet/components/SexSymbol'
+import { usePetDetail } from '../features/pet/queries'
 import { useGoBack } from '../hooks/useGoBack'
 import {
   adoptionStateOf,
   formatAge,
   formatMonthDay,
   formatWeight,
+  isLikelyPuppy,
   isMetFamily,
   toTelHref,
-  type AdoptionState,
+  toWithersCm,
+  waitingDays,
 } from '../utils/pet'
 
-/** 위쪽 배지. 종료는 카드 문구와 맞춰 입양·반환이면 '입양 완료', 그 밖은 '보호 종료' */
-const adoptionBadgeOf = (state: AdoptionState, processState: string): { label: string; tone: BadgeTone } => {
-  if (state === 'ADOPTABLE') return { label: '지금 입양할 수 있어요', tone: 'success' }
-  if (state === 'IN_NOTICE') return { label: '공고 기간 중', tone: 'warning' }
-  return { label: isMetFamily(processState) ? '입양 완료' : '보호 종료', tone: 'closed' }
-}
-
+// /pets/:petId — 공고 상세
 export function PetDetailPage() {
   const { petId } = useParams()
   const id = Number(petId)
+  const goBack = useGoBack('/')
   const { data: pet, isPending, isError, error, refetch } = usePetDetail(id)
-  const goBack = useGoBack()
 
-  if (!Number.isInteger(id) || id <= 0 || (isError && error instanceof ApiError && error.status === 404)) {
+  const notFound = !Number.isInteger(id) || id <= 0 || (isError && error instanceof ApiError && error.status === 404)
+  if (notFound || isError) {
     return (
-      <DetailShell onBack={goBack}>
-        <StateView
-          title="공고를 찾을 수 없어요"
-          description="공고가 내려갔거나 주소가 잘못됐어요."
-          action={
-            <Link to="/" className={buttonStyles({ variant: 'dark', size: 'md' })}>
-              둘러보기로 가기
-            </Link>
-          }
-        />
-      </DetailShell>
+      <div className="app-column">
+        <PageHeader onBack={goBack} />
+        {notFound ? (
+          <StateView
+            title="공고를 찾을 수 없어요"
+            description="공고가 내려갔거나 주소가 잘못됐어요."
+            action={
+              <Link to="/" replace className={buttonClass()}>
+                다른 유기견 둘러보기
+              </Link>
+            }
+          />
+        ) : (
+          <StateView
+            tone="error"
+            title="공고를 불러오지 못했어요"
+            description="인터넷 연결을 확인하고 다시 시도해 주세요."
+            action={
+              <Button variant="outline" onClick={() => refetch()}>
+                다시 시도
+              </Button>
+            }
+          />
+        )}
+      </div>
     )
   }
-
-  if (isError) {
-    return (
-      <DetailShell onBack={goBack}>
-        <StateView
-          tone="error"
-          title="공고를 불러오지 못했어요"
-          description="잠시 후 다시 시도해 주세요."
-          action={
-            <Button variant="outline" size="md" onClick={() => refetch()}>
-              다시 시도
-            </Button>
-          }
-        />
-      </DetailShell>
-    )
-  }
-
-  if (isPending) return <DetailSkeleton />
-
-  return <PetDetailView pet={pet} onBack={goBack} />
+  if (isPending) return <LoadingScreen description="공고를 불러오고 있어요" />
+  return <Detail pet={pet} onBack={goBack} />
 }
 
-function PetDetailView({ pet, onBack }: { pet: PetDetail; onBack: () => void }) {
-  const adoption = adoptionStateOf(pet)
-  const badge = adoptionBadgeOf(adoption, pet.processState)
-  const weight = formatWeight(pet.weightKg)
-  const similarSize = similarSizeLinkOf(pet.weightKg)
-  const canPlaceAr = pet.model !== null && pet.weightKg !== null
+function Detail({ pet, onBack }: { pet: PetDetail; onBack: () => void }) {
+  const { isAdmin } = useAuth()
   const showFlash = useFlash()
+  const state = adoptionStateOf(pet)
+  const weight = formatWeight(pet.weightKg) ?? pet.weightText
 
-  const share = async () => {
-    const url = window.location.href
-    const title = `${pet.kindName} · ${pet.orgName} | LovablePet`
+  const copyLink = async () => {
     try {
-      if (navigator.share) {
-        await navigator.share({ title, url })
-        return
-      }
-      await navigator.clipboard.writeText(url)
-      showFlash('링크를 복사했어요')
-    } catch (shareError) {
-      // 공유 창을 닫은 경우는 조용히 넘어간다
-      if (shareError instanceof DOMException && shareError.name === 'AbortError') return
-      showFlash('링크를 복사하지 못했어요')
-    }
-  }
-
-  const copyAddress = async () => {
-    try {
-      await navigator.clipboard.writeText(pet.careAddr)
+      await navigator.clipboard.writeText(window.location.href)
       showFlash('주소를 복사했어요')
     } catch {
       showFlash('주소를 복사하지 못했어요')
     }
   }
 
-  const infoRows: { label: string; value: ReactNode }[] = [
-    { label: '털색', value: pet.color },
-    { label: '나이', value: formatAge(pet.ageText) },
-    {
-      label: '체중',
-      // 숫자로 바꿀 수 있으면 "14kg", 아니면 공고 원문, 원문도 없으면 '체중 미상'
-      value: weight ? <span className="font-mono">{weight}</span> : pet.weightText || '체중 미상',
-    },
-    { label: '발견 장소', value: pet.happenPlace },
-    {
-      label: '공고 기간',
-      value: (
-        <>
-          <span className="font-mono">
-            {formatMonthDay(pet.noticeStart)} ~ {formatMonthDay(pet.noticeEnd)}
-          </span>
-          <br />
-          {adoption === 'ADOPTABLE' && (
-            <span className="text-label text-success-ink">공고가 끝나 지금 입양 신청할 수 있어요</span>
-          )}
-          {adoption === 'IN_NOTICE' && (
-            <span className="text-label text-accent-ink">공고가 끝나면 입양 신청할 수 있어요</span>
-          )}
-          {adoption === 'CLOSED' && <span className="text-label text-ink-caption">{pet.processState}</span>}
-        </>
-      ),
-    },
-    { label: '특징', value: pet.specialMark },
-  ]
+  // 공고에 적힌 사실을 꼬리표로 보여 준다
+  const tags = [
+    pet.color && { label: pet.color, tone: 'sky' },
+    { label: NEUTERED_LABEL[pet.neutered].replace(/\s/g, ''), tone: 'sky' },
+    pet.model && { label: 'AR로볼수있어요', tone: 'violet' },
+    state === 'ADOPTABLE' && { label: '지금입양가능', tone: 'violet' },
+  ].filter((tag): tag is { label: string; tone: string } => !!tag)
 
   return (
-    <div className="mx-auto min-h-dvh w-full max-w-[480px] bg-canvas pb-[calc(112px+env(safe-area-inset-bottom))]">
-      <PhotoGallery photoUrls={pet.photoUrls} alt={`${pet.kindName} 공고 사진`}>
-        {/* 사진은 노치 밑까지 깔고 버튼만 피한다 */}
-        <div className="absolute inset-x-2 top-[calc(8px+env(safe-area-inset-top))] flex justify-between">
-          <IconButton variant="floating" aria-label="뒤로" onClick={onBack}>
-            <BackIcon />
-          </IconButton>
-          <IconButton variant="floating" aria-label="공유" onClick={share}>
-            <Share className="size-5" strokeWidth={2} aria-hidden />
-          </IconButton>
-        </div>
-      </PhotoGallery>
-
-      <div className="relative -mt-4 rounded-t-card-lg bg-canvas px-5 pt-5">
-        <div className="flex flex-wrap gap-1.5">
-          <Badge tone={badge.tone}>{badge.label}</Badge>
-          <Badge tone="neutral" className="font-mono">
-            {pet.noticeNo}
-          </Badge>
-        </div>
-        <h1 className="mt-3 text-display font-bold">
-          {pet.kindName} · {SEX_LABEL[pet.sex]}
-        </h1>
-        <p className="mt-1 text-body-lg text-ink-secondary">
-          {formatAge(pet.ageText)} · {NEUTERED_LABEL[pet.neutered]} · {pet.orgName}
-        </p>
-      </div>
-
-      <div className="mx-4 mt-5 flex flex-col gap-3">
-        {adoption === 'IN_NOTICE' && <InNoticeBanner noticeEnd={pet.noticeEnd} />}
-        <SizeCard pet={pet} closed={adoption === 'CLOSED'} />
-      </div>
-
-      <section aria-labelledby="notice-title" className="mx-5 mt-6">
-        <h2 id="notice-title" className="mb-2 text-subtitle font-bold">
-          공고 정보
-        </h2>
-        <dl className="grid grid-cols-[88px_minmax(0,1fr)] gap-x-3 gap-y-3 text-body">
-          {infoRows.map(({ label, value }) => (
-            <div key={label} className="contents">
-              <dt className="text-ink-caption">{label}</dt>
-              <dd>{value || '–'}</dd>
-            </div>
-          ))}
-        </dl>
-      </section>
-
-      <div className="mx-4 mt-6">
-        <ShelterCard
-          careName={pet.careName}
-          careAddr={pet.careAddr}
-          careTel={pet.careTel}
-          onCopyAddress={copyAddress}
-        />
-      </div>
-
-      <aside className="mx-4 mt-4 flex gap-2.5 rounded-card bg-muted p-4">
-        <Info className="mt-px size-5 shrink-0 text-ink-tertiary" strokeWidth={2} aria-hidden />
-        <p className="text-label text-ink-secondary">
-          LovablePet은 보호소 방문을 대신하지 않아요. 우리 집에 맞는지 미리 확인한 뒤, 직접 만나서 교감하고 결정해
-          주세요.
-        </p>
-      </aside>
-
-      <div
-        // 토스트가 이 바 위에 뜨게 (index.css --toast-offset)
-        data-bottom-bar="action"
-        className="fixed inset-x-0 bottom-0 z-10 mx-auto flex w-full max-w-[480px] gap-2 border-t border-line bg-surface px-4 pt-3 pb-[calc(28px+env(safe-area-inset-bottom))]"
-      >
-        <FavoriteButton petId={pet.id} favorited={pet.favorited} variant="outline" size="lg" />
-        {adoption === 'CLOSED' ? (
-          similarSize ? (
-            <Link to={similarSize.to} className={buttonStyles({ variant: 'dark', className: 'flex-1' })}>
-              <span>
-                체중 <span className="font-mono">{similarSize.range}</span> 유기견 보기
-              </span>
-            </Link>
-          ) : (
-            <Link to="/" className={buttonStyles({ variant: 'soft', className: 'flex-1' })}>
-              다른 유기견 둘러보기
-            </Link>
-          )
-        ) : (
+    <div className="app-column pb-[calc(112px+env(safe-area-inset-bottom))]">
+      <PageHeader
+        onBack={onBack}
+        trailing={
           <>
-            <a
-              href={toTelHref(pet.careTel)}
-              className={buttonStyles({
-                variant: 'soft',
-                // 360px 보다 좁으면(최소 320) AR 버튼 글자가 들어가도록 전화 아이콘만 남긴다
-                className: canPlaceAr ? 'flex-1 max-[359px]:w-13 max-[359px]:flex-none max-[359px]:px-0' : 'flex-1',
-              })}
-            >
-              {canPlaceAr && <Phone className="hidden size-5 max-[359px]:block" strokeWidth={2} aria-hidden />}
-              <span className={canPlaceAr ? 'max-[359px]:sr-only' : undefined}>보호소 문의</span>
-            </a>
-            {canPlaceAr && (
-              <Link
-                to={`/pets/${pet.id}/ar`}
-                className={buttonStyles({ variant: 'primary', className: 'flex-[1.4] max-[359px]:px-3' })}
+            <IconButton aria-label="주소 복사" onClick={copyLink}>
+              <Link2 className="size-5.5" strokeWidth={2} aria-hidden />
+            </IconButton>
+            <FavoriteButton petId={pet.id} favorited={pet.favorited} name={pet.kindName} />
+          </>
+        }
+      />
+
+      <Gallery pet={pet} />
+
+      <main className="px-5 pt-5">
+        <div className="flex items-center gap-2.5">
+          <h1 className="min-w-0 truncate font-display text-[1.75rem] leading-tight">{pet.kindName}</h1>
+          {pet.sex !== 'Q' && (
+            <span className="flex h-7 shrink-0 items-center gap-1 rounded-full bg-pink-soft px-2.5 text-label font-extrabold text-primary-deep">
+              <SexSymbol sex={pet.sex} />
+              {pet.sex === 'F' ? '여아' : '남아'}
+            </span>
+          )}
+          <span className="ml-auto shrink-0 text-emphasis font-bold tabular-nums">{weight}</span>
+        </div>
+
+        <StateBanner pet={pet} state={state} />
+
+        <Section title="유기견에 대해 알려드려요!">
+          <p className="text-body leading-relaxed">{pet.specialMark || '공고에 적힌 특징이 없어요.'}</p>
+          <ul className="mt-3.5 flex flex-wrap gap-2">
+            <InfoChip icon={<Cake className="size-4 text-primary" strokeWidth={2.2} aria-hidden />}>{formatAge(pet.ageText)}</InfoChip>
+            <InfoChip icon={<MapPin className="size-4 fill-primary text-surface" strokeWidth={2} aria-hidden />}>{pet.orgName}</InfoChip>
+            <InfoChip icon={<CalendarDays className="size-4 text-primary" strokeWidth={2.2} aria-hidden />}>
+              <span className="tabular-nums">
+                공고 {formatMonthDay(pet.noticeStart)}~{formatMonthDay(pet.noticeEnd)}
+              </span>
+            </InfoChip>
+          </ul>
+        </Section>
+
+        <Section title="이런 유기견이에요!">
+          <ul className="flex flex-wrap gap-2">
+            {tags.map((tag) => (
+              <li
+                key={tag.label}
+                className={cn(
+                  'flex h-8 items-center rounded-full px-3 text-label font-bold',
+                  tag.tone === 'sky' ? 'bg-sky-soft text-sky-deep' : 'bg-violet-soft text-violet-deep',
+                )}
               >
-                우리 집에 놓아 보기
-              </Link>
+                #{tag.label}
+              </li>
+            ))}
+          </ul>
+        </Section>
+
+        <SizeCard pet={pet} isAdmin={isAdmin} />
+
+        <Section title="여기서 기다리고 있어요!">
+          <div className="rounded-card bg-surface p-4 shadow-soft">
+            <p className="font-display text-emphasis">{pet.careName}</p>
+            <p className="mt-1 text-label text-ink-soft">{pet.careAddr}</p>
+            <p className="mt-2 text-caption text-ink-mute">
+              발견된 곳 {pet.happenPlace} / 공고번호 {pet.noticeNo}
+            </p>
+            {pet.careTel && (
+              <a href={toTelHref(pet.careTel)} className={buttonClass({ variant: 'soft', className: 'mt-3.5' })}>
+                <Phone className="size-4.5" strokeWidth={2.2} aria-hidden />
+                <span className="tabular-nums">{pet.careTel}</span>
+              </a>
             )}
+          </div>
+        </Section>
+      </main>
+
+      <BottomBar pet={pet} closed={state === 'CLOSED'} />
+    </div>
+  )
+}
+
+/**
+ * 사진을 옆으로 넘겨 본다. 둥근 틀 안에 들어간다.
+ * 손가락으로 밀기, 마우스로 끌기, 아래 점, 키보드 좌우 키로 넘길 수 있다
+ */
+function Gallery({ pet }: { pet: PetDetail }) {
+  const trackRef = useRef<HTMLUListElement>(null)
+  const drag = useRef<{ startX: number; startScroll: number; moved: boolean } | null>(null)
+  const [index, setIndex] = useState(0)
+  const photos = pet.photoUrls
+  const frame = 'aspect-[4/3.1] w-full'
+
+  if (photos.length === 0) {
+    return (
+      <div className="px-4">
+        <PetPhoto src={null} alt={`${pet.kindName} 공고 사진`} seed={pet.id} className={cn(frame, 'rounded-[1.75rem]')} />
+      </div>
+    )
+  }
+
+  const goTo = (next: number) => {
+    const track = trackRef.current
+    if (!track) return
+    const clamped = Math.max(0, Math.min(photos.length - 1, next))
+    track.scrollTo({ left: clamped * track.clientWidth, behavior: 'smooth' })
+  }
+
+  // 마우스로 끌어서 넘기기 (터치는 브라우저가 알아서 민다)
+  const onPointerDown = (event: ReactPointerEvent<HTMLUListElement>) => {
+    if (event.pointerType !== 'mouse' || event.button !== 0) return
+    drag.current = { startX: event.clientX, startScroll: event.currentTarget.scrollLeft, moved: false }
+  }
+  const onPointerMove = (event: ReactPointerEvent<HTMLUListElement>) => {
+    const state = drag.current
+    if (!state) return
+    const delta = event.clientX - state.startX
+    if (!state.moved && Math.abs(delta) < 4) return
+    if (!state.moved) {
+      state.moved = true
+      event.currentTarget.setPointerCapture(event.pointerId)
+      // 끄는 동안에는 자석(스냅)을 끈다
+      event.currentTarget.style.scrollSnapType = 'none'
+    }
+    event.currentTarget.scrollLeft = state.startScroll - delta
+  }
+  const onPointerEnd = (event: ReactPointerEvent<HTMLUListElement>) => {
+    const state = drag.current
+    drag.current = null
+    if (!state?.moved) return
+    const track = event.currentTarget
+    track.style.scrollSnapType = ''
+    const delta = event.clientX - state.startX
+    const start = Math.round(state.startScroll / track.clientWidth)
+    // 사진 너비의 15% 넘게 끌었으면 다음(이전) 사진으로
+    goTo(Math.abs(delta) > track.clientWidth * 0.15 ? start + (delta < 0 ? 1 : -1) : start)
+  }
+
+  return (
+    <div className="px-4">
+      <div
+        role="group"
+        aria-roledescription="사진 넘겨 보기"
+        aria-label={`${pet.kindName} 공고 사진 ${photos.length}장`}
+        className="relative rounded-[1.75rem] shadow-soft"
+      >
+        <ul
+          ref={trackRef}
+          tabIndex={photos.length > 1 ? 0 : undefined}
+          onScroll={(event) => {
+            const { scrollLeft, clientWidth } = event.currentTarget
+            setIndex(Math.round(scrollLeft / clientWidth))
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowRight') goTo(index + 1)
+            else if (event.key === 'ArrowLeft') goTo(index - 1)
+            else return
+            event.preventDefault()
+          }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerEnd}
+          onPointerCancel={onPointerEnd}
+          className={cn(
+            'no-scrollbar flex snap-x snap-mandatory overflow-x-auto overscroll-x-contain rounded-[1.75rem] -outline-offset-4',
+            photos.length > 1 && 'cursor-grab active:cursor-grabbing',
+          )}
+        >
+          {photos.map((url, photoIndex) => (
+            <li key={url} className="w-full shrink-0 snap-center snap-always">
+              <PetPhoto
+                src={url}
+                alt={`${pet.kindName} 공고 사진 ${photoIndex + 1}`}
+                seed={pet.id + photoIndex}
+                eager={photoIndex === 0}
+                className={cn(frame, 'pointer-events-none select-none')}
+              />
+            </li>
+          ))}
+        </ul>
+
+        {photos.length > 1 && (
+          <>
+            <div className="absolute inset-x-0 bottom-1 flex justify-center">
+              {photos.map((url, dotIndex) => (
+                <button
+                  key={url}
+                  type="button"
+                  aria-label={`${dotIndex + 1}번째 사진 보기`}
+                  aria-current={dotIndex === index ? 'true' : undefined}
+                  onClick={() => goTo(dotIndex)}
+                  className="flex h-8 items-center px-1 -outline-offset-2"
+                >
+                  <span
+                    className={cn(
+                      'block h-2 rounded-full shadow-[0_0_0_1px_rgb(0_0_0/0.12)] transition-[width,background-color] duration-200',
+                      dotIndex === index ? 'w-5 bg-primary' : 'w-2 bg-white',
+                    )}
+                  />
+                </button>
+              ))}
+            </div>
           </>
         )}
       </div>
@@ -253,41 +306,173 @@ function PetDetailView({ pet, onBack }: { pet: PetDetail; onBack: () => void }) 
   )
 }
 
-/** 뒤로 화살표. 버튼에 마우스를 올리면 뒤쪽(왼쪽)으로 2px */
-function BackIcon() {
+function InfoChip({ icon, children }: { icon: ReactNode; children: ReactNode }) {
   return (
-    <ChevronLeft
-      className="size-5.5 transition group-hover:-translate-x-0.5"
-      strokeWidth={2}
-      aria-hidden
-    />
+    <li className="flex h-9 items-center gap-1.5 rounded-full bg-surface px-3 text-label font-bold shadow-soft">
+      {icon}
+      {children}
+    </li>
   )
 }
 
-/** 오류·없는 공고일 때도 뒤로 갈 수 있게 */
-function DetailShell({ onBack, children }: { onBack: () => void; children: ReactNode }) {
-  return (
-    <div className="mx-auto min-h-dvh w-full max-w-[480px] bg-canvas pt-[env(safe-area-inset-top)]">
-      <div className="px-2 pt-2">
-        <IconButton aria-label="뒤로" onClick={onBack}>
-          <BackIcon />
-        </IconButton>
+function StateBanner({ pet, state }: { pet: PetDetail; state: ReturnType<typeof adoptionStateOf> }) {
+  const similar = similarSizeLinkOf(pet.weightKg)
+
+  if (state === 'ADOPTABLE') {
+    const days = waitingDays(pet.noticeStart)
+    return (
+      <div className="mt-5 flex items-center gap-3 rounded-card bg-mint-soft px-4 py-3.5">
+        <Badge tone="success" className="bg-mint">
+          입양 가능
+        </Badge>
+        <p className="text-label text-ink-soft">
+          <span className="font-extrabold text-ink tabular-nums">{days}일째</span> 가족을 기다리고 있어요
+        </p>
       </div>
-      <div className="px-4 pt-10">{children}</div>
+    )
+  }
+  if (state === 'IN_NOTICE') {
+    return (
+      <div className="mt-5 rounded-card bg-apricot-soft px-4 py-3.5">
+        <Badge tone="warning" className="bg-apricot">
+          공고 기간
+        </Badge>
+        <p className="mt-2 text-label text-ink-soft">
+          원래 가족을 찾는 기간이에요.{' '}
+          <span className="font-extrabold text-ink tabular-nums">{formatMonthDay(pet.noticeEnd)}</span>이 지나면 입양할 수
+          있어요.
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className="mt-5 rounded-card bg-pink-soft px-4 py-3.5">
+      <Badge className="bg-primary text-white">보호 종료</Badge>
+      <p className="mt-2 text-label text-ink-soft">
+        {isMetFamily(pet.processState) ? '가족을 만나 보호소를 떠났어요.' : '이 공고는 보호가 끝났어요.'}
+      </p>
+      {similar && (
+        <Link to={similar.to} className={buttonClass({ variant: 'outline', size: 'sm', className: 'mt-3' })}>
+          비슷한 크기({similar.range}) 유기견 보기
+        </Link>
+      )}
     </div>
   )
 }
 
-function DetailSkeleton() {
+/** 이 서비스의 중심: 실제 크기. 모델이 있으면 체고를 익숙한 물건 높이와 나란히 보여 준다 */
+function SizeCard({ pet, isAdmin }: { pet: PetDetail; isAdmin: boolean }) {
+  const model = pet.model
+  const adminLink = isAdmin && (
+    <Link to={`/admin/pets/${pet.id}/model`} className={buttonClass({ variant: 'outline', size: 'sm', className: 'mt-3' })}>
+      <Wand2 className="size-4" strokeWidth={2} aria-hidden />
+      관리자: AR 모델 {model ? '다시 만들기' : '만들기'}
+    </Link>
+  )
+
+  if (!model) {
+    return (
+      <section aria-labelledby="size-title" className="mt-7 rounded-card bg-surface p-4 shadow-soft">
+        <h2 id="size-title" className="font-display text-heading">
+          실제 크기
+        </h2>
+        <p className="mt-1 text-label text-ink-soft">
+          아직 3D 모델이 없어요. 준비되면 우리 집에 실제 크기로 놓아 볼 수 있어요.
+        </p>
+        {adminLink}
+      </section>
+    )
+  }
+
+  const withersCm = toWithersCm(model.withersM)
   return (
-    <div className="mx-auto min-h-dvh w-full max-w-[480px] bg-canvas" aria-busy="true" aria-label="공고 불러오는 중">
-      <div className="h-90 skeleton" />
-      <div className="flex flex-col gap-3 px-5 pt-5">
-        <div className="h-6.5 w-40 rounded-badge skeleton" />
-        <div className="h-8 w-48 rounded skeleton" />
-        <div className="h-5 w-64 rounded skeleton" />
+    <section aria-labelledby="size-title" className="mt-7 rounded-card bg-apricot-soft p-4">
+      <div className="flex items-center justify-between gap-2">
+        <h2 id="size-title" className="flex items-center gap-1.5 font-display text-heading">
+          <Ruler className="size-5 text-apricot-deep" strokeWidth={2.2} aria-hidden />
+          실제 크기
+        </h2>
+        {TEMPLATE_LABEL[model.template] && <Badge tone="warning">{TEMPLATE_LABEL[model.template]}</Badge>}
       </div>
-      <div className="mx-4 mt-5 h-80 rounded-sheet skeleton" />
+      <HeightCompare withersCm={withersCm} />
+      {isLikelyPuppy(pet.birthYear) && <p className="mt-3 text-caption text-apricot-deep">{PUPPY_NOTICE}</p>}
+      {adminLink}
+    </section>
+  )
+}
+
+/** 체고를 집 안 물건 높이와 같은 눈금에 세운 막대 */
+const REFERENCES = [
+  { label: '의자 앉는 곳', cm: 45 },
+  { label: '식탁', cm: 72 },
+]
+
+function HeightCompare({ withersCm }: { withersCm: number }) {
+  const max = Math.max(withersCm, ...REFERENCES.map((item) => item.cm))
+  const bars = [{ label: '어깨 높이', cm: withersCm, isDog: true }, ...REFERENCES.map((item) => ({ ...item, isDog: false }))]
+  return (
+    <figure className="mt-4">
+      <div className="flex h-32 items-end gap-3 border-b-2 border-apricot-deep/25 px-2">
+        {bars.map((bar) => (
+          <div key={bar.label} className="flex flex-1 flex-col items-center justify-end" style={{ height: '100%' }}>
+            <span className={cn('mb-1 text-label tabular-nums', bar.isDog ? 'font-extrabold text-ink' : 'text-ink-mute')}>
+              {bar.cm}cm
+            </span>
+            <span
+              aria-hidden
+              className={cn('w-full rounded-t-xl', bar.isDog ? 'bg-apricot' : 'bg-surface')}
+              style={{ height: `${Math.max(8, (bar.cm / max) * 76)}%` }}
+            />
+          </div>
+        ))}
+      </div>
+      <figcaption className="flex gap-3 px-2 pt-1.5">
+        {bars.map((bar) => (
+          <span key={bar.label} className={cn('flex-1 text-center text-caption', bar.isDog ? 'font-bold text-ink' : 'text-ink-mute')}>
+            {bar.label}
+          </span>
+        ))}
+      </figcaption>
+    </figure>
+  )
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="mt-7">
+      <h2 className="mb-2.5 flex items-center gap-1.5 font-display text-heading">
+        <PawPrint className="size-5 fill-apricot text-apricot" strokeWidth={1.5} aria-hidden />
+        {title}
+      </h2>
+      {children}
+    </section>
+  )
+}
+
+/** 화면 아래에 붙는 주요 동작: AR 로 놓아 보기(모델이 있을 때), 보호소에 전화 */
+function BottomBar({ pet, closed }: { pet: PetDetail; closed: boolean }) {
+  const hasTel = !!pet.careTel && !closed
+  if (!pet.model && !hasTel) return null
+  return (
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center">
+      <div className="pointer-events-auto flex w-full max-w-[480px] gap-2.5 bg-gradient-to-t from-canvas from-70% to-transparent px-5 pt-6 pb-[calc(16px+env(safe-area-inset-bottom))]">
+        {hasTel && (
+          <a
+            href={toTelHref(pet.careTel)}
+            className={buttonClass({ variant: pet.model ? 'outline' : 'primary', size: 'lg', full: !pet.model })}
+          >
+            <Phone className="size-5" strokeWidth={2} aria-hidden />
+            {pet.model ? '전화' : '보호소에 전화하기'}
+          </a>
+        )}
+        {pet.model && (
+          <Link to={`/pets/${pet.id}/ar`} className={buttonClass({ variant: 'sky', size: 'lg', full: true })}>
+            <Box className="size-5" strokeWidth={2.2} aria-hidden />
+            AR로 보기
+            <ChevronRight className="size-5" strokeWidth={2.5} aria-hidden />
+          </Link>
+        )}
+      </div>
     </div>
   )
 }

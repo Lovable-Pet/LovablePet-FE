@@ -4,8 +4,23 @@
     {
       "name": "dev",
       "runtimeExecutable": "/opt/homebrew/bin/pnpm",
-      "runtimeArgs": ["dev"],
+      "runtimeArgs": [
+        "dev"
+      ],
       "port": 5173
+    },
+    {
+      "name": "dev-mock",
+      "runtimeExecutable": "/usr/bin/env",
+      "runtimeArgs": [
+        "VITE_ENABLE_MOCK=true",
+        "/opt/homebrew/bin/pnpm",
+        "dev",
+        "--port",
+        "5199",
+        "--strictPort"
+      ],
+      "port": 5199
     }
   ]
 }

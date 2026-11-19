@@ -1,50 +1,27 @@
-import type { HTMLAttributes } from 'react'
+import type { ReactNode } from 'react'
 import { cn } from '../utils/cn'
 
-export type BadgeTone =
-  | 'measure' // AR로 보기, 관리자 (노랑 + 진한 글자)
-  | 'dark' // 기다린 지 N일
-  | 'closed' // 입양 완료
-  | 'success' // 입양 가능, 완성
-  | 'info' // 만드는 중
-  | 'danger' // 사진 거부, 실패
-  | 'warning' // 체형 부적합
-  | 'neutral' // 공고번호 등
+export type BadgeTone = 'neutral' | 'info' | 'success' | 'warning' | 'danger'
 
-/** sm 24 / md 26 */
-export type BadgeSize = 'sm' | 'md'
-
-export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
-  tone?: BadgeTone
-  size?: BadgeSize
+const TONE: Record<BadgeTone, string> = {
+  neutral: 'bg-pink-soft text-primary-deep',
+  info: 'bg-sky-soft text-sky-deep',
+  success: 'bg-mint-soft text-mint-deep',
+  warning: 'bg-apricot-soft text-apricot-deep',
+  danger: 'bg-pink-soft text-pink-deep',
 }
 
-const toneClasses: Record<BadgeTone, string> = {
-  measure: 'bg-measure text-ink font-bold',
-  dark: 'bg-ink text-white font-semibold',
-  closed: 'bg-ink-secondary text-white font-semibold',
-  success: 'bg-success-soft text-success-ink font-semibold',
-  info: 'bg-info-soft text-info-ink font-semibold',
-  danger: 'bg-danger-soft text-danger-ink font-semibold',
-  warning: 'bg-warning-soft text-warning-ink font-semibold',
-  neutral: 'bg-muted text-ink-tertiary font-medium',
-}
-
-const sizeClasses: Record<BadgeSize, string> = {
-  sm: 'h-6',
-  md: 'h-6.5',
-}
-
-export function Badge({ tone = 'neutral', size = 'md', className, ...props }: BadgeProps) {
+/** 상태를 알리는 작은 딱지 */
+export function Badge({ tone = 'neutral', className, children }: { tone?: BadgeTone; className?: string; children: ReactNode }) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-badge px-2 text-caption whitespace-nowrap',
-        sizeClasses[size],
-        toneClasses[tone],
+        'inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2.5 text-caption font-bold whitespace-nowrap',
+        TONE[tone],
         className,
       )}
-      {...props}
-    />
+    >
+      {children}
+    </span>
   )
 }

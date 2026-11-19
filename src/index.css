@@ -1,81 +1,252 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
+@import url('https://cdn.jsdelivr.net/gh/innks/NanumSquareRound@master/nanumsquareround.min.css');
+@import url('https://fonts.googleapis.com/css2?family=Jua&display=swap');
 @import 'tailwindcss';
-@import './styles/tokens.css';
 
-@layer base {
-  :root {
-    /* 모션 시간 (docs/responsive-interaction.md) */
-    --duration-fast: 200ms; /* 색 변화, 버튼 누름, 호버 */
-    --duration-base: 300ms; /* 시트·모달 열림, 토스트, 사진 fade-in */
-    --duration-slow: 450ms; /* 화면 진입, 큰 레이아웃 변화 */
+/*
+  디자인 토큰. 레퍼런스 시안의 다섯 색이 기준이다:
+  #FFF8ED 바탕, #FFE6EA 연분홍, #FF7185 주요 동작(코랄 핑크), #F6B66F 살구, #663B2B 글자(갈색)
+  -soft 는 넓은 바탕, -deep 은 그 색 옆·위에 쓰는 글자색이다
+*/
+@theme {
+  --font-sans: 'NanumSquareRound', 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif;
+  /* 제목·로고처럼 통통한 글자 */
+  --font-display: 'Jua', 'NanumSquareRound', 'Apple SD Gothic Neo', sans-serif;
 
-    /* 가상 키보드가 가린 높이. useKeyboardInset 이 visualViewport 로 채운다 */
-    --keyboard-inset: 0px;
+  --color-canvas: #fff8ed;
+  --color-backdrop: #ffeee6;
+  --color-surface: #ffffff;
+  --color-line: #f6e2d9;
+  --color-ink: #663b2b;
+  --color-ink-soft: #85594a;
+  --color-ink-mute: #a07f72;
 
-    /* 토스트를 띄울 높이. 하단 바가 있으면 그 위로 (data-bottom-bar) */
-    --toast-offset: 24px;
+  --color-primary: #ff7185;
+  --color-primary-strong: #f85a71;
+  --color-primary-deep: #d43d5a;
+  --color-pink: #ffc9d1;
+  --color-pink-soft: #ffe6ea;
+  --color-pink-deep: #d43d5a;
+  --color-apricot: #f6b66f;
+  --color-apricot-soft: #fdecd3;
+  --color-apricot-deep: #94530c;
+  --color-mint: #bfe8cd;
+  --color-mint-soft: #e4f5ea;
+  --color-mint-deep: #24744a;
+  --color-sky: #cfe0ff;
+  --color-sky-soft: #e3edff;
+  --color-sky-deep: #3a66c4;
+  --color-violet-soft: #ece5ff;
+  --color-violet-deep: #6a4fc7;
+
+  /* AR 화면 (카메라 위에 겹치는 요소) */
+  --color-ar-camera: #3a2a24;
+  --color-overlay: rgb(74 46 36 / 0.62);
+  --color-on-dark: #ffffff;
+  --color-on-dark-soft: #f3e3da;
+  --color-measure: #ffe6ea;
+
+  --text-title: 1.625rem;
+  --text-title--line-height: 1.3;
+  --text-heading: 1.25rem;
+  --text-heading--line-height: 1.35;
+  --text-emphasis: 1.0625rem;
+  --text-emphasis--line-height: 1.45;
+  --text-body: 0.9375rem;
+  --text-body--line-height: 1.55;
+  --text-label: 0.8125rem;
+  --text-label--line-height: 1.5;
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1.45;
+
+  --radius-card: 1.5rem;
+  --radius-tile: 1.125rem;
+  --radius-input: 1rem;
+
+  /* 그림자는 회색이 아니라 분홍 갈색 빛으로 */
+  --shadow-soft: 0 1px 2px rgb(180 90 80 / 0.07), 0 6px 20px rgb(180 90 80 / 0.08);
+  --shadow-float: 0 2px 6px rgb(180 90 80 / 0.1), 0 14px 36px rgb(180 90 80 / 0.16);
+
+  --animate-rise-in: rise-in 0.42s cubic-bezier(0.2, 0, 0, 1) both;
+  --animate-toast-in: toast-in 0.24s cubic-bezier(0.2, 0, 0, 1) both;
+  --animate-sheet-up: sheet-up 0.3s cubic-bezier(0.2, 0, 0, 1) both;
+  --animate-fade-in: fade-in 0.2s ease-out both;
+  /* 펼침 목록: 붙은 모서리에서 살짝 커지며 나타난다 */
+  --animate-pop-over: pop-over 0.16s cubic-bezier(0.2, 0, 0, 1) both;
+  --animate-trot: trot 1s ease-in-out infinite;
+  --animate-breathe: breathe 3.2s ease-in-out infinite;
+  --animate-bob: bob 1.6s ease-in-out infinite;
+  --animate-wag: wag 0.9s ease-in-out infinite;
+  --animate-peek: peek 3.6s ease-in-out infinite;
+  --animate-float-up: float-up 2.4s ease-out infinite;
+  --animate-twinkle: twinkle 2.2s ease-in-out infinite;
+  --animate-pop: pop 0.36s cubic-bezier(0.2, 0, 0, 1);
+  /* 찜하기: 발바닥이 찍혔다 사라지고(0.5초) → 하트가 튀어나오고 → 점이 퍼진다 */
+  --animate-paw-pop: paw-pop 0.5s cubic-bezier(0.2, 0, 0, 1) both;
+  --animate-heart-in: heart-in 0.8s cubic-bezier(0.2, 0, 0, 1) both;
+  --animate-spark: spark 0.4s ease-out 0.38s both;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
   }
-  :root:has([data-bottom-bar='tab']) {
-    --toast-offset: 84px;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
   }
-  :root:has([data-bottom-bar='action']) {
-    --toast-offset: 104px;
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
   }
-
-  body {
-    @apply bg-canvas font-sans text-ink antialiased;
-    /* 최소 지원 너비 */
-    min-width: 320px;
-    /* 한글이 글자 단위로 줄바꿈되지 않게 (긴 영문·숫자는 넘치면 끊는다) */
-    word-break: keep-all;
-    overflow-wrap: anywhere;
-    /* 누름 상태는 직접 그린다 (모바일 기본 회색 번쩍임 끄기) */
-    -webkit-tap-highlight-color: transparent;
+}
+@keyframes pop-over {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(-4px);
   }
-
-  a {
-    color: inherit;
-    text-decoration: none;
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
   }
-
-  button {
-    cursor: pointer;
+}
+@keyframes trot {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.45;
+  }
+  50% {
+    transform: translateY(-7px) scale(1.08);
+    opacity: 1;
   }
 }
 
-/* 움직임 줄이기를 켠 사용자에게는 애니메이션·전환을 거의 없앤다 */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  ::before,
-  ::after,
-  ::backdrop {
-    animation-duration: 1ms !important;
-    animation-delay: 0ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 1ms !important;
-    scroll-behavior: auto !important;
+/* 자는 강아지: 숨 쉬듯 아래를 축으로 살짝 부푼다 */
+@keyframes breathe {
+  50% {
+    transform: scale(1.03, 0.97) translateY(1.5%);
   }
 }
-
-/* 공고 사진이 없을 때 자리: 옅은 빗금 */
-@utility photo-placeholder {
-  background-color: var(--color-muted);
-  background-image: repeating-linear-gradient(135deg, rgb(26 26 23 / 0.06) 0 8px, transparent 8px 16px);
+/* 신난 강아지: 통통 뛴다 */
+@keyframes bob {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  40% {
+    transform: translateY(-7%) scale(0.98, 1.03);
+  }
+  70% {
+    transform: translateY(0) scale(1.03, 0.97);
+  }
 }
-
-/* 불러오는 중인 자리: 실제 콘텐츠와 같은 크기·모서리에 왼쪽→오른쪽 shimmer */
-@utility skeleton {
-  background-color: var(--color-muted);
-  background-image: linear-gradient(90deg, transparent 0, rgb(255 255 255 / 0.6) 50%, transparent 100%);
-  background-repeat: no-repeat;
-  background-size: 200% 100%;
-  animation: shimmer 1.4s linear infinite;
+/* 앉은 강아지: 좌우로 갸웃 */
+@keyframes wag {
+  0%,
+  100% {
+    transform: rotate(-3deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
 }
-
-/* 달리는 강아지 (RunningDog). 8칸 스프라이트를 0.68초에 한 바퀴 (한 칸 85ms) */
+/* 빼꼼 보는 강아지: 아래에서 올라왔다 내려간다 */
+@keyframes peek {
+  0%,
+  100% {
+    transform: translateY(14%);
+  }
+  30%,
+  70% {
+    transform: translateY(0);
+  }
+}
+/* 하트·zzz 가 위로 떠오르며 사라진다 */
+@keyframes float-up {
+  0% {
+    opacity: 0;
+    transform: translateY(40%) scale(0.6);
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-90%) scale(1.1) rotate(12deg);
+  }
+}
+@keyframes twinkle {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.85) rotate(-8deg);
+  }
+}
+@keyframes pop {
+  0% {
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.25);
+  }
+}
+@keyframes paw-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.25) rotate(-24deg);
+  }
+  35% {
+    opacity: 1;
+    transform: scale(1.35) rotate(10deg);
+  }
+  55% {
+    transform: scale(1.1) rotate(-6deg);
+  }
+  75% {
+    opacity: 1;
+    transform: scale(1.15) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.3) rotate(0deg);
+  }
+}
+/* 발바닥이 보이는 동안(앞 절반) 하트는 숨어 있다 */
+@keyframes heart-in {
+  0%,
+  52% {
+    opacity: 0;
+    transform: scale(0.25);
+  }
+  78% {
+    opacity: 1;
+    transform: scale(1.3);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes spark {
+  0% {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.4);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(var(--spark-distance, -20px)) scale(1);
+  }
+}
+/* 달리는 강아지: 8칸 스프라이트를 0.68초에 한 바퀴 */
 .dog-run {
   background-repeat: no-repeat;
-  background-position: 0 0;
   animation: dog-run 680ms steps(8) infinite;
 }
 @keyframes dog-run {
@@ -83,58 +254,63 @@
     background-position: calc(var(--dog-size) * -8) 0;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .dog-run {
-    animation: none;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: transparent;
+    background: var(--color-backdrop);
+    /* 키보드로 옮긴 초점이 위에 붙는 칩 줄이나 아래 고정 버튼·탭 밑에 숨지 않게, 스크롤할 때 그만큼 띄운다 */
+    scroll-padding-block: 5rem 11.5rem;
+  }
+  body {
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: 1.55;
+    color: var(--color-ink);
+    word-break: keep-all;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+  p {
+    text-wrap: pretty;
+  }
+  :focus-visible {
+    outline: 2.5px solid var(--color-primary-deep);
+    outline-offset: 2px;
+  }
+  button,
+  a {
+    touch-action: manipulation;
   }
 }
 
-@keyframes shimmer {
-  from {
-    background-position: 150% 0;
-  }
-  to {
-    background-position: -50% 0;
-  }
+/* 앱 화면 기둥: 넓은 화면에서도 휴대폰 너비로 가운데에 둔다 */
+@utility app-column {
+  margin-inline: auto;
+  width: 100%;
+  max-width: 480px;
+  min-height: 100dvh;
+  background: var(--color-canvas);
 }
 
-/*
- * 터치 영역을 보이는 크기와 상관없이 44×44 이상으로 넓힌다 (투명한 ::after).
- * absolute·fixed·sticky 가 아니면 relative 를 붙여 기준을 만든다
- */
-@utility touch-target {
-  &:not(.absolute, .fixed, .sticky) {
-    position: relative;
-  }
-  &::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: max(100%, 44px);
-    height: max(100%, 44px);
-    translate: -50% -50%;
-  }
-}
-
-/* 모션 시간 (transition 과 같이 쓴다. 기본은 fast). --tw-duration 도 넣어야 transition 이 이 값을 쓴다 */
-@utility duration-fast {
-  --tw-duration: var(--duration-fast);
-  transition-duration: var(--duration-fast);
-}
-@utility duration-base {
-  --tw-duration: var(--duration-base);
-  transition-duration: var(--duration-base);
-}
-@utility duration-slow {
-  --tw-duration: var(--duration-slow);
-  transition-duration: var(--duration-slow);
-}
-
-/* 가로 목록의 스크롤바 숨김 */
 @utility no-scrollbar {
   scrollbar-width: none;
   &::-webkit-scrollbar {
     display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

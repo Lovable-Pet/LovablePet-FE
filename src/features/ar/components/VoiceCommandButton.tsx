@@ -22,18 +22,18 @@ export function VoiceCommandButton({ inAr, onCommand }: { inAr: boolean; onComma
         aria-label="말로 명령하기"
         aria-pressed={listening}
         className={cn(
-          'pointer-events-auto relative flex size-11 shrink-0 items-center justify-center rounded-full transition active:scale-97',
-          listening ? 'bg-measure text-ink' : 'bg-black/55 text-white',
+          'pointer-events-auto relative flex size-11 shrink-0 items-center justify-center rounded-full transition-[background-color,scale] duration-150 active:scale-[0.96]',
+          listening ? 'bg-primary text-white' : 'bg-surface/95 text-ink shadow-soft',
         )}
       >
-        {listening && <span aria-hidden className="absolute inset-0 animate-ping rounded-full bg-measure/60" />}
+        {listening && <span aria-hidden className="absolute inset-0 animate-ping rounded-full bg-primary/50" />}
         <Mic className="relative size-5" strokeWidth={2} aria-hidden />
       </button>
       <p aria-live="polite" className="min-w-0 flex-1">
         {bubble && (
           <span
             key={listening ? 'listening' : flash?.id}
-            className="inline-block max-w-full animate-toast-in rounded-2xl bg-black/55 px-3 py-1.5 text-label text-white [overflow-wrap:anywhere]"
+            className="inline-block max-w-full animate-toast-in rounded-2xl bg-surface/95 px-3 py-1.5 text-label font-bold text-ink shadow-soft [overflow-wrap:anywhere]"
           >
             {bubble}
           </span>

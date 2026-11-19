@@ -1,60 +1,70 @@
-import { Box } from 'lucide-react'
+import type { CSSProperties } from 'react'
+import { ArrowRight, Box, MapPin } from 'lucide-react'
 import { Link } from 'react-router'
 import type { PetSummary } from '../../../apis/dto/pet.dto'
-import { Badge } from '../../../components/Badge/Badge'
-import { SEX_LABEL } from '../../../constants/pet'
-import { formatAge, formatWeight } from '../../../utils/pet'
+import { cn } from '../../../components/utils/cn'
+import { formatWeight, waitingDays } from '../../../utils/pet'
 import { FavoriteButton } from '../../favorite/components/FavoriteButton'
 import { PetPhoto } from './PetPhoto'
+import { SexSymbol } from './SexSymbol'
 
-export interface PetCardProps {
+interface PetCardProps {
   pet: PetSummary
+  /** 등장 애니메이션 (useEntranceStagger) */
+  className?: string
+  style?: CSSProperties
 }
 
-/** 둘러보기 2열 카드 */
-export function PetCard({ pet }: PetCardProps) {
-  const weight = formatWeight(pet.weightKg)
-
+/** 홈 격자의 카드: 사진, 품종·성별·체중, 한 줄 소개, 지역과 화살표 */
+export function PetCard({ pet, className, style }: PetCardProps) {
+  const days = waitingDays(pet.noticeStart)
   return (
-    <div className="relative">
-      <Link to={`/pets/${pet.id}`} className="group flex flex-col gap-2 transition active:scale-99">
-        <PetPhoto
-          src={pet.thumbnailUrl}
-          alt={`${pet.kindName} 공고 사진`}
-          zoomOnHover
-          className="aspect-square rounded-card"
-        >
-          {pet.hasModel && (
-            <Badge tone="measure" size="sm" className="absolute bottom-2 left-2">
-              <Box className="size-3" strokeWidth={2.4} aria-hidden />
-              AR로 보기
-            </Badge>
-          )}
-        </PetPhoto>
-        <div>
-          <p className="text-body-lg font-semibold tracking-[-0.01em]">{pet.kindName}</p>
-          <p className="mt-0.5 text-label text-ink-secondary">
-            {SEX_LABEL[pet.sex]} · {formatAge(pet.ageText)} ·{' '}
-            {weight ? <span className="font-mono">{weight}</span> : '체중 미상'}
-          </p>
-          <p className="mt-0.5 text-caption text-ink-caption">{pet.orgName}</p>
-        </div>
-      </Link>
-      <FavoriteButton petId={pet.id} favorited={pet.favorited} className="absolute top-1.5 right-1.5" />
-    </div>
-  )
-}
-
-export function PetCardSkeleton() {
-  return (
-    // 실제 카드와 같은 크기·위치·모서리 (사진 정사각형 + 글 세 줄)
-    <div className="flex flex-col gap-2" aria-hidden>
-      <div className="aspect-square rounded-card skeleton" />
-      <div className="flex flex-col gap-1 py-0.5">
-        <div className="h-4.5 w-2/3 rounded skeleton" />
-        <div className="h-4 w-full rounded skeleton" />
-        <div className="h-3.5 w-1/2 rounded skeleton" />
+    <Link
+      to={`/pets/${pet.id}`}
+      style={style}
+      className={cn(
+        'group block overflow-hidden rounded-card bg-surface shadow-soft transition-[scale] duration-150 active:scale-[0.98]',
+        className,
+      )}
+    >
+      <div className="relative">
+        <PetPhoto src={pet.thumbnailUrl} alt={`${pet.kindName} 공고 사진`} seed={pet.id} className="aspect-[5/4] w-full" />
+        {pet.hasModel && (
+          <span className="absolute top-2 left-2 flex h-6 items-center gap-1 rounded-full bg-surface/90 px-2 text-caption font-extrabold text-primary-deep backdrop-blur">
+            <Box className="size-3.5" strokeWidth={2.2} aria-hidden />
+            AR
+          </span>
+        )}
+        <FavoriteButton
+          petId={pet.id}
+          favorited={pet.favorited}
+          name={pet.kindName}
+          onPhoto
+          className="absolute top-1.5 right-1.5 size-10 [&_svg]:drop-shadow-[0_1px_2px_rgb(0_0_0/0.35)]"
+        />
       </div>
-    </div>
+      <div className="px-3 pt-2.5 pb-3">
+        <h3 className="flex items-baseline gap-1 font-display text-emphasis">
+          <span className="truncate">{pet.kindName}</span>
+          <SexSymbol sex={pet.sex} className="text-body" />
+          {pet.weightKg !== null && (
+            <span className="shrink-0 font-sans text-label font-bold tabular-nums">{formatWeight(pet.weightKg)}</span>
+          )}
+        </h3>
+        <p className="mt-0.5 truncate text-caption text-ink-soft">
+          {days}일째 가족을 기다려요
+        </p>
+        <div className="mt-2 flex items-center gap-1">
+          <MapPin className="size-4 shrink-0 fill-primary text-surface" strokeWidth={2} aria-hidden />
+          <span className="min-w-0 flex-1 truncate text-caption text-ink-soft">{pet.orgName}</span>
+          <span
+            aria-hidden
+            className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-white transition-transform duration-150 group-hover:translate-x-0.5"
+          >
+            <ArrowRight className="size-3.5" strokeWidth={2.8} />
+          </span>
+        </div>
+      </div>
+    </Link>
   )
 }
