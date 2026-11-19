@@ -16,6 +16,7 @@ import { ArHitDebug } from '../features/ar/components/ArHitDebug'
 import { ArTouchLayer } from '../features/ar/components/ArTouchLayer'
 import { HoldRing } from '../features/ar/components/HoldRing'
 import { VoiceCommandButton } from '../features/ar/components/VoiceCommandButton'
+import { VoiceLogDebug } from '../features/ar/components/VoiceLogDebug'
 import { COMMANDS, DogAnimator, POSE_LABEL, type CommandId, type Pose } from '../features/ar/dogAnimator'
 import { useArPlacement, type ArOcclusionOptions, type ArPlacement } from '../features/ar/useArPlacement'
 import { useArWalk, type ArWalk } from '../features/ar/useArWalk'
@@ -54,6 +55,11 @@ const TAP_SLOP_PX = 8
 
 /** 배치 전 빨강(놓을 수 없음)이 이만큼(ms) 넘게 이어지면 다시 열어 보라는 줄을 더한다 */
 const STUCK_HINT_MS = 10_000
+/** 개를 3초 누르면 하는 명령. 짖기는 음성과 명령 칩으로 */
+const HOLD_COMMAND: CommandId = 'play_dead'
+/** 마이크 옆에 흐리게 보이는 3초 누르기 안내 */
+const HOLD_HINT = '유기견을 꾹 누르면 빵!'
+
 /** '따라보기' 토글을 누른 뒤 위 안내 문구를 보이는 시간 (ms) */
 const FOLLOW_NOTICE_MS = 3000
 const FOLLOW_NOTICE = { on: '몸을 돌려 따라봐요', off: '가만히 있어요 · 한 바퀴 둘러보세요' } as const
@@ -380,7 +386,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     placement.replace()
   }
 
-  // 개를 누른 채 3초 → 짖기. 그 뒤 손을 떼도 탭 반응은 내지 않는다 (onPointerUp)
+  // 개를 누른 채 3초 → 빵(죽은 척, '빵!' 명령과 같다: 서 있지 않으면 일어난 뒤). 그 뒤 손을 떼도 탭 반응은 내지 않는다 (onPointerUp)
   const dogHold = useLongPress<ReactPointerEvent>({
     enabled: hasCommands,
     slopPx: TAP_SLOP_PX,
@@ -388,9 +394,9 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
       const mv = mvRef.current
       return event.target === mv && !!mv?.positionAndNormalFromPoint(event.clientX, event.clientY)
     },
-    onLongPress: () => runCommand('bark'),
+    onLongPress: () => runCommand(HOLD_COMMAND),
   })
-  // AR 안에서 개를 직접 누를 수 없을 때 대신: 꼬리 흔들기 칩을 3초 누르면 짖기
+  // AR 안에서 개를 직접 누를 수 없을 때 대신: 꼬리 흔들기 칩을 3초 누르면 짖기 (개 3초 누르기가 빵으로 바뀐 뒤에도 그대로 둠)
   const wagChipHold = useLongPress<ReactPointerEvent>({
     enabled: hasCommands && dogReady,
     slopPx: TAP_SLOP_PX,
@@ -472,7 +478,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           slopPx={TAP_SLOP_PX}
           mvRef={mvRef}
           onTap={tapReaction}
-          onLongPress={() => runCommand('bark')}
+          onLongPress={() => runCommand(HOLD_COMMAND)}
           onPlaceTap={placement.place}
           locked={walking}
         />
@@ -551,6 +557,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
             </button>
           ) : (
             <>
+              {import.meta.env.DEV && debug && hasCommands && <VoiceLogDebug />}
               {(hasCommands || canReplace || showFloorReset || walk.available) && (
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">
@@ -561,6 +568,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                         onCommand={runCommand}
                         onMiss={puzzledReaction}
                         onListen={() => gaze.trigger('mic')}
+                        idleHint={arLocked ? undefined : HOLD_HINT}
                       />
                     )}
                   </div>
