@@ -62,6 +62,7 @@ import { enabledFeaturesOf } from './xrDepthRequest'
 //   - 산책: mixer(AnimationMixer)·animationsByName(클립)·model(glTF 장면: userData 에 scenes[0].extras, children 이 루트 노드)
 //   - 고개 바라보기: renderShadow 를 인스턴스에서 감싸 그 앞에 목·머리 뼈를 돌린다. ARRenderer.onWebXRFrame 은
 //     preRender(애니메이션 믹서) → renderShadow → threeRenderer.render 순서라 그림자와 화면이 같은 자세를 쓴다
+//   - 반응 말풍선(headScreenPoint): getCamera()(AR 중이면 XR 카메라)·model 의 head_jnt·boundingBox. 화면 안 3D 에서도 쓴다
 // - 요소 프로토타입의 Symbol('renderer') getter → Renderer (싱글턴)
 //   - arRenderer(ARRenderer): currentSession, goalPosition·goalYaw, placementComplete, placementBox, initialHitSource
 //   - threeRenderer.xr.getReferenceSpace(): model-viewer 가 쓰는 'local' 기준 공간
@@ -1273,4 +1274,60 @@ class ModelViewerWalkRig implements WalkRig {
     mixer.update(0)
     this.scene.queueShadowRender()
   }
+}
+
+// ── 반응 말풍선: 개 머리 위의 화면 위치 (화면 안 3D·AR 둘 다) ──
+// ModelScene.getCamera() 는 AR 중에는 XR 카메라(three 가 매 프레임 맞춘 것), 밖에서는 model-viewer 카메라다
+
+/** 말풍선 자리: 머리 뼈에서 모델 높이의 이만큼 위 */
+const BUBBLE_LIFT_RATIO = 0.18
+const HEAD_BONE = 'head_jnt'
+
+interface ObjectLike {
+  getObjectByName(name: string): unknown
+}
+const headOf = new WeakMap<object, { getWorldPosition(target: Vector3): Vector3 } | null>()
+const headVector = new Vector3()
+const viewMatrix = new Matrix4()
+const projectionMatrix = new Matrix4()
+const targetMatrix = new Matrix4()
+/** three 행렬 (model-viewer 쪽 three 와 같은 판인지 instanceof 로 보지 않고 elements 만 읽는다) */
+const matrixElements = (value: unknown) => {
+  const elements: unknown = isRecord(value) ? value.elements : null
+  return isRecord(elements) && elements.length === 16 ? Array.from(elements as unknown as ArrayLike<number>) : null
+}
+
+/**
+ * 개 머리 위 자리의 화면 위치. x·y 는 0~1 (model-viewer 화면 기준, 왼쪽 위 원점)이고 화면 밖이면 그 밖의 값.
+ * 카메라 뒤이거나 내부 모양이 다르면 null. 머리 뼈가 없는 모델은 모델 상자 윗면 가운데에서 잰다
+ */
+export function headScreenPoint(mv: ModelViewerElement): { x: number; y: number } | null {
+  const scene = readSymbol(mv, 'scene')
+  if (!isModelScene(scene) || !isRecord(scene) || typeof scene.getCamera !== 'function') return null
+  const camera = (scene.getCamera as () => unknown).call(scene)
+  const cameraWorld = isRecord(camera) ? matrixElements(camera.matrixWorld) : null
+  const projection = isRecord(camera) ? matrixElements(camera.projectionMatrix) : null
+  if (!cameraWorld || !projection) return null
+  const model = scene.model
+  if (!isRecord(model) || typeof model.getObjectByName !== 'function') return null
+  if (!headOf.has(model)) {
+    const head = (model as unknown as ObjectLike).getObjectByName(HEAD_BONE)
+    headOf.set(model, isRecord(head) && typeof head.getWorldPosition === 'function' ? (head as never) : null)
+  }
+  const { min, max } = scene.boundingBox
+  const height = max.y - min.y
+  const head = headOf.get(model)
+  if (head) head.getWorldPosition(headVector)
+  else {
+    headVector.x = (min.x + max.x) / 2
+    headVector.y = max.y
+    headVector.z = (min.z + max.z) / 2
+    headVector.applyMatrix4(targetMatrix.fromArray(Array.from(scene.target.matrixWorld.elements)))
+  }
+  headVector.y += height * BUBBLE_LIFT_RATIO
+  headVector.applyMatrix4(viewMatrix.fromArray(cameraWorld).invert())
+  // 카메라는 -z 를 본다
+  if (headVector.z >= 0) return null
+  headVector.applyMatrix4(projectionMatrix.fromArray(projection))
+  return { x: (headVector.x + 1) / 2, y: (1 - headVector.y) / 2 }
 }

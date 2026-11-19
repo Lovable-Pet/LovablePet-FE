@@ -37,7 +37,10 @@ const FADE_MS = 300
 /** 명령이 쓰는 클립. 하나라도 없으면 명령을 보여 주지 않는다 */
 const COMMAND_CLIPS = [...Object.values(LOOPS), ...Object.keys(MOVES), 'shake', 'rollover', 'bark', 'play_dead']
 
-type Step = ['to', Pose] | ['play', string, number?] | ['hold', string] | ['react', string]
+/** 반응을 부른 곳 (개 탭만 '톡' 발도장이 된다) */
+export type ReactSource = 'tap' | 'wag' | 'puzzled' | 'greet'
+
+type Step = ['to', Pose] | ['play', string, number?] | ['hold', string] | ['react', string, ReactSource]
 
 export const COMMANDS = [
   { id: 'sit', label: '앉아', steps: [['to', 'sit']] },
@@ -55,6 +58,10 @@ export class DogAnimator {
   private readonly mv: ModelViewerElement
   private readonly onPose: (pose: Pose) => void
   private readonly onBusy?: (busy: boolean) => void
+  /** 클립을 틀 때마다 (반응 말풍선) */
+  private readonly onClipStart?: (clip: string) => void
+  /** 반응 클립이 실제로 재생될 때 (서 있지 않아 버려지면 부르지 않는다) */
+  private readonly onReact?: (source: ReactSource) => void
   /** 개 탭 */
   private readonly tapClip: string
   /** '꼬리 흔들기' 칩 */
@@ -82,11 +89,17 @@ export class DogAnimator {
       onPose: (pose: Pose) => void
       /** 명령·반응을 재생하거나 기다리는 중인지가 바뀔 때 (산책은 서기 루프만 돌 때 시작한다) */
       onBusy?: (busy: boolean) => void
+      /** 클립을 틀 때마다 (루프 포함) */
+      onClipStart?: (clip: string) => void
+      /** 반응 클립이 실제로 재생될 때 */
+      onReact?: (source: ReactSource) => void
     },
   ) {
     this.mv = mv
     this.onPose = options.onPose
     this.onBusy = options.onBusy
+    this.onClipStart = options.onClipStart
+    this.onReact = options.onReact
     const clips = new Set(mv.availableAnimations)
     this.hasCommands = COMMAND_CLIPS.every((clip) => clips.has(clip))
     this.idleClip = clips.has('standing') ? 'standing' : clips.has('idle') ? 'idle' : (mv.availableAnimations[0] ?? '')
@@ -123,32 +136,64 @@ export class DogAnimator {
     this.enqueue(command.steps)
   }
 
+  /** 개 탭에 반응 클립이 있는지 (없으면 '톡' 발도장을 뺀다) */
+  get canTap() {
+    return this.tapClip !== ''
+  }
+
+  /** 꼬리 흔들기 클립이 있는지 */
+  get canWag() {
+    return this.wagClip !== ''
+  }
+
+  /** 음성 실패에 갸우뚱(head_tilt)이 있는지 */
+  get canPuzzle() {
+    return this.puzzledClip !== ''
+  }
+
   /** 개 탭. head_tilt 가 있으면 갸우뚱, 없으면 서버 tapAnimation → tail_wag */
   tap() {
-    this.react(this.tapClip)
+    this.react(this.tapClip, 'tap')
   }
 
   /** '꼬리 흔들기' 칩. 늘 tail_wag */
   wag() {
-    this.react(this.wagClip)
+    this.react(this.wagClip, 'wag')
+  }
+
+  /** 처음 놓았을 때 인사. 서 있고 tail_wag 가 있을 때 한 번 */
+  greet() {
+    this.react(this.wagClip, 'greet')
   }
 
   /** 음성 명령을 못 알아들었을 때. head_tilt 가 있으면 갸우뚱, 없으면 아무것도 안 한다 (문구는 음성 쪽에서 띄운다) */
   puzzled() {
-    this.react(this.puzzledClip)
+    this.react(this.puzzledClip, 'puzzled')
+  }
+
+  /**
+   * 발도장을 다 모았을 때: 일어나서 한 번 짖고 꼬리를 흔든다. 명령처럼 앞 클립이 끝난 뒤 이어서 하고,
+   * 끝나거나 다른 명령에 밀리면 풀린다 (명령 클립이 없으면 꼬리만)
+   */
+  celebrate(): Promise<void> {
+    const steps: Step[] = this.hasCommands ? [['to', 'stand'], ['play', 'bark', 1]] : []
+    if (this.wagClip) steps.push(['react', this.wagClip, 'greet'])
+    if (!steps.length) return Promise.resolve()
+    return this.enqueue(steps)
   }
 
   /**
    * 반응(탭·칩·음성 실패). 서 있을 때만 (tail_wag·head_tilt 는 서기 자세라 앉거나 엎드린 채 틀면 튄다).
    * 자세는 전환 클립이 끝나야 바뀌므로 누른 순간이 아니라 차례가 왔을 때 다시 본다 (perform 의 'react')
    */
-  private react(clip: string) {
+  private react(clip: string, source: ReactSource) {
     // 명령(반응 포함)이 진행 중이면 무시한다. 받으면 대기 중인 명령이 취소되는데,
     // 차례가 와도 서 있지 않으면 반응도 버려져 둘 다 사라진다
     if (!clip || this.pending > 0) return
-    this.enqueue([['react', clip]])
+    void this.enqueue([['react', clip, source]])
   }
 
+  /** 대기열 끝에 넣는다. 돌려주는 약속은 이 순서가 끝나거나(더 새 명령에 밀려 멈춘 때도) 풀린다 */
   private enqueue(steps: readonly Step[]) {
     const mine = ++this.run
     if (this.pending++ === 0) this.onBusy?.(true)
@@ -157,6 +202,7 @@ export class DogAnimator {
       .finally(() => {
         if (--this.pending === 0 && !this.disposed) this.onBusy?.(false)
       })
+    return this.chain
   }
 
   private setPose(pose: Pose) {
@@ -178,6 +224,7 @@ export class DogAnimator {
     mv.animationCrossfadeDuration = fade
     if (reset) mv.currentTime = 0
     mv.animationName = clip
+    this.onClipStart?.(clip)
     await mv.updateComplete
     if (this.disposed) return
     mv.play(times ? { repetitions: times, pingpong: false } : undefined)
@@ -220,6 +267,7 @@ export class DogAnimator {
     for (const step of steps) {
       if (step[0] === 'react') {
         if (this.pose !== 'stand') return
+        this.onReact?.(step[2])
         if (!(await this.once(step[1]))) return
         last = step[1]
         continue

@@ -1,7 +1,7 @@
 import '@google/model-viewer'
 import type { ModelViewerElement } from '@google/model-viewer'
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { AlertCircle, Box, Camera, ChevronLeft, ChevronRight, Footprints, RotateCcw, Ruler, ScanEye, Smartphone, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { Box, Camera, ChevronLeft, ChevronRight, Footprints, Smartphone } from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { ApiError } from '../apis/apiError'
 import type { PetDetail, PetModelView } from '../apis/dto/pet.dto'
@@ -9,15 +9,20 @@ import { resolveModelUrl } from '../apis/pet'
 import { Button } from '../components/Button/Button'
 import { buttonStyles } from '../components/Button/buttonStyles'
 import { StateView } from '../components/StateView/StateView'
-import { cn } from '../components/utils/cn'
-import { PUPPY_NOTICE, SEX_LABEL } from '../constants/pet'
+import { SEX_LABEL } from '../constants/pet'
+import { ArControls } from '../features/ar/components/ArControls'
 import { ArFloorHint } from '../features/ar/components/ArFloorHint'
 import { ArHitDebug } from '../features/ar/components/ArHitDebug'
+import { ArInfoSheet } from '../features/ar/components/ArInfoSheet'
+import { ArTopBar } from '../features/ar/components/ArTopBar'
 import { ArTouchLayer } from '../features/ar/components/ArTouchLayer'
 import { HoldRing } from '../features/ar/components/HoldRing'
-import { VoiceCommandButton } from '../features/ar/components/VoiceCommandButton'
+import { ReactionBubble } from '../features/ar/components/ReactionBubble'
 import { VoiceLogDebug } from '../features/ar/components/VoiceLogDebug'
-import { COMMANDS, DogAnimator, POSE_LABEL, type CommandId, type Pose } from '../features/ar/dogAnimator'
+import { AR_TEXT, FOLLOW_NOTICE, pickHint, POSE_HINT, REACTION_BY_CLIP, type ReactionKind } from '../features/ar/arText'
+import { DogAnimator, POSE_LABEL, type CommandId, type Pose } from '../features/ar/dogAnimator'
+import { useVoiceCommand } from '../features/ar/useVoiceCommand'
+import { STANDING_CLIP, WALK_CLIPS } from '../features/ar/walk/walkSpec'
 import { useArPlacement, type ArOcclusionOptions, type ArPlacement } from '../features/ar/useArPlacement'
 import { useArWalk, type ArWalk } from '../features/ar/useArWalk'
 import { useArGaze } from '../features/ar/useArGaze'
@@ -25,11 +30,11 @@ import { useArNear } from '../features/ar/useArNear'
 import { NEAR_HINT_TEXT, type NearTuning } from '../features/ar/nearCamera'
 import { GAZE_IN_PRODUCTION, type GazeTuning } from '../features/ar/gaze/gazeSpec'
 import type { WalkTuning } from '../features/ar/walk/walkController'
-import { LONG_PRESS_MS, useLongPress, type LongPressHandlers } from '../features/ar/useLongPress'
+import { LONG_PRESS_MS, useLongPress } from '../features/ar/useLongPress'
 import { PetPhoto } from '../features/pet/components/PetPhoto'
 import { usePetDetail } from '../features/pet/queries'
 import { useGoBack } from '../hooks/useGoBack'
-import { formatWeight, isLikelyPuppy, toWithersCm } from '../utils/pet'
+import { formatWeight, toWithersCm } from '../utils/pet'
 import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 
 // /pets/:petId/ar — 캔버스 06 AR 시작 안내 → 07·08 실제 크기로 놓기
@@ -43,6 +48,12 @@ import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 // - 아이폰: Quick Look 으로 USDZ 를 연다. USDZ 에는 대기 루프 하나만 있어 명령·탭 반응이 안 된다
 // - AR 이 안 되는 기기(데스크톱 등): 화면 안 3D 로 보여 준다. 명령·탭 반응은 된다
 //
+// 화면 배치 (WebXR 과 화면 안 3D 가 같다. 개가 주인공이라 가운데는 비운다)
+// - 위: 닫기 · 이름·체고 알약(누르면 정보 시트: 다시 놓기도 여기) · 따라보기(몸 돌리기가 되는 개만) · 찜. 그 아래 안내 한 줄 (pickHint)
+// - 가운데: 개 머리 위 반응 말풍선 ('?', 하트, '멍!', '빵!')
+// - 아래: [묘기 | 말 걸기 | 산책]. 묘기는 명령 트레이(3×2)를 펼친다. 명령 클립이 없으면 묘기 자리에 꼬리 흔들기 하나.
+//   산책 중에는 '산책 끝' 하나
+//
 // 크기: GLB 가 이미 미터 단위 실제 크기라 ar-scale="fixed" 로 손가락 확대·축소를 막는다
 
 type ArStatus = 'not-presenting' | 'session-started' | 'object-placed' | 'failed'
@@ -55,14 +66,11 @@ const TAP_SLOP_PX = 8
 
 /** 배치 전 빨강(놓을 수 없음)이 이만큼(ms) 넘게 이어지면 다시 열어 보라는 줄을 더한다 */
 const STUCK_HINT_MS = 10_000
-/** 개를 3초 누르면 하는 명령. 짖기는 음성과 명령 칩으로 */
+/** 개를 3초 누르면 하는 명령. 짖기는 음성과 묘기 트레이로 */
 const HOLD_COMMAND: CommandId = 'play_dead'
-/** 마이크 옆에 흐리게 보이는 3초 누르기 안내 */
-const HOLD_HINT = '유기견을 꾹 누르면 빵!'
 
 /** '따라보기' 토글을 누른 뒤 위 안내 문구를 보이는 시간 (ms) */
 const FOLLOW_NOTICE_MS = 3000
-const FOLLOW_NOTICE = { on: '몸을 돌려 따라봐요', off: '가만히 있어요 · 한 바퀴 둘러보세요' } as const
 
 /** active 가 STUCK_HINT_MS 넘게 이어졌는지 (중간에 풀리면 처음부터) */
 function useLongActive(active: boolean) {
@@ -159,7 +167,8 @@ export function ArPage() {
       </MessageShell>
     )
   }
-  return <ArView pet={pet} model={pet.model} onBack={goBack} />
+  // 다른 개로 가면 화면 상태(트레이·발도장 등)를 처음부터
+  return <ArView key={pet.id} pet={pet} model={pet.model} onBack={goBack} />
 }
 
 function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; onBack: () => void }) {
@@ -188,6 +197,16 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   /** 명령·반응을 재생하거나 기다리는 중 (산책은 서기 루프만 돌 때 켤 수 있다) */
   const [animBusy, setAnimBusy] = useState(false)
   const [activeCommand, setActiveCommand] = useState<CommandId | null>(null)
+  /** 걷기 클립(walk_start·walk·walk_stop·standing)이 다 있는지. AR 에서 '산책' 버튼 자리를 정한다 */
+  const [hasWalkClips, setHasWalkClips] = useState(false)
+  /** 묘기 트레이. 명령을 눌러도 열려 있고, 묘기 버튼을 다시 누르거나 개를 탭하면 닫힌다 */
+  const [trayOpen, setTrayOpen] = useState(false)
+  /** 이름·체고 알약을 누르면 여는 정보 시트 */
+  const [infoOpen, setInfoOpen] = useState(false)
+  /** 개 머리 위 반응 말풍선. id 가 바뀌면 다시 띄운다 */
+  const [reaction, setReaction] = useState<{ kind: ReactionKind; id: number } | null>(null)
+  /** 애니메이터가 클립을 틀 때 (load 때 한 번 만든 애니메이터가 최신 함수를 부르도록 ref, 아래에서 채운다) */
+  const clipStartRef = useRef<(clip: string) => void>(() => {})
 
   const withersCm = toWithersCm(model.withersM)
   const inAr = arStatus === 'session-started' || arStatus === 'object-placed'
@@ -275,8 +294,22 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   useEffect(() => {
     walkStateRef.current = { active: walk.active, standing: walk.phase === 'standing', requestTurn: walk.requestTurn }
   }, [walk.active, walk.phase, walk.requestTurn])
-  /** 산책 중: 명령 칩·음성·다시 놓기를 숨기고 개 탭을 막는다 */
+  /** 산책 중: 아래 버튼(묘기·말 걸기)을 '산책 끝' 으로 바꾸고 개 탭을 막는다 */
   const walking = walk.active
+  /** 반응 말풍선을 띄운다. 산책 중에는 띄우지 않는다 */
+  const showReaction = useCallback(
+    (kind: ReactionKind) => {
+      if (walking) return
+      setReaction((previous) => ({ kind, id: (previous?.id ?? 0) + 1 }))
+    },
+    [walking],
+  )
+  useEffect(() => {
+    clipStartRef.current = (clip) => {
+      const kind = REACTION_BY_CLIP[clip]
+      if (kind) showReaction(kind)
+    }
+  })
   /** ?debug 상자: 산책 중이면 산책 줄을 위에, 맨 위에 고개 한 줄 */
   const gazeLines = [near.debugLine, gaze.debugLine].filter((line): line is string => !!line)
   const hitDebug = walk.debug
@@ -310,10 +343,12 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         playbackRate: behaviorRef.current.playbackRate,
         onPose: setPose,
         onBusy: setAnimBusy,
+        onClipStart: (clip) => clipStartRef.current(clip),
       })
       animatorRef.current = animator
       setHasCommands(animator.hasCommands)
       setTapIsHeadTilt(animator.tapIsHeadTilt)
+      setHasWalkClips([...WALK_CLIPS, STANDING_CLIP].every((clip) => mv.availableAnimations.includes(clip)))
     }
     // 'webglcontextlost' 도 error 로 오지만 렌더러가 스스로 복구한다. 파일을 못 받았을 때만 실패로 본다
     const onError = (event: Event) => {
@@ -351,42 +386,54 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     if (mvRef.current?.canActivateAR) void mvRef.current.activateAR()
   }
 
+  /** 명령. 산책 중·몸 돌리는 중이면 받지 않고 false */
   const runCommand = (commandId: CommandId) => {
     // 산책 중·몸 돌리기 중에는 클립을 산책·회전이 돌린다
-    if (walking || gaze.isTurning()) return
+    if (walking || gaze.isTurning()) return false
     gaze.userCommand()
     setActiveCommand(commandId)
     animatorRef.current?.command(commandId)
+    return true
   }
 
-  /** 개 탭. head_tilt 가 있으면 갸우뚱, 없으면 꼬리 흔들기 */
+  /** 개 탭. head_tilt 가 있으면 갸우뚱, 없으면 꼬리 흔들기. 묘기 트레이는 닫는다 */
   const tapReaction = () => {
     if (walking) return
+    setTrayOpen(false)
     gaze.trigger('tap')
     if (gaze.isTurning()) return
     setActiveCommand(null)
     animatorRef.current?.tap()
   }
 
-  /** '꼬리 흔들기' 칩. 늘 꼬리 흔들기 */
+  /** '꼬리 흔들기' 버튼 (명령 클립이 없는 모델). 늘 꼬리 흔들기 */
   const wagReaction = () => {
     if (walking || gaze.isTurning()) return
     setActiveCommand(null)
     animatorRef.current?.wag()
   }
 
-  /** 음성 명령을 못 알아들었을 때. head_tilt 가 있으면 갸우뚱 ('알아듣지 못했어요' 문구는 마이크 버튼이 띄운다) */
+  /**
+   * 음성 명령을 못 알아들었을 때. head_tilt 가 있으면 갸우뚱 (그 클립이 '?' 말풍선을 띄운다).
+   * 없으면 개가 쉬고 있을 때만 '?' 말풍선. '알아듣지 못했어요' 문구는 말 걸기 쪽에서 띄운다
+   */
   const puzzledReaction = () => {
-    if (!walking && !gaze.isTurning()) animatorRef.current?.puzzled()
+    const animator = animatorRef.current
+    if (walking || gaze.isTurning() || !animator) return
+    if (!animator.canPuzzle && !animator.state.busy) showReaction('puzzled')
+    animator.puzzled()
   }
 
   /** 다시 놓기: 개를 숨기고 바닥 원으로 돌아간다 */
   const replaceDog = () => {
     setActiveCommand(null)
+    setTrayOpen(false)
+    setInfoOpen(false)
     placement.replace()
   }
 
-  // 개를 누른 채 3초 → 빵(죽은 척, '빵!' 명령과 같다: 서 있지 않으면 일어난 뒤). 그 뒤 손을 떼도 탭 반응은 내지 않는다 (onPointerUp)
+  // 개를 누른 채 3초 → 빵(죽은 척, '빵!' 명령과 같다: 서 있지 않으면 일어난 뒤). 그 뒤 손을 떼도 탭 반응은 내지 않는다 (onPointerUp).
+  // 예전의 '꼬리 흔들기' 칩 3초(짖기)는 없앴다: 그 칩은 이제 명령 클립이 없는 모델에만 있고, 그런 모델에는 짖기 클립도 없다
   const dogHold = useLongPress<ReactPointerEvent>({
     enabled: hasCommands,
     slopPx: TAP_SLOP_PX,
@@ -396,13 +443,24 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     },
     onLongPress: () => runCommand(HOLD_COMMAND),
   })
-  // AR 안에서 개를 직접 누를 수 없을 때 대신: 꼬리 흔들기 칩을 3초 누르면 짖기 (개 3초 누르기가 빵으로 바뀐 뒤에도 그대로 둠)
-  const wagChipHold = useLongPress<ReactPointerEvent>({
-    enabled: hasCommands && dogReady,
-    slopPx: TAP_SLOP_PX,
-    canStart: (event) => !(event.target as Element).closest('button')?.disabled,
-    onLongPress: () => runCommand('bark'),
+
+  // 말 걸기 (음성 명령). 놓기 전·산책 중에는 막혀 듣던 것도 조용히 멈춘다
+  const voice = useVoiceCommand({
+    inAr,
+    disabled: arLocked || walking,
+    onCommand: (id) => {
+      runCommand(id)
+    },
+    onMiss: puzzledReaction,
   })
+  // 듣기 시작하면 개가 사용자를 바라본다
+  const gazeTriggerRef = useRef(gaze.trigger)
+  useEffect(() => {
+    gazeTriggerRef.current = gaze.trigger
+  })
+  useEffect(() => {
+    if (voice.listening) gazeTriggerRef.current('mic')
+  }, [voice.listening])
 
   // 화면 안 3D 에서 개를 탭하면 반응한다. 카메라를 돌린 드래그는 빼고, 개를 맞혔을 때만
   const onPointerDown = (event: ReactPointerEvent) => {
@@ -418,6 +476,35 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > TAP_SLOP_PX) return
     if (mv.positionAndNormalFromPoint(event.clientX, event.clientY)) tapReaction()
   }
+
+  /** 위 안내 한 줄 (우선순위는 pickHint) */
+  const hint = pickHint({
+    placement: arLocked ? placementHint(placement) : null,
+    near: near.hint ? NEAR_HINT_TEXT : null,
+    walk: walking ? walkHint(walk) : null,
+    follow: followNotice ? FOLLOW_NOTICE[followNotice.on ? 'on' : 'off'] : null,
+    pose: hasCommands
+      ? `${POSE_LABEL[pose]} · ${POSE_HINT.commands}`
+      : inAr
+        ? POSE_HINT.wagInAr
+        : tapIsHeadTilt
+          ? POSE_HINT.tapHeadTilt
+          : POSE_HINT.tapWag,
+  })
+  /**
+   * '산책' 버튼: AR 에서 걷기 클립이 있는 개만 (화면 안 3D·아이폰은 산책이 없다).
+   * 놓기 전에는 자리만 잡아 두고(눌리지 않음), 놓은 뒤에는 산책 리그가 있을 때만. 서 있지 않거나 명령 중이면 눌리지 않는다
+   */
+  const walkButton =
+    inAr && hasWalkClips && (placement.walkHost !== null || !dogReady)
+      ? {
+          onStart: () => {
+            setTrayOpen(false)
+            walk.start()
+          },
+          disabled: !walk.available,
+        }
+      : null
 
   if (loadFailed) {
     return (
@@ -482,61 +569,34 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           onPlaceTap={placement.place}
           locked={walking}
         />
+        {/* ?debug 상자는 오버레이보다 앞(아래)에 둬 버튼·트레이를 가리지 않는다 */}
+        {import.meta.env.DEV && <ArHitDebug mvRef={mvRef} arStatus={arStatus} placement={hitDebug} />}
+        <ReactionBubble mvRef={mvRef} reaction={reaction} />
         <div
           ref={topOverlayRef}
           className="pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center gap-2 px-3 pt-[calc(12px+env(safe-area-inset-top))]">
-          <div className="flex w-full items-center justify-between">
-            {/* WebXR 중에는 model-viewer 의 닫기 버튼을 쓴다 */}
-            {inAr ? (
-              <span className="size-11" aria-hidden />
-            ) : (
-              <button
-                type="button"
-                onClick={onBack}
-                aria-label="AR 닫기"
-                className="pointer-events-auto flex size-11 items-center justify-center rounded-full bg-black/45"
-              >
-                <X className="size-5.5" strokeWidth={2} aria-hidden />
-              </button>
-            )}
-            <span className="flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-measure px-3.5 text-body font-bold whitespace-nowrap text-ink">
-              <Ruler className="size-4" strokeWidth={2.2} aria-hidden />
-              실제 크기 · 체고 <span className="font-mono">{withersCm}cm</span>
-            </span>
-            <span className="size-11" aria-hidden />
-          </div>
+          <ArTopBar
+            inAr={inAr}
+            onClose={onBack}
+            name={pet.displayName}
+            withersCm={withersCm}
+            onOpenInfo={() => setInfoOpen(true)}
+            follow={gaze.canFollow && dogReady ? { on: follow, onToggle: toggleFollow } : null}
+            petId={pet.id}
+            favorited={pet.favorited}
+          />
           <p aria-live="polite" className="text-center text-body text-on-dark [text-shadow:0_1px_3px_rgb(0_0_0/0.6)]">
-            {arLocked
-              ? placementHint(placement)
-              : near.hint
-                ? NEAR_HINT_TEXT
-                : walking
-                ? walkHint(walk)
-                : followNotice
-                ? FOLLOW_NOTICE[followNotice.on ? 'on' : 'off']
-                : hasCommands
-                ? `${POSE_LABEL[pose]} · 명령을 눌러 보세요`
-                : inAr
-                  ? '아래 버튼을 누르면 꼬리를 흔들어요'
-                  : tapIsHeadTilt
-                    ? '유기견을 탭하면 고개를 갸우뚱해요'
-                    : '유기견을 탭하면 꼬리를 흔들어요'}
+            {hint}
           </p>
           {stuck && (
             <p className="text-center text-label text-on-dark-secondary [text-shadow:0_1px_3px_rgb(0_0_0/0.6)]">
-              잘 안 되면 AR을 닫았다가 다시 열어 주세요
+              {AR_TEXT.stuck}
             </p>
           )}
           {arLocked && placement.phase === 'preparing' && placement.notice !== 'tiltDown' && <MoveSideways />}
-          {isLikelyPuppy(pet.birthYear) && (
-            <p className="flex max-w-[340px] gap-1.5 rounded-input bg-dark-notice px-3 py-2 text-label text-dark-notice-ink">
-              <AlertCircle className="mt-0.5 size-4 shrink-0 text-measure" strokeWidth={2} aria-hidden />
-              {PUPPY_NOTICE}
-            </p>
-          )}
           {arFailed && (
             <p role="alert" className="rounded-input bg-overlay px-3 py-2 text-label text-on-dark">
-              AR을 시작하지 못했어요. 화면 안 3D로 보여 드릴게요.
+              {AR_TEXT.arFailed}
             </p>
           )}
         </div>
@@ -545,7 +605,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           ref={bottomOverlayRef}
           className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col gap-3 px-4 pb-[calc(20px+env(safe-area-inset-bottom))]">
           {walking ? (
-            // 산책 중: 명령 칩·음성·다시 놓기 대신 '산책 끝' 하나 (걷는 중이면 다음 걸음 끝에서 멈춘 뒤 끝난다)
+            // 산책 중: 아래 버튼 대신 '산책 끝' 하나 (걷는 중이면 다음 걸음 끝에서 멈춘 뒤 끝난다)
             <button
               type="button"
               onClick={walk.end}
@@ -553,89 +613,27 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
               className="pointer-events-auto flex h-12 w-full items-center justify-center gap-2 rounded-full bg-measure text-emphasis font-bold text-ink transition active:scale-97 disabled:opacity-60"
             >
               <Footprints className="size-5" strokeWidth={2.2} aria-hidden />
-              {walk.ending ? '멈추는 중…' : '산책 끝'}
+              {walk.ending ? AR_TEXT.walkEnding : AR_TEXT.walkEnd}
             </button>
           ) : (
             <>
               {import.meta.env.DEV && debug && hasCommands && <VoiceLogDebug />}
-              {(hasCommands || canReplace || showFloorReset || walk.available) && (
-                <div className="flex items-center gap-2">
-                  <div className="min-w-0 flex-1">
-                    {hasCommands && (
-                      <VoiceCommandButton
-                        inAr={inAr}
-                        disabled={arLocked}
-                        onCommand={runCommand}
-                        onMiss={puzzledReaction}
-                        onListen={() => gaze.trigger('mic')}
-                        idleHint={arLocked ? undefined : HOLD_HINT}
-                      />
-                    )}
-                  </div>
-                  {showFloorReset && (
-                    <button
-                      type="button"
-                      onClick={placement.resetFloor}
-                      className="pointer-events-auto h-9 shrink-0 rounded-full bg-black/65 px-3 font-mono text-[11px] text-lime-300 active:scale-97"
-                    >
-                      [dev] 바닥 다시 찾기
-                    </button>
-                  )}
-                  {walk.available && (
-                    <button
-                      type="button"
-                      onClick={walk.start}
-                      className="pointer-events-auto flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-measure px-4 text-body font-semibold text-ink transition active:scale-97"
-                    >
-                      <Footprints className="size-4" strokeWidth={2.2} aria-hidden />
-                      산책
-                    </button>
-                  )}
-                  {canReplace && (
-                    <button
-                      type="button"
-                      onClick={replaceDog}
-                      className="pointer-events-auto flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-black/55 px-4 text-body font-semibold text-white transition active:scale-97"
-                    >
-                      <RotateCcw className="size-4" strokeWidth={2.2} aria-hidden />
-                      다시 놓기
-                    </button>
-                  )}
-                </div>
-              )}
-              <CommandBar
+              <ArControls
                 hasCommands={hasCommands}
-                pose={pose}
+                talk={hasCommands && voice.supported ? voice : null}
+                talkDisabled={arLocked}
+                trayOpen={trayOpen}
+                onToggleTray={() => setTrayOpen((open) => !open)}
+                tricksDisabled={!loaded || arLocked}
+                commandsDisabled={!loaded || arLocked || gaze.turning}
                 active={activeCommand}
-                disabled={!loaded || arLocked || gaze.turning}
                 onCommand={runCommand}
                 onWag={wagReaction}
-                wagHold={wagChipHold.handlers}
-                follow={gaze.canFollow && dogReady ? { on: follow, onToggle: toggleFollow } : null}
+                wagDisabled={!loaded || arLocked || pose !== 'stand'}
+                walk={walkButton}
+                idleHint={hasCommands && !arLocked ? AR_TEXT.holdHint : undefined}
               />
             </>
-          )}
-
-          {!inAr && (
-            <button
-              type="button"
-              onClick={onBack}
-              className="pointer-events-auto flex items-center gap-3 rounded-card bg-overlay px-3 py-2.5 text-left"
-            >
-              <span className="block min-w-0 flex-1">
-                <span className="block truncate text-body font-semibold">
-                  {pet.kindName} · {SEX_LABEL[pet.sex]}
-                  {pet.weightKg !== null && <span className="font-mono"> · {formatWeight(pet.weightKg)}</span>}
-                </span>
-                <span className="mt-0.5 block truncate text-caption text-on-dark-secondary">
-                  {pet.careName}에서 기다리고 있어요
-                </span>
-              </span>
-              <span className="flex shrink-0 items-center gap-0.5 text-label font-semibold text-measure">
-                만나러 가기
-                <ChevronRight className="size-4" strokeWidth={2} aria-hidden />
-              </span>
-            </button>
           )}
 
           {!inAr &&
@@ -646,20 +644,28 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                 className={buttonStyles({ variant: 'measure', size: 'xl', fullWidth: true, className: 'pointer-events-auto' })}
               >
                 <Box className="size-5" strokeWidth={2} aria-hidden />
-                우리 집 바닥에 놓기
+                {AR_TEXT.placeOnFloor}
               </button>
             ) : (
               loaded && (
                 <p className="rounded-input bg-overlay px-3 py-2.5 text-center text-label text-on-dark-secondary">
-                  이 기기에서는 AR을 열 수 없어 화면 안 3D로 보여 드려요.
-                  {!isTouchDevice() && ' 휴대폰으로 열면 우리 집 바닥에 놓을 수 있어요.'}
+                  {AR_TEXT.noArTouch}
+                  {!isTouchDevice() && AR_TEXT.noArDesktop}
                 </p>
               )
             ))}
         </div>
 
-        <HoldRing at={dogHold.press ?? wagChipHold.press} durationMs={LONG_PRESS_MS} />
-        {import.meta.env.DEV && <ArHitDebug mvRef={mvRef} arStatus={arStatus} placement={hitDebug} />}
+        {infoOpen && (
+          <ArInfoSheet
+            pet={pet}
+            withersCm={withersCm}
+            onClose={() => setInfoOpen(false)}
+            onReplace={canReplace ? replaceDog : null}
+            onResetFloor={showFloorReset ? placement.resetFloor : null}
+          />
+        )}
+        <HoldRing at={dogHold.press} durationMs={LONG_PRESS_MS} />
       </model-viewer>
 
       {showGuide && (
@@ -675,98 +681,6 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         />
       )}
     </div>
-  )
-}
-
-/** 명령 버튼. 진도처럼 클립이 다 있는 모델만 명령을 보이고, 아니면 꼬리 흔들기 칩 하나만 */
-function CommandBar({
-  hasCommands,
-  pose,
-  active,
-  disabled,
-  onCommand,
-  onWag,
-  wagHold,
-  follow,
-}: {
-  hasCommands: boolean
-  pose: Pose
-  active: CommandId | null
-  disabled: boolean
-  onCommand: (id: CommandId) => void
-  /** 꼬리 흔들기 칩. 개 탭과 달리 갸우뚱이 있어도 늘 꼬리를 흔든다 */
-  onWag: () => void
-  /** 꼬리 흔들기 칩을 길게 누를 때 */
-  wagHold: LongPressHandlers<ReactPointerEvent>
-  /** '따라보기' 토글 (몸 돌리기가 되는 개만). 명령이 막혀도 (도는 중 등) 누를 수 있다 */
-  follow: { on: boolean; onToggle: () => void } | null
-}) {
-  return (
-    <div role="group" aria-label="유기견에게 명령하기" className="pointer-events-auto -mx-4 flex items-center gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none]">
-      {follow && (
-        <>
-          <button
-            type="button"
-            aria-pressed={follow.on}
-            onClick={follow.onToggle}
-            className={cn(
-              'flex h-11 shrink-0 items-center gap-1.5 rounded-full px-4 text-body font-semibold transition active:scale-97',
-              follow.on
-                ? 'bg-measure text-ink shadow-[inset_0_2px_5px_rgb(0_0_0/0.3)]'
-                : 'bg-black/55 text-white/75 ring-1 ring-white/25 ring-inset',
-            )}
-          >
-            <ScanEye className="size-4" strokeWidth={2.2} aria-hidden />
-            따라보기
-          </button>
-          <span aria-hidden className="h-6 w-px shrink-0 bg-white/30" />
-        </>
-      )}
-      {hasCommands &&
-        COMMANDS.map((command) => (
-          <ChipButton
-            key={command.id}
-            highlighted={active === command.id}
-            disabled={disabled}
-            onClick={() => onCommand(command.id)}
-          >
-            {command.label}
-          </ChipButton>
-        ))}
-      {/* 꼬리 흔들기는 서 있을 때만 자연스럽다. AR 에서는 3초 누르면 짖는다 */}
-      <span className="contents" {...wagHold}>
-        <ChipButton highlighted={false} disabled={disabled || pose !== 'stand'} onClick={onWag}>
-          꼬리 흔들기
-        </ChipButton>
-      </span>
-    </div>
-  )
-}
-
-function ChipButton({
-  highlighted,
-  disabled,
-  onClick,
-  children,
-}: {
-  /** 마지막으로 누른 명령. 켜고 끄는 버튼이 아니라 aria-pressed 는 쓰지 않고, 자세는 위 안내 문구(aria-live)로 읽힌다 */
-  highlighted: boolean
-  disabled: boolean
-  onClick: () => void
-  children: ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        'h-11 shrink-0 rounded-full px-4 text-body font-semibold transition active:scale-97 disabled:opacity-45',
-        highlighted ? 'bg-measure text-ink' : 'bg-black/55 text-white',
-      )}
-    >
-      {children}
-    </button>
   )
 }
 
@@ -793,7 +707,7 @@ function ArGuide({
   const steps = [
     ['밝은 곳에서 바닥을 비춰요', '유기견이 지낼 거실이나 방의 넓고 평평한 바닥이 좋아요.'],
     ['유기견이 바닥에 놓여요', '실제 크기로 고정돼서 가까이 가도 멀어져도 크기는 그대로예요.'],
-    ['유기견에게 말을 걸어 보세요', '앉아, 엎드려 같은 버튼을 누르면 움직여요. 소파 옆, 현관 앞에도 놓아 보세요.'],
+    ['유기견에게 말을 걸어 보세요', '말 걸기나 묘기를 누르면 움직여요. 소파 옆, 현관 앞에도 놓아 보세요.'],
   ] as const
 
   return (
