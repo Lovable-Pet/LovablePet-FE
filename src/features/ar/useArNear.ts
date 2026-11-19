@@ -16,10 +16,26 @@ const DEBUG_INTERVAL_MS = 200
  * 카메라가 개에 너무 가까울 때: 매 XR 프레임 카메라에서 개 몸까지 재서 안내를 바꾸고, 더 가까우면 개·그림자를 흐리거나 숨긴다.
  * host 는 useArPlacement 의 nearHost (개를 놓은 뒤에만). 다시 놓거나 AR 이 끝나면 원래대로 돌린다
  */
-export function useArNear(host: NearHost | null, { debug, tuning }: { debug: boolean; tuning?: NearTuning }): ArNear {
+export function useArNear(
+  host: NearHost | null,
+  {
+    debug,
+    tuning,
+    onLog,
+  }: {
+    debug: boolean
+    tuning?: NearTuning
+    /** 개발 기록 (?debug 이벤트 기록): 가까움 구역이 바뀔 때. 개발 모드에서만 부른다 */
+    onLog?: (text: string) => void
+  },
+): ArNear {
   const [hint, setHint] = useState(false)
   const [debugLine, setDebugLine] = useState<string | null>(null)
   const stateRef = useRef<NearState | null>(null)
+  const onLogRef = useRef(onLog)
+  useEffect(() => {
+    onLogRef.current = onLog
+  })
 
   useEffect(() => {
     if (!host) return
@@ -29,6 +45,9 @@ export function useArNear(host: NearHost | null, { debug, tuning }: { debug: boo
     const unsubscribe = host.subscribe((frame) => {
       const distance = frame.tracking ? host.rig.distance(frame.camera) : null
       const state = near.update(frame.time, distance)
+      if (import.meta.env.DEV && onLogRef.current && state.zone !== stateRef.current?.zone) {
+        onLogRef.current(`${describeNear(state, near.mode)}${state.zone === 'hidden' ? ' (숨김)' : stateRef.current?.zone === 'hidden' ? ' (나타남)' : ''}`)
+      }
       stateRef.current = state
       host.rig.setOpacity(state.opacity, near.mode)
       if (state.hint !== lastHint) {

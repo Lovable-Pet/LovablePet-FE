@@ -48,9 +48,51 @@ export interface ArGazeOptions {
   isHidden?: () => boolean
   /** 산책 밖 몸 돌리기가 시작·끝날 때 바로 (상태 갱신을 기다리지 않는다: 그동안 명령을 예약한다) */
   onTurning?: (turning: boolean) => void
+  /** 개발 기록 (?debug 이벤트 기록): 고개 상태·몸 돌리기·가까이 앉기가 바뀔 때. 개발 모드에서만 부른다 */
+  onLog?: (kind: string, text: string) => void
 }
 
 const DEBUG_INTERVAL_MS = 200
+
+interface LoggedGaze {
+  state: string | null
+  block: string | null
+  near: string | null
+  waiting: boolean
+}
+const GAZE_STATE_LABEL: Record<string, string> = {
+  look: '보는 중',
+  react: '반응 늦춤',
+  away: '딴청',
+  out: '한계 밖',
+  hold: '동작 중 (세기 0)',
+  off: '꺼짐',
+}
+
+/** 개발 기록: 고개 상태·몸 돌리기 기다림·막힘 까닭·가까움(가까이 앉기 등) 줄이 바뀌었으면 적는다 (숫자는 지워 같은 상태를 한 번만) */
+function logChanges(log: (kind: string, text: string) => void, controller: GazeController, last: LoggedGaze) {
+  const debug = controller.debug
+  if (debug.state !== last.state) {
+    last.state = debug.state
+    const out = debug.state === 'out' ? ` ${debug.outFor.toFixed(1)} s` : ''
+    log('고개', `${GAZE_STATE_LABEL[debug.state] ?? debug.state}${out}${debug.rawYaw !== null ? ` · 사용자 ${Math.round(debug.rawYaw)}°` : ''}`)
+  }
+  const waiting = debug.bodyTurnIn !== null
+  if (waiting !== last.waiting) {
+    last.waiting = waiting
+    log('몸 돌리기', waiting ? `기다림 ${debug.bodyTurnIn?.toFixed(1)} s (몸 기준 ${debug.bodyTurnAngle?.toFixed(0) ?? '?'}°)` : '기다림 끝')
+  }
+  const block = debug.bodyTurnBlock?.replace(/[\d.]+/g, '#') ?? null
+  if (block !== last.block) {
+    last.block = block
+    log('몸 돌리기', debug.bodyTurnBlock ? `막힘: ${debug.bodyTurnBlock}` : '막힘 풀림')
+  }
+  const near = debug.near?.replace(/[\d.]+/g, '#') ?? null
+  if (near !== last.near) {
+    last.near = near
+    log('가까이 앉기', debug.near ?? '없음')
+  }
+}
 
 /**
  * AR 고개 바라보기 + 몸 돌리기. host 는 useArPlacement 의 gazeHost (개를 놓은 뒤에만 있다).
@@ -85,9 +127,12 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
   // 산책 밖 몸 돌리기. 다시 놓거나 AR 이 끝나면 버린다 (도는 중이면 서기로 바로 돌려준다)
   useEffect(() => {
     if (!walkHost) return
+    let turningNow = false
     const onChange = (next: boolean) => {
       setTurning(next)
       latest.current.onTurning?.(next)
+      if (import.meta.env.DEV && turningNow && !next) latest.current.onLog?.('몸 돌리기', '끝')
+      turningNow = next
     }
     const standTurn = new StandTurn(walkHost, { turnSpeed, onChange })
     standTurnRef.current = standTurn
@@ -109,8 +154,12 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
       tuning,
       onTurn: (need, reason, clip) => {
         const walk = latest.current.readWalk()
-        if (walk.active) return walk.requestTurn(reason)
-        return standTurnRef.current?.start(need, clip as TurnPlan['clip']) ?? false
+        const started = walk.active ? walk.requestTurn(reason) : (standTurnRef.current?.start(need, clip as TurnPlan['clip']) ?? false)
+        if (import.meta.env.DEV) {
+          const deg = Math.round((need * 180) / Math.PI)
+          latest.current.onLog?.('몸 돌리기', `${started ? '시작' : '못 함'} ${clip ?? ''} (몸 기준 ${deg > 0 ? '+' : ''}${deg}°${walk.active ? ', 산책 중' : ''}) · ${reason}`)
+        }
+        return started
       },
       onPose: (pose) => latest.current.requestPose?.(pose) ?? false,
       // 다시 놓기·산책으로 새로 만들어도 지금 상태 그대로
@@ -122,6 +171,8 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
     /** ?debug 바닥 윤곽을 그렸는지 (산책 발자취 점과 같은 자리를 쓴다) */
     let outlineShown = false
     let lastOutlineAt = -Infinity
+    /** 개발 기록: 지난 프레임에 적은 값 (바뀐 때만 적는다) */
+    const logged: LoggedGaze = { state: null, block: null, near: null, waiting: false }
     const unsubscribe = host.subscribe((frame) => {
       const { readAnimator, readWalk, isHidden } = latest.current
       if (isHidden?.()) return
@@ -146,6 +197,7 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
         turnCheck,
       })
       host.rig.set(command)
+      if (import.meta.env.DEV && latest.current.onLog) logChanges(latest.current.onLog, controller, logged)
       // 같은 값이면 React 가 다시 그리지 않는다
       setStepBack(controller.stepBackHint)
       // ?debug: 몸 돌리기를 기다리는 동안 처음 고른 클립이 쓸고 지나가는 자리 윤곽 (흰 점) 과 사용자 발 (진한 점)

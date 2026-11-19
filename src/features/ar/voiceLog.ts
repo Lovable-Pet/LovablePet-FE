@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { COMMANDS } from './dogAnimator'
+import { logArEvent } from './devlog/eventLog'
 import { jamoDistances, normalizeVoice, type VoiceMatch } from './voiceWords'
 
 // 개발 모드 음성 인식 기록. 최근 VOICE_LOG_SIZE 번을 메모리에만 모아 ?debug 의 '음성 기록' 에서 보고 복사한다.
@@ -27,6 +28,8 @@ const notify = () => listeners.forEach((listener) => listener())
 export function addVoiceLog(entry: VoiceLogEntry) {
   entries = [entry, ...entries].slice(0, VOICE_LOG_SIZE)
   notify()
+  // 이벤트 기록(?debug)에도 같은 한 줄 (시각은 이벤트 기록 쪽 초를 쓴다)
+  logArEvent('음성', formatVoiceLogEntry(entry).slice(9))
 }
 
 export function clearVoiceLog() {

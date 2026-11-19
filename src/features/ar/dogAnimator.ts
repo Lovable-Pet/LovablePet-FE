@@ -82,6 +82,16 @@ export type RequestResult = 'started' | 'reserved' | 'unreserved' | 'running' | 
 /** 탭·음성 실패 결과. clip 반응 클립 · tilt 절차적 갸우뚱을 할 차례 · lowerPaw 손을 내림 · bubble 말풍선만 */
 export type TapResult = 'clip' | 'tilt' | 'lowerPaw' | 'bubble'
 
+/**
+ * 개발 기록(?debug 이벤트 기록)에 넘기는 일. end 클립 끝 (quiet: 빈 끝에서 끊음) · cut 끊고 다른 것으로 · reserve 예약 ·
+ * unreserve 예약 취소 · runReserved 예약 실행 · release 손 줘를 스스로 내림
+ */
+export type AnimatorLog =
+  | { type: 'end'; clip: string; quiet: boolean }
+  | { type: 'cut'; clip: string; by: string }
+  | { type: 'reserve' | 'unreserve' | 'runReserved'; id: string }
+  | { type: 'release'; clip: string }
+
 /** 클립의 빈 끝: end (s) 부터 첫 프레임 자세와 거의 같다 (../modelViewerArStage.ts clipQuietEnds) */
 export interface ClipEnd {
   end: number
@@ -152,6 +162,7 @@ export class DogAnimator {
   /** 마지막으로 알린 resting (처음은 루프만 도는 쉬는 상태) */
   private wasResting = true
   private readonly onResting?: (resting: boolean) => void
+  private readonly onLog?: (event: AnimatorLog) => void
   private disposed = false
   readonly hasCommands: boolean
   /** 개를 탭하면 갸우뚱하는지 (안내 문구용) */
@@ -178,6 +189,8 @@ export class DogAnimator {
        * busy 와 달리 손 줘를 들고 있는 동안도 쉬지 않는 것으로 본다 (발도장 다음 안내·마무리 축하)
        */
       onResting?: (resting: boolean) => void
+      /** 개발 기록용 (부르는 쪽이 개발 모드 ?debug 에서만 준다) */
+      onLog?: (event: AnimatorLog) => void
       /** 자세 층이 클립 사이를 섞으면 true (model-viewer 크로스페이드를 끈다) */
       poseBlend?: boolean
       /** 클립의 빈 끝 (거기서 끊고 다음으로). 없으면 끝까지 */
@@ -192,6 +205,7 @@ export class DogAnimator {
     this.onReact = options.onReact
     this.onReserve = options.onReserve
     this.onResting = options.onResting
+    this.onLog = options.onLog
     this.clipEnds = options.clipEnds ?? {}
     const clips = new Set(mv.availableAnimations)
     this.hasCommands = COMMAND_CLIPS.every((clip) => clips.has(clip))
@@ -403,6 +417,7 @@ export class DogAnimator {
   /** 하던 것을 버리고 (끊을 수 있는 클립은 그 자리에서) job 을 시작한다 */
   private begin(job: Job) {
     const old = this.job
+    if (this.playing) this.onLog?.({ type: 'cut', clip: this.playing.clip, by: job.id })
     clearTimeout(this.playing?.timer)
     this.playing = null
     this.job = job
@@ -446,7 +461,7 @@ export class DogAnimator {
     void this.start(clip, { times, reset: true })
     const end = this.clipEnds[clip]
     if (end && end.end < end.duration) {
-      playing.timer = setTimeout(() => this.clipDone(token), (((times - 1) * end.duration + end.end) / this.rate) * 1000)
+      playing.timer = setTimeout(() => this.clipDone(token, true), (((times - 1) * end.duration + end.end) / this.rate) * 1000)
     }
   }
 
@@ -459,6 +474,7 @@ export class DogAnimator {
     playing.timer = setTimeout(() => {
       if (this.playing?.token !== token || this.disposed) return
       this.playing = null
+      this.onLog?.({ type: 'release', clip })
       void this.start(this.loopOf(this.pose), { reset: true })
       this.syncBusy()
     }, SHAKE_HOLD_S * 1000)
@@ -468,9 +484,10 @@ export class DogAnimator {
     job?.settle?.(true)
   }
 
-  private clipDone(token: number) {
+  private clipDone(token: number, quiet = false) {
     const playing = this.playing
     if (!playing || playing.token !== token || this.disposed) return
+    this.onLog?.({ type: 'end', clip: playing.clip, quiet })
     clearTimeout(playing.timer)
     this.playing = null
     this.lastClip = playing.clip
@@ -509,6 +526,8 @@ export class DogAnimator {
     const old = this.reserved
     this.reserved = job
     if (old && old !== job && settleOld) old.settle?.(false)
+    if (job) this.onLog?.({ type: 'reserve', id: job.id })
+    else if (old) this.onLog?.({ type: settleOld ? 'unreserve' : 'runReserved', id: old.id })
     this.onReserve?.(job && isReserveId(job.id) ? job.id : null)
     this.syncBusy()
   }

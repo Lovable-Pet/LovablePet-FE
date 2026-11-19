@@ -2,7 +2,7 @@ import '@google/model-viewer'
 import type { ModelViewerElement } from '@google/model-viewer'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { Box, Camera, ChevronLeft, ChevronRight, Footprints, Mic, Smartphone } from 'lucide-react'
-import { Link, useParams, useSearchParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { ApiError } from '../apis/apiError'
 import type { PetDetail, PetModelView } from '../apis/dto/pet.dto'
 import { resolveModelUrl } from '../apis/pet'
@@ -61,6 +61,11 @@ import {
 import { useVoiceCommand } from '../features/ar/useVoiceCommand'
 import { STANDING_CLIP, WALK_CLIPS } from '../features/ar/walk/walkSpec'
 import { attachPoseLayers, clipQuietEnds, type PoseLayersHandle } from '../features/ar/modelViewerArStage'
+import { ArEventLog } from '../features/ar/devlog/ArEventLog'
+import { describeAnimatorLog, describeUser, logArEvent, setArEventLogEnabled } from '../features/ar/devlog/eventLog'
+import { SimOverlay } from '../features/ar/sim/SimOverlay'
+import { SIM_EYE_DEFAULT_M, SIM_EYE_MAX_M, SIM_EYE_MIN_M } from '../features/ar/sim/simUser'
+import { useArSim, type ArSim, type ArSimOptions } from '../features/ar/sim/useArSim'
 import { HEAD_TILT_S } from '../features/ar/headTilt'
 import { useArPlacement, type ArOcclusionOptions, type ArPlacement } from '../features/ar/useArPlacement'
 import { useArWalk, type ArWalk } from '../features/ar/useArWalk'
@@ -98,6 +103,11 @@ import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 // 아무 일도 안 일어나는 입력은 없다: 앉은 개 톡은 절차적 갸우뚱, 끊지 않는 동작 중 톡은 '?' 말풍선, 같은 자세 명령은 '이미 앉아 있어요'
 //
 // 크기: GLB 가 이미 미터 단위 실제 크기라 ar-scale="fixed" 로 손가락 확대·축소를 막는다
+//
+// 개발 모드만 (배포 빌드에는 들어가지 않는다)
+// - ?sim=1: PC 시뮬레이션. 화면 안 3D 에서 개를 바닥 원점에 놓고 키보드·마우스 가상 사용자를 AR 카메라 대신 산책·고개·몸 돌리기·
+//   가까이 앉기·가까움에 넘긴다 (../features/ar/sim, 판단 코드는 그대로)
+// - ?debug: 이벤트 기록 (클립·자세·고개·몸 돌리기·산책·안내·말풍선·발도장·음성·사용자 거리, ../features/ar/devlog)
 
 type ArStatus = 'not-presenting' | 'session-started' | 'object-placed' | 'failed'
 
@@ -121,6 +131,22 @@ const accepted = (result: RequestResult) => result === 'started' || result === '
 const FOLLOW_NOTICE_MS = 3000
 /** 발도장이 찍힐 때 진동 (ms) */
 const PAW_VIBRATE_MS = 30
+
+/** 시뮬레이션이 없을 때 (배포 빌드·?sim 없음) */
+const NO_SIM: ArSim = {
+  active: false,
+  walkHost: null,
+  gazeHost: null,
+  nearHost: null,
+  view: 'first',
+  help: false,
+  eye: 0,
+  lower: false,
+  setCanvas: () => {},
+}
+const useNoSim = (_mvRef: unknown, _options: ArSimOptions): ArSim => NO_SIM
+/** 개발용 PC 시뮬레이션 (?sim=1). 배포 빌드에서는 useNoSim 만 남고 ../features/ar/sim 은 빠진다 */
+const useSim = import.meta.env.DEV ? useArSim : useNoSim
 
 /** 처음 인사 (꼬리 흔들기 한 번). heart 가 false 면 그 꼬리의 하트 말풍선만 뺀다 (onClipStart 가 greet() 안에서 바로 온다) */
 function greetDog(animator: DogAnimator | null, muteHeart: { current: boolean }, heart: boolean) {
@@ -243,8 +269,19 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const animatorRef = useRef<DogAnimator | null>(null)
   const pointerStart = useRef<{ x: number; y: number } | null>(null)
   const [searchParams] = useSearchParams()
+  /**
+   * 개발용 PC 시뮬레이션 (화면 안 3D 에서만): ?sim=1 이면 안내 화면 없이 개를 바닥 원점에 놓고 가상 사용자(키보드·마우스)를 AR 카메라 대신
+   * 산책·고개 바라보기·몸 돌리기·가까이 앉기·가까움에 넘긴다. ?simeye=1.0 은 폰(눈) 높이 (m). 배포 빌드에는 들어가지 않는다
+   */
+  const simWanted = import.meta.env.DEV && searchParams.get('sim') === '1'
+  const simEye = useMemo(() => {
+    if (!import.meta.env.DEV) return SIM_EYE_DEFAULT_M
+    const raw = Number(searchParams.get('simeye'))
+    return raw >= SIM_EYE_MIN_M && raw <= SIM_EYE_MAX_M ? raw : SIM_EYE_DEFAULT_M
+  }, [searchParams])
+  const navigate = useNavigate()
 
-  const [showGuide, setShowGuide] = useState(true)
+  const [showGuide, setShowGuide] = useState(!simWanted)
   const [progress, setProgress] = useState(0)
   const [loaded, setLoaded] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -283,6 +320,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     setPawsDone(next)
     setPawNextReady(false)
     navigator.vibrate?.(PAW_VIBRATE_MS)
+    if (import.meta.env.DEV) logArEvent('발도장', `${pawOf(event)} 찍힘`)
   }, [])
   /** 애니메이터가 쉬는 상태 (DogAnimator.onResting: 루프만, 명령·반응·손 줘 들기·예약·몸 돌리기 없음) */
   const [animResting, setAnimResting] = useState(true)
@@ -354,8 +392,19 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     setFollowNotice({ on: next, at: Date.now() })
   }
   const placement = useArPlacement(mvRef, { debug, occlusion, gazeEnabled: gazeOptions.enabled })
-  /** AR 에서 개가 바닥에 놓였는지 */
-  const dogReady = inAr && placement.phase === 'placed'
+  // 개발용 PC 시뮬레이션 (?sim=1): 숫자 키 1~6 은 목업 201~206 (주소만 바꿔 이 화면을 다시 연다)
+  const sim = useSim(mvRef, {
+    enabled: simWanted && loaded && !inAr,
+    eye: simEye,
+    gazeEnabled: gazeOptions.enabled,
+    onSwitchDog: (index) => void navigate(`/pets/${200 + index}/ar?${searchParams.toString()}`),
+  })
+  /** 산책·고개 바라보기·가까움에 넘길 것: 시뮬레이션이면 가상 사용자, 아니면 AR 배치 */
+  const hosts = sim.active ? sim : placement
+  /** AR 에서 개가 바닥에 놓였는지 (시뮬레이션은 처음부터 놓여 있다) */
+  const dogReady = (inAr && placement.phase === 'placed') || sim.active
+  /** 산책 발자취·몸 돌리기 쓸고 지나가는 자리를 받을지 (?debug 상자, 시뮬레이션은 화면에 늘 그린다) */
+  const pathMarks = debug || sim.active
   /** AR 에서 개를 놓기 전: 명령 칩·음성·개 탭·3초 누르기를 막는다 */
   const arLocked = inAr && !dogReady
   const canReplace = dogReady && placement.manual
@@ -370,35 +419,42 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
    * 개발 모드에서 ?nearhint=0.35 안내 거리 (m), ?nearfadeat=0.2 흐리기 시작 거리 (m), ?nearfade=fade|hide 방식
    */
   const nearTuning = useMemo(() => (import.meta.env.DEV ? readNearTuning(searchParams) : undefined), [searchParams])
-  const near = useArNear(placement.nearHost, { debug, tuning: nearTuning })
+  const near = useArNear(hosts.nearHost, {
+    debug,
+    tuning: nearTuning,
+    onLog: import.meta.env.DEV ? (text) => logArEvent('가까움', text) : undefined,
+  })
   /** 고개 바라보기가 매 프레임 읽는 산책 상태 (산책 훅이 고개 훅보다 뒤라 ref 로 넘긴다) */
   const walkStateRef = useRef<{ active: boolean; standing: boolean; requestTurn: (reason: string) => boolean }>({
     active: false,
     standing: false,
     requestTurn: () => false,
   })
-  const gaze = useArGaze(placement.gazeHost, {
+  const gaze = useArGaze(hosts.gazeHost, {
     enabled: gazeOptions.enabled,
     offReason: '?gaze=0',
-    debug,
+    debug: pathMarks,
     template: model.template,
     tuning: gazeOptions.tuning,
     turnSpeed: walkTuning?.turnSpeed,
     readAnimator: () => animatorRef.current?.state ?? { pose: 'stand', busy: false },
     readWalk: () => walkStateRef.current,
-    walkHost: placement.walkHost,
+    walkHost: hosts.walkHost,
     // 가까이 앉기 (기본 켬, ?closesit=0 끔): 가까이 붙으면 스스로 앉고, 물러나면 일어난다 (명령 칩 표시는 바꾸지 않는다)
     requestPose: (next) => {
       const animator = animatorRef.current
       if (!animator?.hasCommands || walkStateRef.current.active) return false
-      return animator.command(next) === 'started'
+      const result = animator.command(next)
+      if (import.meta.env.DEV) logArEvent('가까이 앉기', `${next === 'sit' ? '앉기' : '일어나기'} 요청 → ${result}`)
+      return result === 'started'
     },
     isHidden: near.isHidden,
     follow,
     // 몸 돌리는 동안 명령·산책은 예약하고 끝나면 한다
     onTurning: (turning) => animatorRef.current?.setBlocked(turning),
+    onLog: import.meta.env.DEV ? logArEvent : undefined,
   })
-  const walk = useArWalk(placement.walkHost, { debug, tuning: walkTuning })
+  const walk = useArWalk(hosts.walkHost, { debug: pathMarks, tuning: walkTuning })
   /** 산책 출발 (애니메이터가 서기 루프로 돌려 둔 뒤 부른다) */
   const walkStartRef = useRef(walk.start)
   useEffect(() => {
@@ -414,21 +470,53 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     (kind: ReactionKind) => {
       if (walking) return
       setReaction((previous) => ({ kind, id: (previous?.id ?? 0) + 1 }))
+      if (import.meta.env.DEV) logArEvent('말풍선', kind)
     },
     [walking],
   )
   useEffect(() => {
     clipStartRef.current = (clip) => {
+      if (import.meta.env.DEV) logArEvent('클립', `${clip} 시작`)
       if (muteHeartRef.current) return
       const kind = REACTION_BY_CLIP[clip]
       if (kind) showReaction(kind)
     }
   })
-  /** ?debug 상자: 산책 중이면 산책 줄을 위에, 맨 위에 고개 한 줄 */
-  const gazeLines = [near.debugLine, gaze.debugLine].filter((line): line is string => !!line)
-  const hitDebug = walk.debug
-    ? { summary: walk.debug.summary, lines: [...gazeLines, ...walk.debug.lines, ...(placement.debug?.lines ?? [])] }
-    : placement.debug && { ...placement.debug, lines: [...gazeLines, ...placement.debug.lines] }
+  /** ?debug 상자: 산책 중이면 산책 줄을 위에, 맨 위에 고개 한 줄. 시뮬레이션은 ?debug 일 때 고개·가까움 줄만이라도 */
+  const gazeLines = debug ? [near.debugLine, gaze.debugLine].filter((line): line is string => !!line) : []
+  const walkDebug = debug ? walk.debug : null
+  const hitDebug = walkDebug
+    ? { summary: walkDebug.summary, lines: [...gazeLines, ...walkDebug.lines, ...(placement.debug?.lines ?? [])] }
+    : placement.debug
+      ? { ...placement.debug, lines: [...gazeLines, ...placement.debug.lines] }
+      : sim.active && gazeLines.length
+        ? { summary: '시뮬레이션', lines: gazeLines }
+        : null
+
+  // 개발 모드 ?debug 이벤트 기록 (AR·시뮬레이션 모두)
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    setArEventLogEnabled(debug)
+    return () => setArEventLogEnabled(false)
+  }, [debug])
+  useEffect(() => {
+    if (import.meta.env.DEV) logArEvent('산책', walk.phase ?? '끝 (산책 아님)')
+  }, [walk.phase])
+  useEffect(() => {
+    if (import.meta.env.DEV && walk.notice) logArEvent('산책', `알림 ${walk.notice}`)
+  }, [walk.notice])
+  // 사용자 거리·방향 1초마다 (가까움 host 의 프레임, 개 자리는 산책 host)
+  const userLogHost = import.meta.env.DEV && debug ? hosts.nearHost : null
+  const userLogDog = hosts.walkHost
+  useEffect(() => {
+    if (!import.meta.env.DEV || !userLogHost) return
+    let last = -Infinity
+    return userLogHost.subscribe((frame) => {
+      if (frame.time - last < 1000) return
+      last = frame.time
+      logArEvent('사용자', describeUser(frame.camera, userLogDog?.dogPose() ?? null))
+    })
+  }, [userLogHost, userLogDog])
 
   useEffect(() => {
     const mv = mvRef.current
@@ -460,7 +548,11 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
       const animator = new DogAnimator(mv, {
         tapAnimation: behaviorRef.current.tapAnimation,
         playbackRate: behaviorRef.current.playbackRate,
-        onPose: setPose,
+        onPose: (next) => {
+          setPose(next)
+          if (import.meta.env.DEV) logArEvent('자세', POSE_LABEL[next])
+        },
+        onLog: import.meta.env.DEV ? (event) => logArEvent('동작', describeAnimatorLog(event)) : undefined,
         onClipStart: (clip) => clipStartRef.current(clip),
         onReact: (source) => onReactRef.current(source),
         onReserve: setReserved,
@@ -684,7 +776,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
    * '산책' 버튼: AR 에서 걷기 클립이 있는 개만 (화면 안 3D·아이폰은 산책이 없다).
    * 놓기 전에는 자리만 잡아 두고(눌리지 않음), 놓은 뒤에는 늘 눌린다
    */
-  const hasWalkButton = inAr && hasWalkClips && (placement.walkHost !== null || !dogReady)
+  const hasWalkButton = (inAr || sim.active) && hasWalkClips && (hosts.walkHost !== null || !dogReady)
   const walkButton = hasWalkButton ? { onStart: startWalk, disabled: !walk.available } : null
 
   // 발도장: 이 개·이 화면에서 할 수 있는 것만 보이고, 남은 것 중 첫 번째를 권한다
@@ -758,6 +850,9 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           ? POSE_HINT.tapHeadTilt
           : POSE_HINT.tapWag,
   })
+  useEffect(() => {
+    if (import.meta.env.DEV) logArEvent('안내', hint)
+  }, [hint])
 
   if (loadFailed) {
     return (
@@ -788,7 +883,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         ar-modes={model.usdzUrl ? 'webxr scene-viewer quick-look' : 'webxr scene-viewer'}
         ar-scale="fixed"
         ar-placement="floor"
-        camera-controls
+        // 시뮬레이션은 카메라를 가상 사용자 자리에 두고 드래그로 방향을 돌린다
+        camera-controls={!simWanted}
         camera-orbit="35deg 78deg auto"
         // 화면이 스크롤되지 않는 전체 화면이라 세로 드래그도 카메라 기울이기에 쓴다
         touch-action="none"
@@ -810,6 +906,9 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
 
         {/* 아래는 WebXR 화면에도 그대로 겹쳐 보인다 (model-viewer 의 DOM overlay) */}
         {/* AR: 놓기 전 탭은 바닥 원 자리에 놓기, 놓은 뒤에는 개 탭. 이동·회전 터치는 막는다. 오버레이보다 앞에 둬야 칩·버튼이 위에 온다 */}
+        {import.meta.env.DEV && sim.active && (
+          <SimOverlay setCanvas={sim.setCanvas} help={sim.help} eye={sim.eye} lower={sim.lower} view={sim.view} />
+        )}
         <ArFloorHint active={inAr && placement.phase === 'searching' && !placement.floorKnown} />
         <ArTouchLayer
           active={inAr}
@@ -858,6 +957,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         <div
           ref={bottomOverlayRef}
           className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col gap-3 px-4 pb-[calc(20px+env(safe-area-inset-bottom))]">
+          {import.meta.env.DEV && debug && <ArEventLog />}
           {walking ? (
             // 산책 중: 아래 버튼 대신 '산책 끝' 하나 (걷는 중이면 다음 걸음 끝에서 멈춘 뒤 끝난다)
             <button
@@ -893,6 +993,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           )}
 
           {!inAr &&
+            !sim.active &&
             (canAr ? (
               <button
                 type="button"

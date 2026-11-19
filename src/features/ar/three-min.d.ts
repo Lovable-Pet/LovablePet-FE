@@ -18,9 +18,13 @@ declare module 'three' {
   }
 
   export class Vector3 {
+    constructor(x?: number, y?: number, z?: number)
     x: number
     y: number
     z: number
+    set(x: number, y: number, z: number): this
+    /** 카메라로 정규 장치 좌표(−1~1)에 투영 (개발용 시뮬레이션 겹친 그림) */
+    project(camera: Camera): this
     setFromMatrixPosition(matrix: Matrix4): this
     setFromMatrixColumn(matrix: Matrix4, index: number): this
     applyMatrix4(matrix: Matrix4): this
@@ -65,6 +69,29 @@ declare module 'three' {
   }
 
   export class Group extends Object3D {}
+
+  // 개발용 PC 시뮬레이션 (?sim=1): 화면 카메라를 가상 사용자 자리로, 바닥 격자
+  export class Camera extends Object3D {
+    readonly matrixWorldInverse: Matrix4
+    readonly projectionMatrix: Matrix4
+    readonly up: { set(x: number, y: number, z: number): unknown }
+    lookAt(x: number, y: number, z: number): void
+  }
+
+  export class PerspectiveCamera extends Camera {
+    constructor(fov?: number, aspect?: number, near?: number, far?: number)
+    readonly isPerspectiveCamera: true
+    fov: number
+    aspect: number
+    near: number
+    far: number
+    updateProjectionMatrix(): void
+  }
+
+  export class GridHelper extends Object3D {
+    constructor(size?: number, divisions?: number, color1?: number, color2?: number)
+    dispose(): void
+  }
 
   export class BufferAttribute {
     constructor(array: Float32Array, itemSize: number)

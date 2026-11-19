@@ -8,6 +8,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   RingGeometry,
+  type PerspectiveCamera,
   Vector3,
   type AnimationClip,
   type BufferGeometry,
@@ -458,7 +459,8 @@ export class ModelViewerArStage implements ArStage {
   } | null = null
   private disposed = false
 
-  private constructor(
+  /** attach (AR) 나 개발용 attachSceneStage (화면 안 3D 시뮬레이션) 로 만든다 */
+  constructor(
     mv: ModelViewerElement,
     scene: ModelSceneLike,
     ar: ArRendererLike,
@@ -1282,6 +1284,97 @@ class ModelViewerWalkRig implements WalkRig {
     }
     mixer.update(0)
     this.scene.queueShadowRender()
+  }
+}
+
+// ── 개발용 PC 시뮬레이션 (?sim=1, ./sim): 화면 안 3D 에서 XR 세션 없이 같은 스테이지 ──
+
+/** 시뮬레이션이 장면에 바라는 것 (그리기 직전 카메라를 가상 사용자 자리로, 바닥 격자를 넣고 빼기) */
+export interface SceneStageHandle {
+  /** 산책·고개·가까움 리그를 만들고 placeDog 로 개를 놓는 스테이지. start·createProbes 는 부르지 않는다 (프레임은 시뮬레이션이 만든다) */
+  stage: ModelViewerArStage
+  /** 화면 카메라 (three PerspectiveCamera). 그리기 직전에 바꾼다 */
+  camera: PerspectiveCamera
+  /** 그리기 직전 (자세 층·바라보기 뒤) 부를 함수. 돌려준 함수로 뺀다 */
+  beforeDraw(fn: () => void): () => void
+  /** 다음 프레임도 그리게 한다 (화면 안 3D 는 바뀐 프레임만 그린다) */
+  queueRender(): void
+  add(object: Object3D): void
+  remove(object: Object3D): void
+  /** 원래대로 (그리기 훅·카메라 목표) */
+  dispose(): void
+}
+
+const isCamera = (value: unknown): value is PerspectiveCamera =>
+  isRecord(value) && (value as { isPerspectiveCamera?: boolean }).isPerspectiveCamera === true
+
+/**
+ * 개발용 PC 시뮬레이션 (?sim=1, 화면 안 3D) 이 쓰는 스테이지. ARRenderer 처럼 모델 바닥 가운데를 pivot 에 맞추고 (setTarget),
+ * goalPosition·goalYaw 를 받는 가짜 ARRenderer 와 빈 세션으로 ModelViewerArStage 를 만든다 (산책·고개·가까움 리그와 placeDog 는 그대로).
+ * 배포 빌드에서는 부르는 곳(./sim)이 없어 빠진다. 내부 모양이 다르면 null
+ */
+export function attachSceneStage(mv: ModelViewerElement): SceneStageHandle | null {
+  const scene = readSymbol(mv, 'scene')
+  if (!isModelScene(scene)) return null
+  const raw = scene as unknown as Record<string, unknown>
+  const camera = raw.camera
+  if (!isCamera(camera) || typeof raw.setTarget !== 'function' || typeof scene.renderShadow !== 'function' || typeof scene.queueRender !== 'function') return null
+  const target = (scene as unknown as { getTarget(): Vector3 }).getTarget?.()
+  const { min, max } = scene.boundingBox
+  ;(scene as unknown as { setTarget(x: number, y: number, z: number): void }).setTarget((min.x + max.x) / 2, min.y, (min.z + max.z) / 2)
+  scene.jumpToGoal()
+  const ar: ArRendererLike = {
+    currentSession: null,
+    presentedScene: scene,
+    goalPosition: new Vector3(),
+    goalYaw: 0,
+    placementComplete: true,
+    placementBox: null,
+    initialHitSource: null,
+    dispatchEvent: () => {},
+  }
+  const session = {
+    requestReferenceSpace: () => Promise.reject(new Error('시뮬레이션')),
+    requestAnimationFrame: () => 0,
+    cancelAnimationFrame: () => {},
+  } as unknown as XrSession
+  const stage = new ModelViewerArStage(mv, scene, ar, session, {} as XrSpace)
+  const hooks = new Set<() => void>()
+  const inner = Object.prototype.hasOwnProperty.call(scene, 'renderShadow') ? scene.renderShadow : null
+  const draw = scene.renderShadow.bind(scene)
+  scene.renderShadow = (renderer: unknown) => {
+    draw(renderer)
+    for (const hook of hooks) hook()
+  }
+  const added = new Set<Object3D>()
+  return {
+    stage,
+    camera,
+    beforeDraw: (fn) => {
+      hooks.add(fn)
+      return () => hooks.delete(fn)
+    },
+    queueRender: () => scene.queueRender?.(),
+    add: (object) => {
+      added.add(object)
+      scene.add(object)
+    },
+    remove: (object) => {
+      added.delete(object)
+      object.removeFromParent()
+    },
+    dispose: () => {
+      hooks.clear()
+      for (const object of added) object.removeFromParent()
+      added.clear()
+      stage.dispose()
+      if (inner) scene.renderShadow = inner
+      else delete (scene as { renderShadow?: unknown }).renderShadow
+      if (target) (scene as unknown as { setTarget(x: number, y: number, z: number): void }).setTarget(target.x, target.y, target.z)
+      scene.pivot.position.set(0, 0, 0)
+      setPivotYaw(scene.pivot, 0)
+      scene.queueRender?.()
+    },
   }
 }
 
