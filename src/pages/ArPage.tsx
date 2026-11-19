@@ -1,7 +1,7 @@
 import '@google/model-viewer'
 import type { ModelViewerElement } from '@google/model-viewer'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { AlertCircle, Box, Camera, ChevronLeft, ChevronRight, Footprints, RotateCcw, Ruler, Smartphone, X } from 'lucide-react'
+import { AlertCircle, Box, Camera, ChevronLeft, ChevronRight, Footprints, RotateCcw, Ruler, ScanEye, Smartphone, X } from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { ApiError } from '../apis/apiError'
 import type { PetDetail, PetModelView } from '../apis/dto/pet.dto'
@@ -54,6 +54,9 @@ const TAP_SLOP_PX = 8
 
 /** 배치 전 빨강(놓을 수 없음)이 이만큼(ms) 넘게 이어지면 다시 열어 보라는 줄을 더한다 */
 const STUCK_HINT_MS = 10_000
+/** '따라보기' 토글을 누른 뒤 위 안내 문구를 보이는 시간 (ms) */
+const FOLLOW_NOTICE_MS = 3000
+const FOLLOW_NOTICE = { on: '몸을 돌려 따라봐요', off: '가만히 있어요 · 한 바퀴 둘러보세요' } as const
 
 /** active 가 STUCK_HINT_MS 넘게 이어졌는지 (중간에 풀리면 처음부터) */
 function useLongActive(active: boolean) {
@@ -194,9 +197,26 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
    * ?bodyturn=1.5 몸 돌리기 기다리는 기준 초 (뒤쪽은 그 0.4 배, 0 끔), ?gazejaw·?gazejawup 턱, ?closesit=1 가까이 앉기. 배포 빌드는 GAZE_IN_PRODUCTION (지금 끔)이고 옵션은 들어가지 않는다
    */
   const gazeOptions = useMemo(
-    () => (import.meta.env.DEV ? readGazeOptions(searchParams) : { enabled: GAZE_IN_PRODUCTION, tuning: undefined }),
+    () => (import.meta.env.DEV ? readGazeOptions(searchParams) : { enabled: GAZE_IN_PRODUCTION, tuning: undefined, follow: true }),
     [searchParams],
   )
+  /**
+   * 몸 돌려 따라보기 (기본 켜짐, 개발 모드 ?follow=0 이면 꺼짐으로 시작). 끄면 개가 가만히 있어 옆·뒷모습을 둘러볼 수 있다.
+   * 산책·다시 놓기에도 그대로 둔다
+   */
+  const [follow, setFollow] = useState(gazeOptions.follow)
+  /** 토글을 누른 직후 3초 동안 위 안내 문구 */
+  const [followNotice, setFollowNotice] = useState<{ on: boolean; at: number } | null>(null)
+  useEffect(() => {
+    if (!followNotice) return
+    const timer = window.setTimeout(() => setFollowNotice(null), FOLLOW_NOTICE_MS)
+    return () => window.clearTimeout(timer)
+  }, [followNotice])
+  const toggleFollow = () => {
+    const next = !follow
+    setFollow(next)
+    setFollowNotice({ on: next, at: Date.now() })
+  }
   const placement = useArPlacement(mvRef, { debug, occlusion, gazeEnabled: gazeOptions.enabled })
   /** AR 에서 개가 바닥에 놓였는지 */
   const dogReady = inAr && placement.phase === 'placed'
@@ -239,6 +259,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
       return true
     },
     isHidden: near.isHidden,
+    follow,
   })
   const walk = useArWalk(placement.walkHost, {
     canStart: dogReady && pose === 'stand' && !animBusy && !gaze.turning,
@@ -485,6 +506,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                 ? NEAR_HINT_TEXT
                 : walking
                 ? walkHint(walk)
+                : followNotice
+                ? FOLLOW_NOTICE[followNotice.on ? 'on' : 'off']
                 : hasCommands
                 ? `${POSE_LABEL[pose]} · 명령을 눌러 보세요`
                 : inAr
@@ -580,6 +603,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                 onCommand={runCommand}
                 onWag={wagReaction}
                 wagHold={wagChipHold.handlers}
+                follow={gaze.canFollow && dogReady ? { on: follow, onToggle: toggleFollow } : null}
               />
             </>
           )}
@@ -655,6 +679,7 @@ function CommandBar({
   onCommand,
   onWag,
   wagHold,
+  follow,
 }: {
   hasCommands: boolean
   pose: Pose
@@ -665,9 +690,30 @@ function CommandBar({
   onWag: () => void
   /** 꼬리 흔들기 칩을 길게 누를 때 */
   wagHold: LongPressHandlers<ReactPointerEvent>
+  /** '따라보기' 토글 (몸 돌리기가 되는 개만). 명령이 막혀도 (도는 중 등) 누를 수 있다 */
+  follow: { on: boolean; onToggle: () => void } | null
 }) {
   return (
-    <div role="group" aria-label="유기견에게 명령하기" className="pointer-events-auto -mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none]">
+    <div role="group" aria-label="유기견에게 명령하기" className="pointer-events-auto -mx-4 flex items-center gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none]">
+      {follow && (
+        <>
+          <button
+            type="button"
+            aria-pressed={follow.on}
+            onClick={follow.onToggle}
+            className={cn(
+              'flex h-11 shrink-0 items-center gap-1.5 rounded-full px-4 text-body font-semibold transition active:scale-97',
+              follow.on
+                ? 'bg-measure text-ink shadow-[inset_0_2px_5px_rgb(0_0_0/0.3)]'
+                : 'bg-black/55 text-white/75 ring-1 ring-white/25 ring-inset',
+            )}
+          >
+            <ScanEye className="size-4" strokeWidth={2.2} aria-hidden />
+            따라보기
+          </button>
+          <span aria-hidden className="h-6 w-px shrink-0 bg-white/30" />
+        </>
+      )}
       {hasCommands &&
         COMMANDS.map((command) => (
           <ChipButton
@@ -889,12 +935,13 @@ function readWalkTuning(params: URLSearchParams): WalkTuning {
  * 개발용 고개 바라보기: ?gaze=0 끔 (기본 켬) · ?gazemax (좌우 한계 °, 10–120) · ?gazeup (위 한계 °, 0–80) ·
  * ?gazeon·?gazeoff (바라보기·딴청 평균 초, 0.5–30) · ?bodyturn (몸 돌리기 기다리는 기준 초: 한계를 막 넘었을 때, 뒤쪽 120° 는 그 0.4 배, 0 이면 끔, 0–30) ·
  * ?gazejaw (위로 들었을 때 턱 남기는 비율, 0–1) · ?gazejawup (그 비율까지 줄이는 위 각 °, 1–80) ·
- * ?closesit=1 (가까이 붙으면 스스로 앉아 올려다봄, 기본 끔). 없거나 숫자가 아니면 기본값
+ * ?closesit=1 (가까이 붙으면 스스로 앉아 올려다봄, 기본 끔) · ?follow=0 ('따라보기' 꺼짐으로 시작). 없거나 숫자가 아니면 기본값
  */
-function readGazeOptions(params: URLSearchParams): { enabled: boolean; tuning: GazeTuning } {
+function readGazeOptions(params: URLSearchParams): { enabled: boolean; tuning: GazeTuning; follow: boolean } {
   const read = numberParam(params)
   return {
     enabled: params.get('gaze') !== '0',
+    follow: params.get('follow') !== '0',
     tuning: {
       yawDeg: read('gazemax', 120, 10),
       upDeg: read('gazeup', 80),

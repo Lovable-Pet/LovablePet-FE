@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { describeGaze, GazeController, type GazePose } from './gaze/gazeController'
 import type { GazeTuning } from './gaze/gazeSpec'
 import type { GazeHost } from './gaze/gazeStage'
 import { StandTurn, type TurnPlan } from './walk/standTurn'
+import { walkSpec } from './walk/walkSpec'
 import type { WalkHost } from './walk/walkStage'
 
 export interface ArGaze {
@@ -16,6 +17,8 @@ export interface ArGaze {
   isTurning: () => boolean
   /** 사용자가 명령을 내림 ('스스로 앉음' 지우기) */
   userCommand: () => void
+  /** 몸 돌려 따라보기를 할 수 있는 개인지 (바라보기 켜짐 + 제자리 회전 클립 + 몸 돌리기 켜짐): '따라보기' 토글을 보일지 */
+  canFollow: boolean
 }
 
 export interface ArGazeOptions {
@@ -37,6 +40,8 @@ export interface ArGazeOptions {
   walkHost: WalkHost | null
   /** 가까이 앉기·일어나기 (?closesit). 받아서 시작했으면 true */
   requestPose?: (pose: 'sit' | 'stand') => boolean
+  /** 몸 돌려 따라보기 (끄면 고개만: 몸 돌리기·가까이 앉기·일어나기 없음). 꺼짐 → 켜짐이면 한계 밖일 때 바로 돈다 */
+  follow: boolean
   /** 카메라가 너무 가까워 개를 숨긴 동안: 판단을 멈춘다 (고개는 그 자리, 몸 돌리기·가까이 앉기 없음) */
   isHidden?: () => boolean
 }
@@ -49,7 +54,7 @@ const DEBUG_INTERVAL_MS = 200
  * 아니면 StandTurn 에 맡긴다
  */
 export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze {
-  const { enabled, offReason, debug, template, tuning, turnSpeed, walkHost } = options
+  const { enabled, offReason, debug, template, tuning, turnSpeed, walkHost, follow } = options
   const latest = useRef(options)
   useEffect(() => {
     latest.current = options
@@ -86,6 +91,8 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
         return standTurnRef.current?.start(need, clip as TurnPlan['clip']) ?? false
       },
       onPose: (pose) => latest.current.requestPose?.(pose) ?? false,
+      // 다시 놓기·산책으로 새로 만들어도 지금 상태 그대로
+      follow: latest.current.follow,
     })
     controllerRef.current = controller
     let lastDebugAt = -Infinity
@@ -143,6 +150,15 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
     }
   }, [host, enabled, debug, template, tuning, walkHost])
 
+  // 토글: 지금 컨트롤러에 바로 (새로 만들 때는 위에서 latest 로 읽는다)
+  useEffect(() => {
+    controllerRef.current?.setFollow(follow)
+  }, [follow])
+
+  /** 회전 클립이 있는 개 (StandTurn.available 과 같은 기준) */
+  const hasTurns = useMemo(() => !!walkHost && (walkSpec(walkHost.rig.info).turns?.length ?? 0) > 0, [walkHost])
+  const canFollow = enabled && !!host && hasTurns && tuning?.bodyTurnS !== 0
+
   const trigger = useCallback((kind: 'tap' | 'mic') => controllerRef.current?.trigger(kind), [])
   const isTurning = useCallback(() => !!standTurnRef.current?.turning, [])
   const userCommand = useCallback(() => controllerRef.current?.userCommand(), [])
@@ -152,5 +168,6 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
     trigger,
     isTurning,
     userCommand,
+    canFollow,
   }
 }

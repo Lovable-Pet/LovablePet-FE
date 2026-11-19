@@ -147,6 +147,8 @@ export interface GazeDebug {
   sitReason: '스스로' | '명령' | null
   /** 지금 자세 (sitReason 표시용) */
   pose: GazePose
+  /** 몸 돌려 따라보기 (꺼지면 몸 돌리기·가까이 앉기·일어나기 없이 고개만) */
+  follow: boolean
 
   lastTrigger: GazeTrigger | null
   /** 오래 가만히 (바라보기 짧게·딴청 길게) */
@@ -167,6 +169,8 @@ export interface GazeControllerOptions {
   onTurn?: (need: number, reason: string, clip: string | null) => boolean
   /** 가까이 붙으면 앉기·물러나면 일어나기 요청 (?closesit). 받아서 시작했으면 true */
   onPose?: (pose: 'sit' | 'stand', reason: string) => boolean
+  /** 몸 돌려 따라보기 처음 상태 (기본 켜짐). 바꾸기는 setFollow */
+  follow?: boolean
   /** 0~1 (시험·가짜 스테이지용). 없으면 Math.random */
   random?: () => number
 }
@@ -203,6 +207,8 @@ const JAW_SNAP = 1e-3
  *   기다리는 시간은 몸 기준 사용자 각 70° 이하 1.5초 ~ 120° 이상 0.6초 (선형, 진행률로 센다). 0.5초 안에 잠깐 범위 안으로
  *   들어왔다 나가면 이어서 센다. 회전 클립이 끝나면 2초 동안은 돌지 않는다 (기다리는 시간은 센다)
  * - 가까이 앉기 (?closesit): 서 있는 개 0.6 m 안에 2초 → 스스로 앉아 올려다봄, 스스로 앉았으면 1 m 밖 2초 → 일어남
+ * - 따라보기 (setFollow, 기본 켜짐): 끄면 몸 돌리기·가까이 앉기·일어나기를 하지 않고 고개만 (한계 밖이면 1.5초 뒤 포기).
+ *   켜는 순간 한계 밖이면 기다림 없이 바로 돌기를 시도한다
  * - 턱: 대기 루프(서기·앉기·엎드리기)의 헥헥거림을 위로 든 만큼 줄인다 (GAZE_JAW, 위 30° 에서 남기는 비율 0.3).
  *   수평·아래를 볼 때는 그대로
  */
@@ -273,6 +279,10 @@ export class GazeController {
   private turnClip: string | null = null
   /** 회전 요청이 받아들여져 회전 클립이 끝나기를 기다리는 중 (요청 시각, s) */
   private turnRequestedAt: number | null = null
+  /** 몸 돌려 따라보기 (꺼지면 고개만: 몸 돌리기·스스로 앉기·일어나기 없음) */
+  private followOn: boolean
+  /** 따라보기를 막 켬: 다음 update 에서 사용자가 좌우 한계 밖이면 기다림 없이 바로 돌기를 시도한다 */
+  private followKick = false
   private lastClip: string | null = null
   private readonly pending: GazeTrigger[] = []
   private lastTrigger: GazeTrigger | null = null
@@ -296,6 +306,7 @@ export class GazeController {
     near: null,
     sitReason: null,
     pose: 'stand',
+    follow: true,
     lastTrigger: null,
     still: false,
   }
@@ -312,6 +323,8 @@ export class GazeController {
     this.awayMean = tuning.awayMeanS ?? GAZE_AWAY_MEAN_S
     this.bodyTurnS = tuning.bodyTurnS ?? BODY_TURN_S
     this.closeSit = tuning.closeSit ?? CLOSE_SIT_DEFAULT
+    this.followOn = options.follow ?? true
+    this.snapshot.follow = this.followOn
     const jaw = gazeJaw(options.template)
     this.jawKeep = clamp(tuning.jawKeep ?? jaw.keep, 0, 1)
     this.jawFullUp = Math.max(1, tuning.jawFullUpDeg ?? jaw.fullUpDeg) * RAD
@@ -330,6 +343,35 @@ export class GazeController {
     this.closeSitArmed = false
     this.closeFor = 0
     this.farFor = 0
+  }
+
+  /**
+   * 몸 돌려 따라보기 켜고 끄기. 끄면 몸 돌리기·스스로 앉기·일어나기를 하지 않는다 (이미 스스로 앉았으면 그대로 앉아 있고,
+   * 도는 중인 회전은 끝까지 간다). 켜는 순간 사용자가 좌우 한계 밖이면 기다림 없이 바로 돌기를 시도한다
+   */
+  setFollow(on: boolean) {
+    if (on === this.followOn) return
+    this.followOn = on
+    this.snapshot = { ...this.snapshot, follow: on }
+    this.closeFor = 0
+    this.farFor = 0
+    this.turnProgress = 0
+    this.inFor = 0
+    this.turnRefused = false
+    this.turnRefusedAt = null
+    if (on) {
+      this.followKick = true
+      // 회전이 이미 시작됐으면 그 쉼은 그대로
+      if (this.turnRequestedAt === null) this.turnCooldownUntil = -Infinity
+    } else {
+      this.followKick = false
+      // 돌려고 일어나는 중이었으면 돌지 않는다 (resitAfterTurn: 서고 나서 아직 가까우면 다시 앉아 원래 자세로)
+      this.endStandToTurn()
+    }
+  }
+
+  get following(): boolean {
+    return this.followOn
   }
 
   get debug(): GazeDebug {
@@ -397,6 +439,7 @@ export class GazeController {
       ? { waitFor: null, angle: null, wait: null, grace: null, block: '일어나서 도는 중', started: true }
       : this.bodyTurn(input, sample, outOfRange, block, dt)
     const sit = turn.started ? this.describeCloseSit() : this.closeSitStep(input, sample, dt)
+    this.followKick = false
     const jaw = this.jaw(sample.clip)
     this.snapshot = {
       state: this.gaveUp
@@ -429,6 +472,7 @@ export class GazeController {
           .join(' · ') || null,
       sitReason: input.pose === 'stand' ? null : this.selfSat ? '스스로' : '명령',
       pose: input.pose,
+      follow: this.followOn,
       lastTrigger: this.lastTrigger,
       still: this.stillFor > GAZE_STILL_LONG_S,
     }
@@ -655,6 +699,8 @@ export class GazeController {
       return { ...none, grace: this.turnProgress > 0 ? this.inFor : null, block: block?.reason ?? null }
     }
     this.inFor = 0
+    // 따라보기를 막 켰다: 기다림 없이 (자리 검사·쉼은 그대로)
+    if (this.followKick) this.turnProgress = 1
     const { camera } = input
     const { root } = sample
     const need = wrapAngle(Math.atan2(camera.x - root.x, camera.z - root.z) - sample.yaw)
@@ -711,6 +757,7 @@ export class GazeController {
       return { reason: this.standWaitReason ? `일어나서 기다림 · ${this.standWaitReason}` : '돌려고 일어나는 중', hard: false }
     }
     if (this.turnRequestedAt !== null) return { reason: '도는 중', hard: false }
+    if (!this.followOn) return hard('따라보기 꺼짐')
     if (!this.options.onTurn || !input.canTurn) return hard('회전 클립 없음·돌 수 없는 단계')
     // 스스로 앉은 개(?closesit)는 일어나서 돈다. 명령으로 앉거나 엎드린 개는 고개만
     const selfSit = this.selfSitTurnable(input, sample)
@@ -813,6 +860,12 @@ export class GazeController {
     if (this.selfSat && !this.standToTurn && !this.resitAfterTurn && input.pose === 'stand' && !input.busy) this.selfSat = false
     if (!input.tracking) return this.describeCloseSit()
     if (distance > CLOSE_STAND_M) this.closeSitArmed = true
+    // 따라보기 꺼짐: 가까이 살펴보는 동안 자세를 바꾸지 않는다 (스스로 앉았으면 물러나도 그대로)
+    if (!this.followOn) {
+      this.closeFor = 0
+      this.farFor = 0
+      return this.describeCloseSit()
+    }
     const free = !input.busy && !input.walking
     // 돌려고 일어나 선 채 기다리는 동안은 앉지 않는다 (기다림이 끝나면 위에서 바로 다시 앉힌다)
     const waitingToTurn = this.standToTurn || this.resitAfterTurn
@@ -868,6 +921,7 @@ export function describeGaze(debug: GazeDebug): string {
         ? ` (원래 ${deg(debug.rawYaw)} ${deg(debug.rawPitch)})`
         : ''),
     `w ${debug.weight.toFixed(2)}${debug.clip ? ` ${debug.clip}` : ''}`,
+    `따라보기 ${debug.follow ? '켜짐' : '꺼짐'}`,
     `턱 ${debug.jaw.toFixed(2)}`,
     debug.nextIn === null ? '' : `다음 ${debug.nextIn.toFixed(1)}초`,
     debug.outFor > 0 ? `한계 밖 ${debug.outFor.toFixed(1)}초` : '',
