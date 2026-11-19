@@ -9,7 +9,6 @@ import {
   CLOSE_SIT_DEFAULT,
   CLOSE_SIT_M,
   CLOSE_SIT_S,
-  CLOSE_STAND_M,
   CLOSE_STAND_S,
   GAZE_ANGLE_TAU_S,
   GAZE_APPROACH_M,
@@ -44,6 +43,7 @@ import {
   GAZE_WEIGHT_IN_S,
   GAZE_WEIGHT_OUT_S,
   GAZE_WEIGHT_RELEASE_S,
+  closeStandDistance,
   gazeJaw,
   gazeLimits,
   isTurnClip,
@@ -180,6 +180,8 @@ export interface GazeControllerOptions {
   onPose?: (pose: 'sit' | 'stand', reason: string) => boolean
   /** 몸 돌려 따라보기 처음 상태 (기본 켜짐). 바꾸기는 setFollow */
   follow?: boolean
+  /** 개 몸길이 (m, 실제 크기). 가까이 앉은 뒤 일어나는 거리를 맞춘다 (closeStandDistance). 없으면 1 m 기준 */
+  bodyLength?: number | null
   /** 0~1 (시험·가짜 스테이지용). 없으면 Math.random */
   random?: () => number
 }
@@ -189,6 +191,8 @@ const toDeg = (radians: number) => radians / RAD
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 const wrapAngle = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle))
 const smoothstep = (x: number) => x * x * (3 - 2 * x)
+/** 거리 표시 (1 → '1', 0.8 → '0.8', 0.83 → '0.83') */
+const metres = (value: number) => String(Number(value.toFixed(2)))
 /** 프레임 사이가 이보다 길면 이만큼으로 자른다 (s) */
 const MAX_FRAME_S = 0.1
 /** 회전 요청을 거절당하면 이만큼(s) 뒤 다시 묻는다 */
@@ -220,6 +224,7 @@ const JAW_SNAP = 1e-3
  *   기다리는 시간은 몸 기준 사용자 각 70° 이하 1.5초 ~ 120° 이상 0.6초 (선형, 진행률로 센다). 0.5초 안에 잠깐 범위 안으로
  *   들어왔다 나가면 이어서 센다. 회전 클립이 끝나면 2초 동안은 돌지 않는다 (기다리는 시간은 센다)
  * - 가까이 앉기 (?closesit): 서 있는 개 0.6 m 안에 2초 → 스스로 앉아 올려다봄, 스스로 앉았으면 1 m 밖 2초 → 일어남
+ *   (일어나는 거리는 몸길이에 맞춘다: 1 m 넘는 개 1 m, 작은 개 0.8 m 쯤, closeStandDistance)
  * - 따라보기 (setFollow, 기본 켜짐): 끄면 몸 돌리기·가까이 앉기·일어나기를 하지 않고 고개만 (한계 밖이면 1.5초 뒤 포기).
  *   켜는 순간 한계 밖이면 기다림 없이 바로 돌기를 시도한다
  * - 턱: 대기 루프(서기·앉기·엎드리기)의 헥헥거림을 위로 든 만큼 줄인다 (GAZE_JAW, 위 30° 에서 남기는 비율 0.3).
@@ -235,6 +240,10 @@ export class GazeController {
   private readonly awayMean: number
   private readonly bodyTurnS: number
   private readonly closeSit: boolean
+  /** 스스로 앉은 개가 일어나는 거리 · 명령 뒤 다시 앉을 수 있게 되는 거리 (m, 개 발밑에서) */
+  private readonly closeStandM: number
+  /** 마지막으로 잰 개 발밑~사용자 수평 거리 (m, debug) */
+  private lastUserDistance: number | null = null
   /** 턱: 위로 fullUp 이상 들었을 때 남기는 비율 · 그 각 (rad) */
   private readonly jawKeep: number
   private readonly jawFullUp: number
@@ -347,6 +356,7 @@ export class GazeController {
     this.awayMean = tuning.awayMeanS ?? GAZE_AWAY_MEAN_S
     this.bodyTurnS = tuning.bodyTurnS ?? BODY_TURN_S
     this.closeSit = tuning.closeSit ?? CLOSE_SIT_DEFAULT
+    this.closeStandM = closeStandDistance(options.bodyLength)
     this.followOn = options.follow ?? true
     this.snapshot.follow = this.followOn
     const jaw = gazeJaw(options.template)
@@ -915,13 +925,14 @@ export class GazeController {
       sample.clip === 'standing'
     ) {
       this.resitAfterTurn = false
-      this.selfSat = !input.walking && input.tracking && distance < CLOSE_STAND_M && request('sit', '돈 뒤 아직 가까움')
+      this.selfSat = !input.walking && input.tracking && distance < this.closeStandM && request('sit', '돈 뒤 아직 가까움')
       return this.describeCloseSit()
     }
     // 다른 길로 일어났으면 (명령 등) 스스로 앉음이 아니다
     if (this.selfSat && !this.standToTurn && !this.resitAfterTurn && input.pose === 'stand' && !input.busy) this.selfSat = false
     if (!input.tracking) return this.describeCloseSit()
-    if (distance > CLOSE_STAND_M) this.closeSitArmed = true
+    if (input.tracking) this.lastUserDistance = distance
+    if (distance > this.closeStandM) this.closeSitArmed = true
     // 따라보기 꺼짐: 가까이 살펴보는 동안 자세를 바꾸지 않는다 (스스로 앉았으면 물러나도 그대로)
     if (!this.followOn) {
       this.closeFor = 0
@@ -940,11 +951,11 @@ export class GazeController {
     } else {
       this.closeFor = 0
     }
-    if (free && this.selfSat && input.pose === 'sit' && sample.clip === 'sitting' && distance > CLOSE_STAND_M) {
+    if (free && this.selfSat && input.pose === 'sit' && sample.clip === 'sitting' && distance > this.closeStandM) {
       this.farFor += dt
       if (this.farFor > CLOSE_STAND_S) {
         this.farFor = 0
-        if (request('stand', `사용자가 ${CLOSE_STAND_M} m 밖에 ${CLOSE_STAND_S}초`)) this.selfSat = false
+        if (request('stand', `사용자가 ${metres(this.closeStandM)} m 밖에 ${CLOSE_STAND_S}초`)) this.selfSat = false
       }
     } else {
       this.farFor = 0
@@ -956,11 +967,17 @@ export class GazeController {
     if (!this.closeSit) return null
     if (this.standToTurn) return '돌려고 일어나는 중'
     if (this.resitAfterTurn) return '도는 중 (끝나면 가까우면 다시 앉음)'
+    const stand = metres(this.closeStandM)
     if (this.selfSat) {
-      return this.farFor > 0 ? `스스로 앉음 · 일어남 ${(CLOSE_STAND_S - this.farFor).toFixed(1)}초 뒤` : '스스로 앉음'
+      if (this.farFor > 0) return `스스로 앉음 · 일어남 ${(CLOSE_STAND_S - this.farFor).toFixed(1)}초 뒤`
+      // 일어나려면 얼마나 더 물러나야 하는지 (개 발밑에서 잰 수평 거리)
+      const more = this.lastUserDistance === null ? null : this.closeStandM - this.lastUserDistance
+      return more !== null && more > 0
+        ? `스스로 앉음 · 일어나려면 ${more.toFixed(2)} m 더 (발밑 ${stand} m 밖 ${CLOSE_STAND_S}초)`
+        : '스스로 앉음'
     }
     if (this.closeFor > 0) return `앉음 대기 ${(CLOSE_SIT_S - this.closeFor).toFixed(1)}초`
-    return this.closeSitArmed ? null : '명령 뒤 (1 m 밖으로 물러나면 다시 앉음)'
+    return this.closeSitArmed ? null : `명령 뒤 (${stand} m 밖으로 물러나면 다시 앉음)`
   }
 }
 

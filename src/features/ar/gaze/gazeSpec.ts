@@ -163,6 +163,17 @@ export const CLOSE_SIT_M = 0.6
 export const CLOSE_SIT_S = 2
 export const CLOSE_STAND_M = 1
 export const CLOSE_STAND_S = 2
+/**
+ * 일어나는 거리는 개 몸길이 (모델 상자 앞뒤 길이, 실제 크기) 에 맞춘다: 앉는 거리 + (CLOSE_STAND_M − 앉는 거리) × clamp(몸길이 / REF, MIN, 1).
+ * 고정 1 m 면 작은 개 (코가 발밑에서 0.24~0.31 m) 는 코에서 0.7 m 넘게 물러나야 일어났다 (진도는 코에서 0.43 m).
+ * 몸길이 1 m 이상 (진도 1.01 m) 은 그대로 1 m, 작은 개 (0.4~0.6 m) 는 0.8 m 쯤. 앉는 거리 0.6 m 는 그대로 (사람이 폰을 들고 설 수 있는 거리라 개 크기와 덜 상관)
+ */
+export const CLOSE_STAND_REF_LENGTH_M = 1
+export const CLOSE_STAND_MIN_SCALE = 0.5
+export function closeStandDistance(bodyLength: number | null | undefined): number {
+  const ratio = bodyLength && bodyLength > 0 ? Math.min(1, Math.max(CLOSE_STAND_MIN_SCALE, bodyLength / CLOSE_STAND_REF_LENGTH_M)) : 1
+  return CLOSE_SIT_M + (CLOSE_STAND_M - CLOSE_SIT_M) * ratio
+}
 export const CLOSE_SIT_DEFAULT = false
 
 /** 배포 빌드에서 켤지. 폰 확인 뒤 정한다 (개발 모드는 ?gaze=0 이 아니면 켬) */

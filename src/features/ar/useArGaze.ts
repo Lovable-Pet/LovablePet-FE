@@ -59,6 +59,19 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
   useEffect(() => {
     latest.current = options
   })
+  /** 회전 클립이 있는 개 (StandTurn.available 과 같은 기준) · 산책 리그의 몸길이 (m, 가까이 앉은 뒤 일어나는 거리) */
+  const walkInfo = useMemo(() => {
+    if (!walkHost) return { hasTurns: false, bodyLength: null }
+    const spec = walkSpec(walkHost.rig.info)
+    return { hasTurns: (spec.turns?.length ?? 0) > 0, bodyLength: spec.bodyLength }
+  }, [walkHost])
+  const canFollow = enabled && !!host && walkInfo.hasTurns && tuning?.bodyTurnS !== 0
+  /** 토글이 없는 개 (회전 클립 없음) 는 늘 켜짐: 다른 개에서 끈 상태가 남아 가까이 앉기·일어나기를 막지 않게 */
+  const effectiveFollow = follow || !canFollow
+  const followRef = useRef(effectiveFollow)
+  useEffect(() => {
+    followRef.current = effectiveFollow
+  })
   const controllerRef = useRef<GazeController | null>(null)
   const standTurnRef = useRef<StandTurn | null>(null)
   const [turning, setTurning] = useState(false)
@@ -92,7 +105,8 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
       },
       onPose: (pose) => latest.current.requestPose?.(pose) ?? false,
       // 다시 놓기·산책으로 새로 만들어도 지금 상태 그대로
-      follow: latest.current.follow,
+      follow: followRef.current,
+      bodyLength: walkInfo.bodyLength,
     })
     controllerRef.current = controller
     let lastDebugAt = -Infinity
@@ -148,16 +162,12 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
       if (controllerRef.current === controller) controllerRef.current = null
       setDebugLine(null)
     }
-  }, [host, enabled, debug, template, tuning, walkHost])
+  }, [host, enabled, debug, template, tuning, walkHost, walkInfo])
 
   // 토글: 지금 컨트롤러에 바로 (새로 만들 때는 위에서 latest 로 읽는다)
   useEffect(() => {
-    controllerRef.current?.setFollow(follow)
-  }, [follow])
-
-  /** 회전 클립이 있는 개 (StandTurn.available 과 같은 기준) */
-  const hasTurns = useMemo(() => !!walkHost && (walkSpec(walkHost.rig.info).turns?.length ?? 0) > 0, [walkHost])
-  const canFollow = enabled && !!host && hasTurns && tuning?.bodyTurnS !== 0
+    controllerRef.current?.setFollow(effectiveFollow)
+  }, [effectiveFollow])
 
   const trigger = useCallback((kind: 'tap' | 'mic') => controllerRef.current?.trigger(kind), [])
   const isTurning = useCallback(() => !!standTurnRef.current?.turning, [])
