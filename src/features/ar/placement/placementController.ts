@@ -500,6 +500,7 @@ export class PlacementController {
     const size = this.stage.dogSize
     const lines = [
       `센서 깊이 ${sensors.depth}${sensors.depthFormat ? ` (${sensors.depthFormat})` : ''} · 특징점 ${sensors.points}`,
+      ...(sensors.occlusion ?? []),
       `깊이 보정 ${describeCalibration(this.calibrationReport, sensors)}`,
       `준비 ${describeReadiness(this.readinessReport)}${describeFloorUnseen(this.floorSeenAt, time)}`,
       `개 ${meters(size.x)}×${meters(size.y)}×${meters(size.z)} · 원 r ${meters(this.ringRadius)} · 둘레 r ${meters(this.spotCheck.radius)}`,

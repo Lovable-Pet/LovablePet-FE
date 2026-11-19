@@ -14,13 +14,17 @@ import {
   type StageSensors,
 } from './placement/arStage'
 import type { Ray, SurfaceHit, Vec3 } from './placement/types'
+import type { StageOccluder } from './depthOcclusion'
 import type { WalkPose, WalkRig } from './walk/walkStage'
 import {
+  parseTurnExtras,
   parseWalkExtras,
   STANDING_CLIP,
+  TURN_CLIPS,
   WALK_CLIPS,
   type ExtrasSource,
   type ScaleSource,
+  type TurnClipSpec,
   type WalkClip,
   type WalkExtras,
   type WalkModelInfo,
@@ -102,6 +106,10 @@ interface XrCpuDepthInformation {
   height: number
   /** x·y 는 화면 좌표 0~1 (왼쪽 위 원점). 밖이면 RangeError */
   getDepthInMeters(x: number, y: number): number
+  /** 가림 시험(개발용)이 텍스처로 올린다: 깊이 버퍼, 값 → m, 정규화 뷰 좌표 → 정규화 깊이 버퍼 좌표 */
+  readonly data: ArrayBuffer
+  readonly rawValueToMeters: number
+  readonly normDepthBufferFromNormView: { matrix: Float32Array }
 }
 interface XrFrame {
   getViewerPose(space: XrSpace): XrViewerPose | null | undefined
@@ -279,10 +287,10 @@ function rootScale(model: unknown): number | null {
 }
 
 /**
- * GLB 를 다시 받아 JSON 청크의 scenes[scene].extras.walk 를 읽는다 (three 장면 userData 에 없을 때).
+ * GLB 를 다시 받아 JSON 청크의 scenes[scene].extras 를 읽는다 (three 장면 userData 에 extras.walk 가 없을 때).
  * 머리(20바이트)로 JSON 길이를 읽고 그만큼만 받는다. 서버가 Range 를 무시하면 받은 전체에서 읽는다
  */
-async function readGlbWalkExtras(url: string): Promise<unknown> {
+async function readGlbSceneExtras(url: string): Promise<Record<string, unknown> | null> {
   const fetchRange = async (start: number, end: number) => {
     const response = await fetch(url, { headers: { Range: `bytes=${start}-${end}` } })
     if (!response.ok) throw new Error(`GLB ${response.status}`)
@@ -300,7 +308,7 @@ async function readGlbWalkExtras(url: string): Promise<unknown> {
   const json: unknown = JSON.parse(new TextDecoder().decode(bytes))
   if (!isRecord(json) || !Array.isArray(json.scenes)) return null
   const scene: unknown = json.scenes[typeof json.scene === 'number' ? json.scene : 0]
-  return isRecord(scene) && isRecord(scene.extras) ? scene.extras.walk : null
+  return isRecord(scene) && isRecord(scene.extras) ? scene.extras : null
 }
 
 /**
@@ -320,15 +328,16 @@ function readSymbol(object: object, description: string): unknown {
  * 세션이 깊이를 CPU 로 주는지. enabledFeatures 가 없는 브라우저는 depthUsage 를 읽어 본다 (꺼져 있으면 예외).
  * 이 세션의 enabledFeatures 는 three 에게 depth-sensing 을 숨긴 목록이라 실제 목록(enabledFeaturesOf)을 본다
  */
-function readDepthSupport(session: XrSession): { state: SensorState; format: string | null } {
+function readDepthSupport(session: XrSession): { state: SensorState; format: string | null; dataFormat: string | null } {
   const features = enabledFeaturesOf(session)
-  if (features && !features.includes('depth-sensing')) return { state: 'off', format: null }
+  if (features && !features.includes('depth-sensing')) return { state: 'off', format: null, dataFormat: null }
   try {
     const usage = session.depthUsage
-    if (usage !== 'cpu-optimized') return { state: 'off', format: usage ?? null }
-    return { state: 'on', format: `${usage} · ${session.depthDataFormat ?? '?'}` }
+    if (usage !== 'cpu-optimized') return { state: 'off', format: usage ?? null, dataFormat: null }
+    const dataFormat = session.depthDataFormat ?? null
+    return { state: 'on', format: `${usage} · ${dataFormat ?? '?'}`, dataFormat }
   } catch {
-    return { state: 'off', format: null }
+    return { state: 'off', format: null, dataFormat: null }
   }
 }
 
@@ -392,7 +401,13 @@ export class ModelViewerArStage implements ArStage {
   private frame: XrFrame | null = null
   private readonly probeSets = new Set<ProbeSet>()
   private readonly sensors: StageSensors = { depth: 'pending', depthFormat: null, points: 'pending' }
+  /** 깊이 형식 ('luminance-alpha' · 'float32'). 가림 시험이 텍스처 형식을 고른다 */
+  private depthDataFormat: string | null = null
+  /** 가림 시험 (개발용 ?occlusion=1·raw). 없으면 null */
+  private occluder: StageOccluder | null = null
   private ring: RingObject | null = null
+  /** 보이는 원의 면 높이 (놓기 전 가림 시험의 바닥). 원이 없으면 null */
+  private ringFloorY: number | null = null
   private dogPlaced = false
   /** 놓은 뒤 그려진 방향 비교 (디버그) */
   private yawCheck = { frames: 0, mismatchFrames: 0, worst: 0 }
@@ -468,6 +483,7 @@ export class ModelViewerArStage implements ArStage {
     const depth = readDepthSupport(session)
     this.sensors.depth = depth.state
     this.sensors.depthFormat = depth.format
+    this.depthDataFormat = depth.dataFormat
 
     // three.js 의 XR 루프(model-viewer 가 그린다)보다 나중에 등록돼 같은 프레임에서 그 뒤에 돈다.
     // 여기서 옮긴 원은 다음 프레임에 그려진다 (원은 바닥에 붙어 있어 한 프레임 늦어도 티가 안 난다)
@@ -483,6 +499,8 @@ export class ModelViewerArStage implements ArStage {
       if (!pose || !view) return
       const { x, y, z } = pose.transform.position
       this.frame = frame
+      const depthInfo = this.readDepth(frame, view)
+      this.feedOccluder(time, depthInfo, view)
       try {
         onFrame({
           time,
@@ -491,7 +509,7 @@ export class ModelViewerArStage implements ArStage {
           view: { viewMatrix: view.transform.inverse.matrix, projectionMatrix: view.projectionMatrix },
           centerHit: this.centerSource ? firstHit(frame, this.centerSource, space) : null,
           centerPointHit: this.pointSource ? firstHit(frame, this.pointSource, space) : null,
-          depth: this.readDepth(frame, view),
+          depth: depthInfo ? toDepthSampler(depthInfo) : null,
           sensors: this.sensors,
         })
       } finally {
@@ -505,8 +523,10 @@ export class ModelViewerArStage implements ArStage {
     if (this.disposed) return
     if (!pose) {
       if (this.ring) this.ring.group.visible = false
+      this.ringFloorY = null
       return
     }
+    this.ringFloorY = pose.center.y
     const ring = this.ensureRing(pose.radius)
     ring.group.position.set(pose.center.x, pose.center.y - RING_SINK_M, pose.center.z)
     if (ring.tone !== pose.tone) {
@@ -592,6 +612,7 @@ export class ModelViewerArStage implements ArStage {
   /**
    * 산책 리그. 걷기 클립 3개와 standing, extras.walk 가 다 있어야 만든다 (하나라도 없으면 null → 산책 버튼을 숨긴다).
    * extras.walk 는 three 장면 userData(GLTFLoader 가 scenes[0].extras 를 넣는다)에서 먼저 읽고, 없으면 GLB JSON 청크를 직접 읽는다.
+   * 제자리 회전(turn_*)은 클립과 extras.turn 이 둘 다 있는 것만 쓴다 (extras.walk 와 같은 곳에서 읽는다). 없으면 걸으며 돈다.
    * 크기 배율 s 는 루트 노드 배율(세 축이 같아야), 못 읽으면 모델 높이 ÷ ref_size_m 높이
    */
   async createWalkRig(): Promise<WalkRig | null> {
@@ -604,12 +625,16 @@ export class ModelViewerArStage implements ArStage {
       clips.set(name, clip)
     }
     const { model } = scene
-    let extras: WalkExtras | null = isRecord(model) && isRecord(model.userData) ? parseWalkExtras(model.userData.walk) : null
+    const userData = isRecord(model) && isRecord(model.userData) ? model.userData : null
+    let extras: WalkExtras | null = userData ? parseWalkExtras(userData.walk) : null
+    let turnExtras: unknown = userData?.turn
     let extrasSource: ExtrasSource = 'userData'
     if (!extras && mv.src) {
       extrasSource = 'glb'
       try {
-        extras = parseWalkExtras(await readGlbWalkExtras(new URL(mv.src, window.location.href).href))
+        const sceneExtras = await readGlbSceneExtras(new URL(mv.src, window.location.href).href)
+        extras = parseWalkExtras(sceneExtras?.walk)
+        turnExtras = sceneExtras?.turn
       } catch (error) {
         if (import.meta.env.DEV) console.warn('[ar] GLB 에서 extras.walk 를 읽지 못함:', error)
       }
@@ -620,7 +645,16 @@ export class ModelViewerArStage implements ArStage {
     const scaleSource: ScaleSource = root !== null ? 'root' : 'size'
     if (!(scale > 0) || !Number.isFinite(scale)) return null
     const durations = Object.fromEntries(WALK_CLIPS.map((name) => [name, clips.get(name)!.duration])) as Record<WalkClip, number>
-    const info: WalkModelInfo = { extras, extrasSource, durations, scale, scaleSource, size: { ...this.dogSize } }
+    const turnClips = parseTurnExtras(turnExtras)
+    const turns: TurnClipSpec[] = []
+    for (const name of TURN_CLIPS) {
+      const entry = turnClips[name]
+      const clip = scene.animationsByName.get(name)
+      if (!entry || !isClip(clip)) continue
+      clips.set(name, clip)
+      turns.push({ clip: name, angle: (entry.angle_deg * Math.PI) / 180, duration: clip.duration, offset: entry.end_offset_m })
+    }
+    const info: WalkModelInfo = { extras, extrasSource, durations, scale, scaleSource, size: { ...this.dogSize }, turns }
     return new ModelViewerWalkRig(mv, scene, scene, this.ar, info, clips)
   }
 
@@ -665,17 +699,68 @@ export class ModelViewerArStage implements ArStage {
     if (this.pointSource) cancelQuietly(this.pointSource)
     this.pointSource = null
     for (const set of [...this.probeSets]) set.cancel()
+    this.occluder?.dispose()
+    this.occluder = null
     this.removeRing()
     this.stopFade()
     this.scene.target.visible = true
   }
 
+  /**
+   * 가림 시험 (개발용 ?occlusion=1·raw, useArPlacement 가 DEV 에서만 만든다): 깊이만 쓰는 화면 전체 사각형을 장면에 넣고
+   * 매 프레임 CPU 깊이를 넘긴다. null 이면 뺀다
+   */
+  setOccluder(occluder: StageOccluder | null) {
+    this.occluder?.dispose()
+    this.occluder = null
+    this.sensors.occlusion = undefined
+    if (this.disposed || !occluder) return
+    this.occluder = occluder
+    this.scene.add(occluder.mesh)
+  }
+
+  /**
+   * 이번 프레임 깊이를 가림 시험에 넘긴다 (깊이 버퍼는 이 프레임 안에서만 읽힌다).
+   * 깊이를 잰 카메라(이 뷰의 포즈·투영)와 지금 바닥 높이도 같이: 바닥 근처 실제 점은 가리지 않는다
+   */
+  private feedOccluder(time: number, info: XrCpuDepthInformation | null, view: XrView) {
+    const { occluder } = this
+    if (!occluder) return
+    if (info) {
+      try {
+        occluder.update({
+          time,
+          width: info.width,
+          height: info.height,
+          data: info.data,
+          rawValueToMeters: info.rawValueToMeters,
+          normDepthBufferFromNormView: info.normDepthBufferFromNormView.matrix,
+          format: this.depthDataFormat,
+          cameraWorld: view.transform.matrix,
+          projectionMatrix: view.projectionMatrix,
+          floorY: this.occluderFloorY(),
+        })
+      } catch (error) {
+        if (import.meta.env.DEV) console.warn('[ar] 가림 시험에 깊이를 넘기지 못해 끈다:', error)
+        this.setOccluder(null)
+        return
+      }
+    }
+    occluder.tick(time)
+    this.sensors.occlusion = occluder.status(time)
+  }
+
+  /** 가림 시험이 빼는 바닥 높이: 놓은 개의 발(pivot), 놓기 전엔 보이는 원의 면. 모르면 null */
+  private occluderFloorY(): number | null {
+    if (this.dogPlaced) return this.scene.pivot.position.y
+    return this.ringFloorY
+  }
+
   /** 이번 프레임 깊이. 읽다가 예외가 나면 이 세션에서는 깊이를 끈다 */
-  private readDepth(frame: XrFrame, view: XrView): DepthSampler | null {
+  private readDepth(frame: XrFrame, view: XrView): XrCpuDepthInformation | null {
     if (this.sensors.depth !== 'on' || !frame.getDepthInformation) return null
     try {
-      const info = frame.getDepthInformation(view)
-      return info ? toDepthSampler(info) : null
+      return frame.getDepthInformation(view) ?? null
     } catch (error) {
       if (import.meta.env.DEV) console.warn('[ar] 깊이를 읽지 못해 끈다:', error)
       this.sensors.depth = 'off'
@@ -767,6 +852,7 @@ export class ModelViewerArStage implements ArStage {
 
   private removeRing() {
     const ring = this.ring
+    this.ringFloorY = null
     if (!ring) return
     ring.group.removeFromParent()
     for (const geometry of ring.geometries) geometry.dispose()
@@ -837,12 +923,14 @@ export class ModelViewerArStage implements ArStage {
 }
 
 /**
- * 산책 리그. 걷는 동안에는 model-viewer 의 애니메이션을 멈추고(pause: 매 프레임 믹서를 돌리지 않는다)
+ * 산책 리그. 걷는 동안·제자리 회전 동안에는 model-viewer 의 애니메이션을 멈추고(pause: 매 프레임 믹서를 돌리지 않는다)
  * 걷기 클립의 시간·가중치를 직접 넣은 뒤 mixer.update(0) 으로 그 자세를 만든다. 개 위치도 같은 프레임에 옮겨
  * 애니메이션과 이동이 한 프레임도 어긋나지 않는다 (둘 다 다음 렌더에 나온다).
  * - 클립끼리는 크로스페이드 없이 그 프레임에서 바로 바꾼다 (이음매가 같다)
  * - 출발 때만 서기 루프의 지금 자세를 300ms 섞는다 (WalkPose.standingWeight)
  * - 액션을 멈추면(stop) 아무도 안 쓰는 뼈가 기본 자세로 돌아가서, 쓸 액션을 먼저 켜고 남은 것을 끈다
+ * - 회전 클립이 끝나면 서기를 켜고 회전 액션을 끈다. 서기에 없는 root translation 은 그 바인딩을 쓰는 액션이 없어져
+ *   AnimationMixer 가 처음 값(쉼 위치)으로 되돌린다 (three _deactivateAction → restoreOriginalState)
  */
 class ModelViewerWalkRig implements WalkRig {
   readonly info: WalkModelInfo
@@ -906,7 +994,7 @@ class ModelViewerWalkRig implements WalkRig {
   release() {
     if (!this.driving) return
     this.driving = false
-    // walk_stop 의 끝 = 서기 루프 첫 프레임. 서기를 0초로 켜고 model-viewer 에 돌려준다
+    // walk_stop·제자리 회전의 끝 = 서기 루프 첫 프레임. 서기를 0초로 켜고 (남은 액션은 끈다) model-viewer 에 돌려준다
     this.apply([[STANDING_CLIP, 0, 1]])
     // 같은 액션이 model-viewer 의 지금 액션이라 섞지 않고 그 자리에서 이어 돈다 (재생 배율도 다시 맞춘다)
     this.mv.play()
@@ -930,7 +1018,7 @@ class ModelViewerWalkRig implements WalkRig {
       action.time = time
       used.add(action)
     }
-    const names = others ? [...animationsByName.keys()] : [STANDING_CLIP, ...WALK_CLIPS]
+    const names = others ? [...animationsByName.keys()] : [STANDING_CLIP, ...WALK_CLIPS, ...this.info.turns.map((turn) => turn.clip)]
     for (const name of names) {
       const clip = animationsByName.get(name)
       const action = clip && mixer.existingAction(clip, this.scene)

@@ -17,7 +17,7 @@ import { ArTouchLayer } from '../features/ar/components/ArTouchLayer'
 import { HoldRing } from '../features/ar/components/HoldRing'
 import { VoiceCommandButton } from '../features/ar/components/VoiceCommandButton'
 import { COMMANDS, DogAnimator, POSE_LABEL, type CommandId, type Pose } from '../features/ar/dogAnimator'
-import { useArPlacement, type ArPlacement } from '../features/ar/useArPlacement'
+import { useArPlacement, type ArOcclusionOptions, type ArPlacement } from '../features/ar/useArPlacement'
 import { useArWalk, type ArWalk } from '../features/ar/useArWalk'
 import type { WalkTuning } from '../features/ar/walk/walkController'
 import { LONG_PRESS_MS, useLongPress, type LongPressHandlers } from '../features/ar/useLongPress'
@@ -67,6 +67,8 @@ function useLongActive(active: boolean) {
 /** 산책 중 위 안내 문구 */
 function walkHint({ phase, ending, notice }: ArWalk) {
   if (ending) return '멈추는 중이에요'
+  // 사용자가 턱·계단으로 다른 층에 섬: 개는 경계 앞에서 멈춘다. 같은 층으로 돌아오면 다시 따라온다
+  if (notice === 'otherLevel') return '여기는 따라갈 수 없어요'
   if (notice === 'slowDown') return '천천히 걸어 주세요'
   return phase === 'standing' ? '걸어가면 따라와요' : '따라오고 있어요'
 }
@@ -177,7 +179,12 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const inAr = arStatus === 'session-started' || arStatus === 'object-placed'
   /** 개발 모드에서 주소에 ?debug 를 붙였을 때 (배포 파일에는 들어가지 않는다) */
   const debug = import.meta.env.DEV && searchParams.has('debug')
-  const placement = useArPlacement(mvRef, { debug })
+  /**
+   * 개발 모드에서 실제 물체가 개를 가리는 시험: ?occlusion=1 (바닥 제외·bilinear·섞기) · ?occlusion=raw (d6b8a0e 방식, 견주기용) ·
+   * ?ofloor=0.04 (바닥 제외 문턱 m, 0 이면 끔). 다음 AR 세션부터, 배포 파일에는 들어가지 않는다
+   */
+  const occlusion = useMemo(() => (import.meta.env.DEV ? readOcclusion(searchParams) : null), [searchParams])
+  const placement = useArPlacement(mvRef, { debug, occlusion })
   /** AR 에서 개가 바닥에 놓였는지 */
   const dogReady = inAr && placement.phase === 'placed'
   /** AR 에서 개를 놓기 전: 명령 칩·음성·개 탭·3초 누르기를 막는다 */
@@ -187,7 +194,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const showFloorReset = debug && inAr && placement.manual
   /** 배치 전 빨강이 10초 넘게 이어짐 → '닫았다가 다시 열어 주세요' 한 줄 더 (바닥·깊이 상태는 건드리지 않는다) */
   const stuck = useLongActive(arLocked && placement.manual && placement.phase === 'blocked')
-  /** 개발 모드에서 ?floor=0.85·?keep=0.1 로 산책 최저선 값을 바꾼다 (다음 산책부터, 배포 파일에는 들어가지 않는다) */
+  /** 개발 모드에서 ?floor=0.85·?keep=0.1 로 산책 최저선 값을, ?tight=0.15 로 크게 돌 때 반지름을, ?turnspeed=1.3 으로 제자리 회전 빠르기를 바꾸고, ?watch=1 이면 서 있는 동안 뒤쪽 사용자를 제자리 회전으로 바라본다 (다음 산책부터, 배포 파일에는 들어가지 않는다) */
   const walkTuning = useMemo(() => (import.meta.env.DEV ? readWalkTuning(searchParams) : undefined), [searchParams])
   const walk = useArWalk(placement.walkHost, { canStart: dogReady && pose === 'stand' && !animBusy, debug, tuning: walkTuning })
   /** 산책 중: 명령 칩·음성·다시 놓기를 숨기고 개 탭을 막는다 */
@@ -800,13 +807,35 @@ function MessageShell({ onBack, children }: { onBack: () => void; children: Reac
   )
 }
 
-/** 개발용 주소 옵션: ?floor (최저선 비율, 0 이면 끔, 0–1.5) · ?keep (걷는 중 지킬 길 여유 m, 0–1). 없거나 숫자가 아니면 기본값 */
+/**
+ * 개발용 주소 옵션: ?floor (최저선 비율, 0 이면 끔, 0–1.5) · ?keep (걷는 중 지킬 길 여유 m, 0–1) ·
+ * ?tight (크게 돌 때 가장 좁은 반지름, 몸길이 배 0.05–1, 기본 0.25) · ?turnspeed (제자리 회전 재생 배율에 곱함, 0.25–3, 기본 1) ·
+ * ?watch=1 (서 있는 동안 뒤쪽 사용자를 제자리 회전으로 바라봄, 기본 끔). 없거나 숫자가 아니면 기본값
+ */
 function readWalkTuning(params: URLSearchParams): WalkTuning {
-  const read = (name: string, max: number) => {
+  const read = (name: string, max: number, min = 0) => {
     const raw = params.get(name)
     if (raw === null || raw.trim() === '') return undefined
     const value = Number(raw)
-    return Number.isFinite(value) && value >= 0 && value <= max ? value : undefined
+    return Number.isFinite(value) && value >= min && value <= max ? value : undefined
   }
-  return { minStopRatio: read('floor', 1.5), floorKeepExtra: read('keep', 1) }
+  return {
+    minStopRatio: read('floor', 1.5),
+    floorKeepExtra: read('keep', 1),
+    tightTurnRatio: read('tight', 1, 0.05),
+    turnSpeed: read('turnspeed', 3, 0.25),
+    watch: params.get('watch') === '1',
+  }
+}
+
+/** 개발용 가림 시험: ?occlusion=1 · raw 가 아니면 끔. ?ofloor 는 0–0.5 (m), 없거나 숫자가 아니면 기본값 */
+function readOcclusion(params: URLSearchParams): ArOcclusionOptions | null {
+  const mode = params.get('occlusion')
+  if (mode !== '1' && mode !== 'raw') return null
+  const raw = params.get('ofloor')
+  const value = raw === null || raw.trim() === '' ? NaN : Number(raw)
+  return {
+    mode: mode === 'raw' ? 'raw' : 'smooth',
+    floorIgnore: Number.isFinite(value) && value >= 0 && value <= 0.5 ? value : undefined,
+  }
 }
