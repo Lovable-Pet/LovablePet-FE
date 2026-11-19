@@ -20,7 +20,7 @@ export const PAW_LABEL: Record<PawId, string> = {
 /** 위 안내 줄: 아직 안 해 본 것 */
 export const PAW_HINT: Record<PawId, string> = {
   tap: '개를 톡 건드려 보세요',
-  hold: '꾹 눌러 보세요 · 빵!',
+  hold: '3초 꾹 눌러 보세요 · 빵!',
   talk: '"앉아"라고 말해 보세요',
   walk: '산책을 눌러 같이 걸어 보세요',
 }

@@ -1013,7 +1013,11 @@ export class GazeController {
     const free = !input.busy && !input.walking
     // 돌려고 일어나 선 채 기다리는 동안은 앉지 않는다 (기다림이 끝나면 위에서 바로 다시 앉힌다)
     const waitingToTurn = this.standToTurn || this.resitAfterTurn
-    if (free && !waitingToTurn && input.pose === 'stand' && sample.clip === 'standing' && this.closeSitArmed && distance < CLOSE_SIT_M) {
+    const wantsSit = free && !waitingToTurn && input.pose === 'stand' && sample.clip === 'standing' && this.closeSitArmed && distance < CLOSE_SIT_M
+    // 몸 회전을 기다리는 중 (한계 밖 타이머·잠깐 범위 안 grace)·도는 중·회전 뒤 쉼에는 앉기를 보류한다. 앉으면 곧 일어나서 돌게 돼
+    // 앉음 → 일어남 → 회전 → 다시 앉음이 연달아 나온다. 쉼이 끝난 뒤 처음부터 CLOSE_SIT_S 를 센다
+    const turnHold = this.turnProgress > 0 || this.turnRequestedAt !== null || this.now < this.turnCooldownUntil
+    if (wantsSit && !turnHold) {
       this.closeFor += dt
       if (this.closeFor > CLOSE_SIT_S) {
         this.closeFor = 0
@@ -1031,7 +1035,7 @@ export class GazeController {
     } else {
       this.farFor = 0
     }
-    return this.describeCloseSit()
+    return wantsSit && turnHold ? CLOSE_SIT_HELD : this.describeCloseSit()
   }
 
   private describeCloseSit(): string | null {
@@ -1051,6 +1055,9 @@ export class GazeController {
     return this.closeSitArmed ? null : `명령 뒤 (${stand} m 밖으로 물러나면 다시 앉음)`
   }
 }
+
+/** 가까이 앉을 거리인데 몸 회전 대기·회전·회전 뒤 쉼이라 앉지 않음 (?debug·이벤트 기록) */
+export const CLOSE_SIT_HELD = '가까이 앉기: 회전 대기로 보류'
 
 /** ?debug 한 줄 */
 export function describeGaze(debug: GazeDebug): string {

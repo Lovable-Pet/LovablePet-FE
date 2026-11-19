@@ -90,7 +90,8 @@ function logChanges(log: (kind: string, text: string) => void, controller: GazeC
   const near = debug.near?.replace(/[\d.]+/g, '#') ?? null
   if (near !== last.near) {
     last.near = near
-    log('가까이 앉기', debug.near ?? '없음')
+    // 종류가 이미 '가까이 앉기' 라 보류 문구 앞머리는 뺀다
+    log('가까이 앉기', debug.near?.replace('가까이 앉기: ', '') ?? '없음')
   }
 }
 
