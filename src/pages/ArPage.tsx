@@ -11,16 +11,38 @@ import { buttonStyles } from '../components/Button/buttonStyles'
 import { StateView } from '../components/StateView/StateView'
 import { SEX_LABEL } from '../constants/pet'
 import { ArControls } from '../features/ar/components/ArControls'
+import { ArFinishCard } from '../features/ar/components/ArFinishCard'
 import { ArFloorHint } from '../features/ar/components/ArFloorHint'
 import { ArHitDebug } from '../features/ar/components/ArHitDebug'
 import { ArInfoSheet } from '../features/ar/components/ArInfoSheet'
+import { ArPawPrints } from '../features/ar/components/ArPawPrints'
 import { ArTopBar } from '../features/ar/components/ArTopBar'
+import {
+  allPawsDone,
+  nextPaw,
+  PAW_BUTTON,
+  PAW_HINT,
+  pawOf,
+  pawsFor,
+  stampPaw,
+  type PawEvent,
+  type PawId,
+} from '../features/ar/arPaws'
 import { ArTouchLayer } from '../features/ar/components/ArTouchLayer'
 import { HoldRing } from '../features/ar/components/HoldRing'
 import { ReactionBubble } from '../features/ar/components/ReactionBubble'
 import { VoiceLogDebug } from '../features/ar/components/VoiceLogDebug'
-import { AR_TEXT, FOLLOW_NOTICE, pickHint, POSE_HINT, REACTION_BY_CLIP, type ReactionKind } from '../features/ar/arText'
-import { DogAnimator, POSE_LABEL, type CommandId, type Pose } from '../features/ar/dogAnimator'
+import {
+  AR_TEXT,
+  FOLLOW_NOTICE,
+  INTRO_STEP_MS,
+  INTRO_TEXT,
+  pickHint,
+  POSE_HINT,
+  REACTION_BY_CLIP,
+  type ReactionKind,
+} from '../features/ar/arText'
+import { DogAnimator, POSE_LABEL, type CommandId, type Pose, type ReactSource } from '../features/ar/dogAnimator'
 import { useVoiceCommand } from '../features/ar/useVoiceCommand'
 import { STANDING_CLIP, WALK_CLIPS } from '../features/ar/walk/walkSpec'
 import { useArPlacement, type ArOcclusionOptions, type ArPlacement } from '../features/ar/useArPlacement'
@@ -71,6 +93,10 @@ const HOLD_COMMAND: CommandId = 'play_dead'
 
 /** '따라보기' 토글을 누른 뒤 위 안내 문구를 보이는 시간 (ms) */
 const FOLLOW_NOTICE_MS = 3000
+/** 발도장을 다 모은 뒤 개가 쉬고 있을 때 이만큼(ms) 있다가 짖고 꼬리를 흔든다 */
+const CELEBRATE_DELAY_MS = 500
+/** 발도장이 찍힐 때 진동 (ms) */
+const PAW_VIBRATE_MS = 30
 
 /** active 가 STUCK_HINT_MS 넘게 이어졌는지 (중간에 풀리면 처음부터) */
 function useLongActive(active: boolean) {
@@ -207,6 +233,29 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const [reaction, setReaction] = useState<{ kind: ReactionKind; id: number } | null>(null)
   /** 애니메이터가 클립을 틀 때 (load 때 한 번 만든 애니메이터가 최신 함수를 부르도록 ref, 아래에서 채운다) */
   const clipStartRef = useRef<(clip: string) => void>(() => {})
+  /** 개 탭에 반응 클립이 있는지 ('톡' 발도장) */
+  const [canTap, setCanTap] = useState(false)
+  /** 찍은 발도장 (이 화면 동안만) */
+  const [pawsDone, setPawsDone] = useState<ReadonlySet<PawId>>(() => new Set())
+  const pawsDoneRef = useRef(pawsDone)
+  /** 발도장 찍기. 새로 찍히면 짧게 진동한다 */
+  const stamp = useCallback((event: PawEvent) => {
+    const next = stampPaw(pawsDoneRef.current, pawOf(event))
+    if (next === pawsDoneRef.current) return
+    pawsDoneRef.current = next
+    setPawsDone(next)
+    navigator.vibrate?.(PAW_VIBRATE_MS)
+  }, [])
+  /** 반응 클립이 실제로 재생될 때 (load 때 만든 애니메이터가 부른다) */
+  const onReact = useCallback((source: ReactSource) => stamp({ type: 'react', source }), [stamp])
+  const onReactRef = useRef(onReact)
+  /** 처음 놓은 순간(AR)·처음 3D 로 본 순간의 인사와 체고 비교 (위 안내 자리에 2초씩) */
+  const [intro, setIntro] = useState<'hello' | 'height' | null>(null)
+  const greetedRef = useRef({ ar: false, preview: false })
+  /** 마무리 카드. complete: 발도장을 다 모음 · exit: 닫기를 눌렀을 때 한 번 */
+  const [card, setCard] = useState<'complete' | 'exit' | null>(null)
+  const cardSeenRef = useRef(false)
+  const [celebrated, setCelebrated] = useState(false)
 
   const withersCm = toWithersCm(model.withersM)
   const inAr = arStatus === 'session-started' || arStatus === 'object-placed'
@@ -344,10 +393,12 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         onPose: setPose,
         onBusy: setAnimBusy,
         onClipStart: (clip) => clipStartRef.current(clip),
+        onReact: (source) => onReactRef.current(source),
       })
       animatorRef.current = animator
       setHasCommands(animator.hasCommands)
       setTapIsHeadTilt(animator.tapIsHeadTilt)
+      setCanTap(animator.canTap)
       setHasWalkClips([...WALK_CLIPS, STANDING_CLIP].every((clip) => mv.availableAnimations.includes(clip)))
     }
     // 'webglcontextlost' 도 error 로 오지만 렌더러가 스스로 복구한다. 파일을 못 받았을 때만 실패로 본다
@@ -424,6 +475,45 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     animator.puzzled()
   }
 
+  /** 개 3초 누르기가 다 참: 빵 ('꾹' 발도장) */
+  const holdDog = () => stamp({ type: 'hold', accepted: runCommand(HOLD_COMMAND) })
+
+  /** 인사: 서 있고 꼬리 흔들기가 있으면 한 번 흔들고, 위 안내 자리에 인사 → 체고 비교 */
+  const startIntro = () => {
+    animatorRef.current?.greet()
+    setIntro('hello')
+  }
+  // 처음 놓는 순간 (다시 놓기 때는 안 한다)
+  useEffect(() => {
+    if (!dogReady || greetedRef.current.ar) return
+    greetedRef.current.ar = true
+    animatorRef.current?.greet()
+    setIntro('hello')
+  }, [dogReady])
+  /** 화면 안 3D 로 처음 볼 때도 같은 인사 (한 번) */
+  const startPreview = () => {
+    setShowGuide(false)
+    if (greetedRef.current.preview) return
+    greetedRef.current.preview = true
+    startIntro()
+  }
+  useEffect(() => {
+    if (!intro) return
+    const timer = window.setTimeout(() => setIntro(intro === 'hello' ? 'height' : null), INTRO_STEP_MS)
+    return () => window.clearTimeout(timer)
+  }, [intro])
+
+  /** 마무리 카드를 띄운다 (한 번 보면 닫기가 바로 나가기) */
+  const openCard = (mode: 'complete' | 'exit') => {
+    cardSeenRef.current = true
+    setCard(mode)
+  }
+  /** 닫기(X): 마무리 카드를 아직 안 봤으면 한 번 보여 주고, 봤으면 나간다 */
+  const closeAr = () => {
+    if (cardSeenRef.current) onBack()
+    else openCard('exit')
+  }
+
   /** 다시 놓기: 개를 숨기고 바닥 원으로 돌아간다 */
   const replaceDog = () => {
     setActiveCommand(null)
@@ -441,16 +531,14 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
       const mv = mvRef.current
       return event.target === mv && !!mv?.positionAndNormalFromPoint(event.clientX, event.clientY)
     },
-    onLongPress: () => runCommand(HOLD_COMMAND),
+    onLongPress: () => holdDog(),
   })
 
   // 말 걸기 (음성 명령). 놓기 전·산책 중에는 막혀 듣던 것도 조용히 멈춘다
   const voice = useVoiceCommand({
     inAr,
     disabled: arLocked || walking,
-    onCommand: (id) => {
-      runCommand(id)
-    },
+    onCommand: (id) => stamp({ type: 'voiceCommand', accepted: runCommand(id) }),
     onMiss: puzzledReaction,
   })
   // 듣기 시작하면 개가 사용자를 바라본다
@@ -477,20 +565,6 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     if (mv.positionAndNormalFromPoint(event.clientX, event.clientY)) tapReaction()
   }
 
-  /** 위 안내 한 줄 (우선순위는 pickHint) */
-  const hint = pickHint({
-    placement: arLocked ? placementHint(placement) : null,
-    near: near.hint ? NEAR_HINT_TEXT : null,
-    walk: walking ? walkHint(walk) : null,
-    follow: followNotice ? FOLLOW_NOTICE[followNotice.on ? 'on' : 'off'] : null,
-    pose: hasCommands
-      ? `${POSE_LABEL[pose]} · ${POSE_HINT.commands}`
-      : inAr
-        ? POSE_HINT.wagInAr
-        : tapIsHeadTilt
-          ? POSE_HINT.tapHeadTilt
-          : POSE_HINT.tapWag,
-  })
   /**
    * '산책' 버튼: AR 에서 걷기 클립이 있는 개만 (화면 안 3D·아이폰은 산책이 없다).
    * 놓기 전에는 자리만 잡아 두고(눌리지 않음), 놓은 뒤에는 산책 리그가 있을 때만. 서 있지 않거나 명령 중이면 눌리지 않는다
@@ -505,6 +579,48 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           disabled: !walk.available,
         }
       : null
+
+  // 발도장: 이 개·이 화면에서 할 수 있는 것만 보이고, 남은 것 중 첫 번째를 권한다
+  const paws = pawsFor({ tap: canTap, hold: hasCommands, talk: hasCommands && voice.supported, walk: walkButton !== null })
+  const nextPawId = nextPaw(paws, pawsDone)
+  const pawsComplete = allPawsDone(paws, pawsDone)
+  // 산책 = 개가 실제로 한 번 걸음 (walk_start 부터)
+  useEffect(() => {
+    stamp({ type: 'walkPhase', phase: walk.phase })
+  }, [walk.phase, stamp])
+  const openCardRef = useRef(openCard)
+  useEffect(() => {
+    openCardRef.current = openCard
+  })
+  // 다 모으면: 개가 쉴 때(산책·명령·몸 돌리기가 끝난 뒤) 한 번 짖고 꼬리를 흔든 다음 마무리 카드
+  useEffect(() => {
+    if (!pawsComplete || celebrated || walking || animBusy || gaze.turning) return
+    const timer = window.setTimeout(() => {
+      setCelebrated(true)
+      const done = animatorRef.current?.celebrate() ?? Promise.resolve()
+      void done.then(() => {
+        if (!cardSeenRef.current) openCardRef.current('complete')
+      })
+    }, CELEBRATE_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [pawsComplete, celebrated, walking, animBusy, gaze.turning])
+
+  /** 위 안내 한 줄 (우선순위는 pickHint) */
+  const hint = pickHint({
+    placement: arLocked ? placementHint(placement) : null,
+    near: near.hint ? NEAR_HINT_TEXT : null,
+    walk: walking ? walkHint(walk) : null,
+    intro: intro === 'hello' ? INTRO_TEXT.hello(pet.kindName) : intro === 'height' ? INTRO_TEXT.height(withersCm) : null,
+    follow: followNotice ? FOLLOW_NOTICE[followNotice.on ? 'on' : 'off'] : null,
+    paw: nextPawId && !arLocked ? PAW_HINT[nextPawId] : null,
+    pose: hasCommands
+      ? `${POSE_LABEL[pose]} · ${POSE_HINT.commands}`
+      : inAr
+        ? POSE_HINT.wagInAr
+        : tapIsHeadTilt
+          ? POSE_HINT.tapHeadTilt
+          : POSE_HINT.tapWag,
+  })
 
   if (loadFailed) {
     return (
@@ -565,7 +681,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           slopPx={TAP_SLOP_PX}
           mvRef={mvRef}
           onTap={tapReaction}
-          onLongPress={() => runCommand(HOLD_COMMAND)}
+          onLongPress={holdDog}
           onPlaceTap={placement.place}
           locked={walking}
         />
@@ -577,7 +693,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           className="pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center gap-2 px-3 pt-[calc(12px+env(safe-area-inset-top))]">
           <ArTopBar
             inAr={inAr}
-            onClose={onBack}
+            onClose={closeAr}
             name={pet.displayName}
             withersCm={withersCm}
             onOpenInfo={() => setInfoOpen(true)}
@@ -585,6 +701,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
             petId={pet.id}
             favorited={pet.favorited}
           />
+          <ArPawPrints paws={paws} done={pawsDone} />
           <p aria-live="polite" className="text-center text-body text-on-dark [text-shadow:0_1px_3px_rgb(0_0_0/0.6)]">
             {hint}
           </p>
@@ -631,7 +748,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                 onWag={wagReaction}
                 wagDisabled={!loaded || arLocked || pose !== 'stand'}
                 walk={walkButton}
-                idleHint={hasCommands && !arLocked ? AR_TEXT.holdHint : undefined}
+                highlight={nextPawId && !arLocked ? (PAW_BUTTON[nextPawId] ?? null) : null}
               />
             </>
           )}
@@ -665,6 +782,17 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
             onResetFloor={showFloorReset ? placement.resetFloor : null}
           />
         )}
+        {card && (
+          <ArFinishCard
+            mode={card}
+            name={pet.kindName}
+            careName={pet.careName}
+            careTel={pet.careTel}
+            petId={pet.id}
+            favorited={pet.favorited}
+            onClose={card === 'exit' ? onBack : () => setCard(null)}
+          />
+        )}
         <HoldRing at={dogHold.press} durationMs={LONG_PRESS_MS} />
       </model-viewer>
 
@@ -677,7 +805,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           loaded={loaded}
           canAr={canAr}
           onStart={startAr}
-          onPreview={() => setShowGuide(false)}
+          onPreview={startPreview}
         />
       )}
     </div>

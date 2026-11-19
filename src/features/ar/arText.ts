@@ -21,10 +21,58 @@ export const AR_TEXT = {
   noArDesktop: ' 휴대폰으로 열면 우리 집 바닥에 놓을 수 있어요.',
   arFailed: 'AR을 시작하지 못했어요. 화면 안 3D로 보여 드릴게요.',
   stuck: '잘 안 되면 AR을 닫았다가 다시 열어 주세요',
-  /** 마이크 옆(말풍선 자리) 흐린 안내. 2단계 발도장 안내로 바뀐다 */
-  holdHint: '유기견을 꾹 누르면 빵!',
   disclaimer: '동작은 예시예요. 실제 성격은 보호소에 확인해 주세요.',
+  pawList: '해 본 것',
+  pawDone: '했어요',
+  pawTodo: '아직이에요',
+  favoriteDone: '찜했어요',
+  callShelter: '보호소 전화',
+  keepWatching: '계속 보기',
+  leave: '나가기',
 } as const
+
+// ── 한국어 조사: 앞 글자 받침에 따라 (이에요/예요, 과/와, 은/는) ──
+
+/** 받침이 있는 숫자 (일·삼·육·칠·팔·영) */
+const DIGIT_BATCHIM = new Set(['0', '1', '3', '6', '7', '8'])
+
+export function hasBatchim(word: string) {
+  const last = word.trim().at(-1) ?? ''
+  const code = last.charCodeAt(0) - 0xac00
+  if (code >= 0 && code <= 11171) return code % 28 !== 0
+  return DIGIT_BATCHIM.has(last)
+}
+
+/** josa('진도견', '이에요', '예요') → '진도견이에요' */
+export const josa = (word: string, withBatchim: string, without: string) => word + (hasBatchim(word) ? withBatchim : without)
+
+// ── 등장 연출과 마무리 카드 ──
+
+/** 처음 놓았을 때 위 안내 자리에 보이는 시간 (ms, 인사·체고 비교 각각) */
+export const INTRO_STEP_MS = 2000
+
+/**
+ * 체고 비교 (어른 기준 높이). 앞에서부터 maxCm 이하인 첫 줄. 경계는 기준 높이 사이쯤:
+ * 발목(~10cm)·무릎(~50cm)·허벅지(~70cm)·허리(~100cm). 작은 개(21~28cm)는 발목, 진도(50)·리트리버(59)는 무릎
+ */
+export const HEIGHT_REFERENCE: readonly { maxCm: number; text: string }[] = [
+  { maxCm: 30, text: '어른 발목 높이쯤' },
+  { maxCm: 60, text: '어른 무릎 높이쯤' },
+  { maxCm: 85, text: '어른 허벅지 높이쯤' },
+  { maxCm: Infinity, text: '어른 허리 높이쯤' },
+]
+
+export const heightPhrase = (withersCm: number) => HEIGHT_REFERENCE.find((row) => withersCm <= row.maxCm)!.text
+
+export const INTRO_TEXT = {
+  hello: (name: string) => `안녕하세요, ${josa(name, '이에요', '예요')}`,
+  height: (withersCm: number) => `체고 ${withersCm}cm · ${josa(heightPhrase(withersCm), '이에요', '예요')}`,
+}
+
+export const FINISH_TEXT = {
+  title: (name: string) => `${josa(name, '과', '와')} 친해졌어요`,
+  body: (name: string, shelter: string) => `실제 ${josa(name, '은', '는')} ${shelter}에서 기다리고 있어요`,
+}
 
 /** 정보 시트 줄 이름 */
 export const INFO_LABEL = {
@@ -67,17 +115,18 @@ export const REACTION_MS = 1200
 
 /**
  * 위 안내 한 줄. 앞에서부터 처음 있는 것을 보인다:
- * 배치 전 안내 > 너무 가까워요 > 산책 문구 > 따라보기 3초 문구 > 발도장 다음 할 일 > 지금 자세
+ * 배치 전 안내 > 너무 가까워요 > 산책 문구 > 등장 인사·체고 비교(처음 놓은 4초) > 따라보기 3초 문구 > 발도장 다음 할 일 > 지금 자세
  */
 export interface HintSources {
   placement: string | null
   near: string | null
   walk: string | null
+  intro?: string | null
   follow: string | null
   paw?: string | null
   pose: string
 }
 
-export function pickHint({ placement, near, walk, follow, paw, pose }: HintSources): string {
-  return placement ?? near ?? walk ?? follow ?? paw ?? pose
+export function pickHint({ placement, near, walk, intro, follow, paw, pose }: HintSources): string {
+  return placement ?? near ?? walk ?? intro ?? follow ?? paw ?? pose
 }

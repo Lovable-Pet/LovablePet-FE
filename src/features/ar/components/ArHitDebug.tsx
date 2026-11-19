@@ -77,8 +77,8 @@ export function ArHitDebug({
       onClick={() => setCollapsed((value) => !value)}
       className={cn(
         'pointer-events-auto absolute left-2 max-w-[calc(100%-16px)] rounded-md bg-black/65 px-2 py-1.5 text-left font-mono text-[10px] leading-snug whitespace-pre-wrap text-lime-300',
-        // 접으면 위쪽 안내 문구 밑으로 (개·그림자를 가리지 않게)
-        collapsed ? 'top-[calc(108px+env(safe-area-inset-top))]' : 'top-[38%]',
+        // 접으면 위쪽 안내 문구 밑으로 (개·그림자를 가리지 않게). ArPage 가 오버레이보다 앞(아래)에 둬 버튼·트레이가 늘 위에 온다
+        collapsed ? 'top-[calc(132px+env(safe-area-inset-top))]' : 'top-[38%]',
       )}
     >
       {collapsed ? (

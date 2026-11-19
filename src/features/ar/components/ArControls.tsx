@@ -37,7 +37,7 @@ export function ArControls({
   onWag,
   wagDisabled,
   walk,
-  idleHint,
+  highlight = null,
 }: {
   hasCommands: boolean
   /** 음성 인식이 없으면 null (버튼을 뺀다) */
@@ -55,29 +55,23 @@ export function ArControls({
   wagDisabled: boolean
   /** 걷기를 못 하는 개·화면 안 3D 는 null */
   walk: { onStart: () => void; disabled: boolean } | null
-  /** 말풍선이 없을 때 흐린 한 줄 */
-  idleHint?: string
+  /** 발도장 다음 할 일이 이 버튼이면 둘레를 약하게 강조한다 */
+  highlight?: 'talk' | 'walk' | null
 }) {
   const bubble = talk?.listening ? (talk.heard ? `“${talk.heard}”` : '듣고 있어요…') : talk?.flash?.text
 
   return (
     <div className="flex flex-col items-center gap-3">
-      <div className="flex min-h-8 w-full flex-col items-center justify-center text-center">
-        <p aria-live="polite" className="max-w-full">
-          {bubble && (
-            <span
-              key={talk?.listening ? 'listening' : talk?.flash?.id}
-              className="inline-block max-w-full animate-toast-in rounded-2xl bg-black/55 px-3 py-1.5 text-label text-white [overflow-wrap:anywhere]"
-            >
-              {bubble}
-            </span>
-          )}
-        </p>
-        {/* 말풍선이 없을 때만. 바뀔 때마다 읽히지 않게 aria-live 밖에 둔다 */}
-        {!bubble && idleHint && (
-          <p className="text-label text-on-dark-secondary [text-shadow:0_1px_3px_rgb(0_0_0/0.6)]">{idleHint}</p>
+      <p aria-live="polite" className="flex min-h-8 max-w-full items-center justify-center text-center">
+        {bubble && (
+          <span
+            key={talk?.listening ? 'listening' : talk?.flash?.id}
+            className="inline-block max-w-full animate-toast-in rounded-2xl bg-black/55 px-3 py-1.5 text-label text-white [overflow-wrap:anywhere]"
+          >
+            {bubble}
+          </span>
         )}
-      </div>
+      </p>
 
       {hasCommands && trayOpen && (
         <div
@@ -129,6 +123,7 @@ export function ArControls({
             onClick={talk.toggle}
             disabled={talkDisabled}
             listening={talk.listening}
+            pulse={highlight === 'talk'}
           />
         )}
         {walk && (
@@ -137,6 +132,7 @@ export function ArControls({
             icon={<Footprints className="size-6" strokeWidth={2} aria-hidden />}
             onClick={walk.onStart}
             disabled={walk.disabled}
+            pulse={highlight === 'walk'}
           />
         )}
       </div>
@@ -153,6 +149,7 @@ function RoundButton({
   pressed,
   controls,
   listening = false,
+  pulse = false,
 }: {
   label: string
   icon: ReactNode
@@ -164,6 +161,8 @@ function RoundButton({
   controls?: string
   /** 말 걸기: 듣는 중 */
   listening?: boolean
+  /** 다음 할 일 (둘레 약하게 강조, '동작 줄이기'면 끔) */
+  pulse?: boolean
 }) {
   return (
     <button
@@ -180,7 +179,8 @@ function RoundButton({
           'relative flex items-center justify-center rounded-full transition group-active:scale-97',
           big ? 'size-18' : 'size-14',
           big || pressed || listening ? 'bg-measure text-ink' : 'bg-black/55 text-white',
-          big && 'shadow-[0_2px_10px_rgb(0_0_0/0.35)]',
+          big && !pulse && 'shadow-[0_2px_10px_rgb(0_0_0/0.35)]',
+          pulse && !disabled && 'animate-soft-pulse motion-reduce:animate-none',
         )}
       >
         {listening && <span aria-hidden className="absolute inset-0 animate-ping rounded-full bg-measure/60" />}
