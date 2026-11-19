@@ -1,0 +1,246 @@
+import type { ModelViewerElement } from '@google/model-viewer'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { ModelViewerArStage } from './modelViewerArStage'
+import {
+  PlacementController,
+  type BlockReason,
+  type PlacementDebug,
+  type PlacementNotice,
+  type PlacementPhase,
+} from './placement/placementController'
+import type { WalkHost, WalkRig } from './walk/walkStage'
+import type { GazeHost, GazeRig } from './gaze/gazeStage'
+import type { NearHost, NearRig } from './nearCamera'
+import { requestDepthWithArSessions } from './xrDepthRequest'
+import type { OccluderOptions } from './depthOcclusion'
+
+/** 개발용 가림 시험 설정 (타입만 가져와 배포 파일에는 depthOcclusion 이 들어가지 않는다) */
+export type ArOcclusionOptions = OccluderOptions
+
+export interface ArPlacement {
+  /** off: AR 밖 (화면 안 3D, 아이폰 Quick Look 포함) */
+  phase: PlacementPhase | 'off'
+  /**
+   * 사용자가 원을 보고 탭해서 놓는 흐름인지.
+   * false 면 model-viewer 기본 흐름(바닥을 찾으면 스스로 착지)이다: 내부를 못 찾았거나(버전이 바뀜) hit-test 를 못 쓸 때
+   */
+  manual: boolean
+  /** 바닥(수평면)을 한 번이라도 찾았는지 */
+  floorKnown: boolean
+  /** blocked 일 때 까닭 (occluded: 바닥 앞에 실제 물체) */
+  blockedBy: BlockReason | null
+  /** 안내를 바꿔 보일 때 (moveSteps: 한두 걸음 옆으로) */
+  notice: PlacementNotice | null
+  /** ?debug 일 때 바닥 높이·맞은 점·판정·yaw. 아니면 null */
+  debug: PlacementDebug | null
+  /** 화면 탭. 놓을 수 있을 때만 놓고 true (?debug 에서는 빨간 원을 두 번 탭하면 강제로 놓는다) */
+  place: () => boolean
+  /** 다시 놓기 */
+  replace: () => void
+  /** 바닥 다시 찾기 (?debug 버튼): 바닥 추정을 처음부터 */
+  resetFloor: () => void
+  /**
+   * 산책에 넘길 것. 직접 놓은 뒤(placed)이고 모델에 걷기 클립 3개·standing·extras.walk 가 다 있을 때만.
+   * 아이폰 Quick Look·Scene Viewer·화면 안 3D·자동 착지에서는 null
+   */
+  walkHost: WalkHost | null
+  /**
+   * 고개 바라보기에 넘길 것. 직접 놓은 뒤(placed)이고 모델에 목·머리·눈·코 뼈가 있을 때만.
+   * 아이폰 Quick Look·Scene Viewer·화면 안 3D·자동 착지에서는 null
+   */
+  gazeHost: GazeHost | null
+  /** 카메라가 개에 너무 가까울 때 (안내·흐리기). 직접 놓은 뒤(placed)만, 배포 빌드에도 */
+  nearHost: NearHost | null
+}
+
+interface PlacementState {
+  phase: PlacementPhase | 'off'
+  manual: boolean
+  floorKnown: boolean
+  blockedBy: BlockReason | null
+  notice: PlacementNotice | null
+}
+
+/** ?debug 강제 놓기: 빨간 원에서 이 시간(ms) 안에 두 번 탭 */
+const FORCE_DOUBLE_TAP_MS = 400
+
+const OFF: PlacementState = { phase: 'off', manual: false, floorKnown: false, blockedBy: null, notice: null }
+
+/**
+ * WebXR(안드로이드 Chrome) AR 에서 개를 사용자가 놓을 때까지 숨기고, 바닥 원을 보이다가 탭하면 놓는다.
+ * 아이폰 Quick Look 은 이 페이지 밖에서 열려 ar-status 가 오지 않고, 화면 안 3D 는 'off' 그대로라 바뀌는 것이 없다
+ */
+export function useArPlacement(
+  mvRef: RefObject<ModelViewerElement | null>,
+  {
+    debug,
+    occlusion = null,
+    gazeEnabled = false,
+  }: {
+    debug: boolean
+    /** 고개 바라보기를 켤지 (끄면 목·머리 뼈를 찾지도, 렌더에 끼우지도 않는다). 다음 세션부터 */
+    gazeEnabled?: boolean
+    /**
+     * 개발용 ?occlusion=1·raw: 실제 물체가 개를 가리는 시험 (깊이만 쓰는 사각형). null 이면 끔. 다음 세션부터.
+     * 배포 파일에서는 늘 꺼진다
+     */
+    occlusion?: ArOcclusionOptions | null
+  },
+): ArPlacement {
+  const [state, setState] = useState<PlacementState>(OFF)
+  const [debugInfo, setDebugInfo] = useState<PlacementDebug | null>(null)
+  const controllerRef = useRef<PlacementController | null>(null)
+  /** 이번 세션의 산책 리그 (모델에 걷기가 없으면 null) */
+  const [walk, setWalk] = useState<{ controller: PlacementController; rig: WalkRig } | null>(null)
+  /** 이번 세션의 고개 바라보기 리그 (목·머리 뼈가 없으면 null) */
+  const [gaze, setGaze] = useState<{ controller: PlacementController; rig: GazeRig } | null>(null)
+  /** 이번 세션의 가까움 리그 */
+  const [near, setNear] = useState<{ controller: PlacementController; rig: NearRig } | null>(null)
+  // 세션 중에 ?debug 를 바꾸면 다음 세션부터 적용된다
+  const debugRef = useRef(debug)
+  const occlusionRef = useRef(occlusion)
+  const gazeEnabledRef = useRef(gazeEnabled)
+  useEffect(() => {
+    debugRef.current = debug
+    occlusionRef.current = occlusion
+    gazeEnabledRef.current = gazeEnabled
+  }, [debug, occlusion, gazeEnabled])
+
+  // AR 세션을 열 때 깊이 센서도 요청한다 (이 화면에 있는 동안만)
+  useEffect(() => requestDepthWithArSessions(), [])
+
+  useEffect(() => {
+    const mv = mvRef.current
+    if (!mv) return
+
+    const stop = () => {
+      controllerRef.current?.dispose()
+      controllerRef.current = null
+      setWalk(null)
+      setGaze(null)
+      setNear(null)
+    }
+
+    /** 직접 놓기를 못 할 때: 개를 보이고 model-viewer 가 스스로 바닥에 놓게 둔다 */
+    const fallBack = () => {
+      stop()
+      setState({
+        phase: mv.getAttribute('ar-status') === 'object-placed' ? 'placed' : 'searching',
+        manual: false,
+        floorKnown: false,
+        blockedBy: null,
+        notice: null,
+      })
+    }
+
+    // ar-status 는 model-viewer 가 그 자리에서 바로 보내서, React 상태를 거치지 않고 여기서 받아야 첫 프레임 전에 개를 숨길 수 있다
+    const onStatus = (event: Event) => {
+      const status = (event as CustomEvent<{ status: string }>).detail.status
+      if (status === 'session-started') {
+        // 다시 들어온 때도 처음부터
+        stop()
+        setDebugInfo(null)
+        const stage = ModelViewerArStage.attach(mv)
+        if (!stage) {
+          fallBack()
+          return
+        }
+        const controller = new PlacementController(stage, {
+          onChange: ({ phase, floorKnown, blockedBy, notice }) =>
+            setState({ phase, manual: true, floorKnown, blockedBy, notice }),
+          onUnavailable: (reason) => {
+            if (import.meta.env.DEV) console.warn('[ar] 직접 놓기를 못 해 자동 착지로 둔다:', reason)
+            if (controllerRef.current === controller) fallBack()
+          },
+          onDebug: debugRef.current ? setDebugInfo : undefined,
+        })
+        controllerRef.current = controller
+        controller.start()
+        // 가림 시험은 개발 모드에서만 불러온다 (배포 빌드에서는 이 분기와 모듈이 빠진다)
+        if (import.meta.env.DEV && occlusionRef.current) {
+          const options = occlusionRef.current
+          void import('./depthOcclusion').then(({ DepthOccluder }) => {
+            if (controllerRef.current === controller) stage.setOccluder(new DepthOccluder(options))
+          })
+        }
+        // 목·머리 뼈 (고개 바라보기, 켰을 때만)
+        const gazeRig = gazeEnabledRef.current ? stage.createGazeRig() : null
+        if (gazeRig) setGaze({ controller, rig: gazeRig })
+        // 카메라가 너무 가까울 때 (늘 켬)
+        const nearRig = stage.createNearRig()
+        if (nearRig) setNear({ controller, rig: nearRig })
+        // 걷기 클립·extras.walk 를 읽는다 (GLB 를 다시 받아야 하면 늦게 온다)
+        void stage.createWalkRig().then((rig) => {
+          if (rig && controllerRef.current === controller) setWalk({ controller, rig })
+        })
+      } else if (status === 'object-placed') {
+        // 직접 놓기에서는 우리가 놓을 때 보내는 알림이라 무시한다. 기본 흐름에서는 착지한 것
+        if (!controllerRef.current) setState((previous) => (previous.manual ? previous : { ...previous, phase: 'placed' }))
+      } else {
+        // not-presenting, failed
+        stop()
+        setState(OFF)
+      }
+    }
+
+    mv.addEventListener('ar-status', onStatus)
+    return () => {
+      mv.removeEventListener('ar-status', onStatus)
+      stop()
+    }
+  }, [mvRef])
+
+  // ?debug 에서만: 빨간 원에서 두 번 탭하면 강제로 놓는다 (판정과 상관없이 놓인 모습을 보려고)
+  const lastBlockedTapRef = useRef(0)
+  const place = useCallback(() => {
+    const controller = controllerRef.current
+    if (!controller) return false
+    if (controller.place()) return true
+    if (!debugRef.current) return false
+    const now = performance.now()
+    if (now - lastBlockedTapRef.current < FORCE_DOUBLE_TAP_MS) {
+      lastBlockedTapRef.current = 0
+      return controller.place({ force: true })
+    }
+    lastBlockedTapRef.current = now
+    return false
+  }, [])
+  const replace = useCallback(() => controllerRef.current?.replace(), [])
+  const resetFloor = useCallback(() => controllerRef.current?.resetFloor(), [])
+
+  const placed = state.phase === 'placed' && state.manual
+  const walkHost = useMemo<WalkHost | null>(() => {
+    if (!walk || !placed) return null
+    const { controller, rig } = walk
+    return {
+      rig,
+      dogPose: () => controller.placedPose(),
+      subscribe: (listener) => controller.addPlacedFrameListener(listener),
+      dogMoved: (position, yaw) => controller.dogMoved(position, yaw),
+      // ?debug: 발자취 점은 흰 점, 개가 겨누는 점은 진한 점 (표시 원의 디버그 점과 같은 방식)
+      showPath: (path) =>
+        controller.setPlacedMarks(
+          path
+            ? [
+                ...path.points.map((point) => ({ position: { x: point.x, y: path.y, z: point.z }, strong: false })),
+                ...(path.aim ? [{ position: { x: path.aim.x, y: path.y, z: path.aim.z }, strong: true }] : []),
+              ]
+            : [],
+        ),
+    }
+  }, [walk, placed])
+
+  const gazeHost = useMemo<GazeHost | null>(() => {
+    if (!gaze || !placed) return null
+    const { controller, rig } = gaze
+    return { rig, subscribe: (listener) => controller.addPlacedFrameListener((frame) => listener(frame)) }
+  }, [gaze, placed])
+
+  const nearHost = useMemo<NearHost | null>(() => {
+    if (!near || !placed) return null
+    const { controller, rig } = near
+    return { rig, subscribe: (listener) => controller.addPlacedFrameListener((frame) => listener(frame)) }
+  }, [near, placed])
+
+  return { ...state, debug: debugInfo, place, replace, resetFloor, walkHost, gazeHost, nearHost }
+}

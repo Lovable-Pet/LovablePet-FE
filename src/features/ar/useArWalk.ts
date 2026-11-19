@@ -1,0 +1,107 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  WalkController,
+  type WalkDebug,
+  type WalkNotice,
+  type WalkPhase,
+  type WalkSnapshot,
+  type WalkTuning,
+} from './walk/walkController'
+import type { WalkHost } from './walk/walkStage'
+
+export interface ArWalk {
+  /** 산책을 시작할 수 있는지: 놓은 뒤 + 걷기 클립·extras.walk 가 있음 (안드로이드 WebXR 만) + 산책 중 아님 */
+  available: boolean
+  /** 산책 중 (명령 칩·음성·개 탭 반응을 막는다) */
+  active: boolean
+  phase: WalkPhase | null
+  /** 산책 끝을 눌러 멈추는 중 */
+  ending: boolean
+  notice: WalkNotice | null
+  /** ?debug 일 때 상태·s·v0·r0·v/v0·timeScale·거리·발자취(벗어난 거리)·예상 정지·회전. 아니면 null. 발자취 점·겨누는 점은 바닥에 찍는다 */
+  debug: WalkDebug | null
+  start: () => void
+  /** 걷는 중이면 다음 루프 끝에서 멈춘 뒤 서기로, 서 있으면 바로 끝낸다 */
+  end: () => void
+  /** 서 있는 단계에서 몸 돌리기 (고개 바라보기의 규칙). 돌기 시작했으면 true */
+  requestTurn: (reason: string) => boolean
+}
+
+const IDLE: WalkSnapshot = { phase: 'standing', ending: false, notice: null }
+
+/**
+ * AR 산책 모드. host 는 useArPlacement 의 walkHost (개를 놓은 뒤에만 있다).
+ * start 는 개가 서기 루프만 돌 때 불러야 한다 (명령·반응 중이면 걷기 클립으로 바꾸면 튄다): 화면은 DogAnimator.walk 의
+ * onReady (일어나기·예약이 끝나 서기 루프가 돌기 시작함) 에서 부른다
+ */
+export function useArWalk(
+  host: WalkHost | null,
+  { debug, tuning }: { debug: boolean; /** 개발용 ?floor·?keep·?tight·?turnspeed (다음 산책부터) */ tuning?: WalkTuning },
+): ArWalk {
+  const controllerRef = useRef<WalkController | null>(null)
+  /** 돌고 있는 산책이 받은 host. 지금 host 와 다르면(다시 놓기·AR 끝) 산책은 끝난 것이다 */
+  const ownerRef = useRef<WalkHost | null>(null)
+  const [owner, setOwner] = useState<WalkHost | null>(null)
+  const [snapshot, setSnapshot] = useState<WalkSnapshot>(IDLE)
+  const [debugInfo, setDebugInfo] = useState<WalkDebug | null>(null)
+  const debugRef = useRef(debug)
+  const tuningRef = useRef(tuning)
+  useEffect(() => {
+    debugRef.current = debug
+    tuningRef.current = tuning
+  }, [debug, tuning])
+
+  // 놓은 개가 없어지거나 바뀌면 산책을 버린다 (상태는 owner !== host 로 꺼진다)
+  useEffect(() => {
+    if (!ownerRef.current || ownerRef.current === host) return
+    controllerRef.current?.dispose()
+    controllerRef.current = null
+    ownerRef.current = null
+  }, [host])
+
+  useEffect(
+    () => () => {
+      controllerRef.current?.dispose()
+      controllerRef.current = null
+      ownerRef.current = null
+    },
+    [],
+  )
+
+  const start = useCallback(() => {
+    if (!host || controllerRef.current) return
+    const controller = new WalkController(host, {
+      onChange: setSnapshot,
+      onFinished: () => {
+        if (controllerRef.current !== controller) return
+        controllerRef.current = null
+        ownerRef.current = null
+        setOwner(null)
+      },
+      onDebug: debugRef.current ? setDebugInfo : undefined,
+      tuning: tuningRef.current,
+    })
+    controllerRef.current = controller
+    ownerRef.current = host
+    setSnapshot(IDLE)
+    setDebugInfo(null)
+    setOwner(host)
+    controller.start()
+  }, [host])
+
+  const end = useCallback(() => controllerRef.current?.end(), [])
+  const requestTurn = useCallback((reason: string) => controllerRef.current?.requestTurn(reason) ?? false, [])
+
+  const active = owner !== null && owner === host
+  return {
+    available: !!host && !active,
+    active,
+    phase: active ? snapshot.phase : null,
+    ending: active && snapshot.ending,
+    notice: active ? snapshot.notice : null,
+    debug: active ? debugInfo : null,
+    start,
+    end,
+    requestTurn,
+  }
+}
