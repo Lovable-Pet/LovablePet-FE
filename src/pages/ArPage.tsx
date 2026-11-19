@@ -22,6 +22,8 @@ import {
   nextPaw,
   PAW_BUTTON,
   PAW_HINT,
+  PAW_NEXT_DELAY_MS,
+  PAW_PRAISE,
   pawOf,
   pawsFor,
   stampPaw,
@@ -59,6 +61,7 @@ import {
 import { useVoiceCommand } from '../features/ar/useVoiceCommand'
 import { STANDING_CLIP, WALK_CLIPS } from '../features/ar/walk/walkSpec'
 import { attachPoseLayers, clipQuietEnds, type PoseLayersHandle } from '../features/ar/modelViewerArStage'
+import { HEAD_TILT_S } from '../features/ar/headTilt'
 import { useArPlacement, type ArOcclusionOptions, type ArPlacement } from '../features/ar/useArPlacement'
 import { useArWalk, type ArWalk } from '../features/ar/useArWalk'
 import { useArGaze } from '../features/ar/useArGaze'
@@ -116,10 +119,18 @@ const accepted = (result: RequestResult) => result === 'started' || result === '
 
 /** '따라보기' 토글을 누른 뒤 위 안내 문구를 보이는 시간 (ms) */
 const FOLLOW_NOTICE_MS = 3000
-/** 발도장을 다 모은 뒤 개가 쉬고 있을 때 이만큼(ms) 있다가 짖고 꼬리를 흔든다 */
-const CELEBRATE_DELAY_MS = 500
 /** 발도장이 찍힐 때 진동 (ms) */
 const PAW_VIBRATE_MS = 30
+
+/** 처음 인사 (꼬리 흔들기 한 번). heart 가 false 면 그 꼬리의 하트 말풍선만 뺀다 (onClipStart 가 greet() 안에서 바로 온다) */
+function greetDog(animator: DogAnimator | null, muteHeart: { current: boolean }, heart: boolean) {
+  muteHeart.current = !heart
+  try {
+    animator?.greet()
+  } finally {
+    muteHeart.current = false
+  }
+}
 
 /** active 가 STUCK_HINT_MS 넘게 이어졌는지 (중간에 풀리면 처음부터) */
 function useLongActive(active: boolean) {
@@ -243,8 +254,6 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const [hasCommands, setHasCommands] = useState(false)
   const [tapIsHeadTilt, setTapIsHeadTilt] = useState(false)
   const [pose, setPose] = useState<Pose>('stand')
-  /** 명령·반응을 재생하거나 기다리는 중 (산책은 서기 루프만 돌 때 켤 수 있다) */
-  const [animBusy, setAnimBusy] = useState(false)
   const [activeCommand, setActiveCommand] = useState<CommandId | null>(null)
   /** 걷기 클립(walk_start·walk·walk_stop·standing)이 다 있는지. AR 에서 '산책' 버튼 자리를 정한다 */
   const [hasWalkClips, setHasWalkClips] = useState(false)
@@ -261,14 +270,31 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   /** 찍은 발도장 (이 화면 동안만) */
   const [pawsDone, setPawsDone] = useState<ReadonlySet<PawId>>(() => new Set())
   const pawsDoneRef = useRef(pawsDone)
-  /** 발도장 찍기. 새로 찍히면 짧게 진동한다 */
+  /**
+   * 위 안내 줄이 다음 할 일을 권해도 되는지. 새 발도장이 찍히면 false (그동안 PAW_PRAISE),
+   * 개가 쉬는 상태가 되고 PAW_NEXT_DELAY_MS 가 지나면 true (아래 effect)
+   */
+  const [pawNextReady, setPawNextReady] = useState(true)
+  /** 발도장 찍기. 표시·진동은 바로, 다음 할 일 안내는 개가 쉰 뒤 */
   const stamp = useCallback((event: PawEvent) => {
     const next = stampPaw(pawsDoneRef.current, pawOf(event))
     if (next === pawsDoneRef.current) return
     pawsDoneRef.current = next
     setPawsDone(next)
+    setPawNextReady(false)
     navigator.vibrate?.(PAW_VIBRATE_MS)
   }, [])
+  /** 애니메이터가 쉬는 상태 (DogAnimator.onResting: 루프만, 명령·반응·손 줘 들기·예약·몸 돌리기 없음) */
+  const [animResting, setAnimResting] = useState(true)
+  /** 절차적 갸우뚱 (HEAD_TILT_S 동안). 시작 시각이 바뀌면 다시 잰다 */
+  const [tiltAt, setTiltAt] = useState<number | null>(null)
+  useEffect(() => {
+    if (tiltAt === null) return
+    const timer = window.setTimeout(() => setTiltAt(null), HEAD_TILT_S * 1000)
+    return () => window.clearTimeout(timer)
+  }, [tiltAt])
+  /** 인사 꼬리 흔들기의 하트를 이번만 뺀다 (?greetheart=0, greet() 안에서 바로 오는 onClipStart 하나) */
+  const muteHeartRef = useRef(false)
   /** 반응 클립이 실제로 재생될 때 (load 때 만든 애니메이터가 부른다) */
   const onReact = useCallback((source: ReactSource) => stamp({ type: 'react', source }), [stamp])
   const onReactRef = useRef(onReact)
@@ -304,7 +330,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const occlusion = useMemo(() => (import.meta.env.DEV ? readOcclusion(searchParams) : null), [searchParams])
   /**
    * 고개 바라보기: 개발 모드에서 기본 켬 (?gaze=0 끔), ?gazemax=70·?gazeup=45 한계, ?gazeon=4.5·?gazeoff=3 바라보기·딴청 평균 초,
-   * ?bodyturn=1.5 몸 돌리기 기다리는 기준 초 (뒤쪽은 그 0.4 배, 0 끔), ?gazejaw·?gazejawup 턱, ?closesit=1 가까이 앉기. 배포 빌드는 GAZE_IN_PRODUCTION (지금 끔)이고 옵션은 들어가지 않는다
+   * ?bodyturn=1.5 몸 돌리기 기다리는 기준 초 (뒤쪽은 그 0.4 배, 0 끔), ?gazejaw·?gazejawup 턱, ?closesit=0 가까이 앉기 끔. 배포 빌드는 GAZE_IN_PRODUCTION (지금 끔)이고 옵션은 들어가지 않는다
    */
   const gazeOptions = useMemo(
     () => (import.meta.env.DEV ? readGazeOptions(searchParams) : { enabled: GAZE_IN_PRODUCTION, tuning: undefined, follow: true }),
@@ -361,7 +387,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     readAnimator: () => animatorRef.current?.state ?? { pose: 'stand', busy: false },
     readWalk: () => walkStateRef.current,
     walkHost: placement.walkHost,
-    // ?closesit: 가까이 붙으면 스스로 앉고, 물러나면 일어난다 (명령 칩 표시는 바꾸지 않는다)
+    // 가까이 앉기 (기본 켬, ?closesit=0 끔): 가까이 붙으면 스스로 앉고, 물러나면 일어난다 (명령 칩 표시는 바꾸지 않는다)
     requestPose: (next) => {
       const animator = animatorRef.current
       if (!animator?.hasCommands || walkStateRef.current.active) return false
@@ -393,6 +419,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   )
   useEffect(() => {
     clipStartRef.current = (clip) => {
+      if (muteHeartRef.current) return
       const kind = REACTION_BY_CLIP[clip]
       if (kind) showReaction(kind)
     }
@@ -423,10 +450,10 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
       animatorRef.current?.dispose()
       // 새 모델은 서기 자세에서 시작한다
       setPose('stand')
-      setAnimBusy(false)
       setActiveCommand(null)
       setReserved(null)
       setWalkPrep(false)
+      setAnimResting(true)
       // 클립 사이 자세 섞기 (화면 안 3D·AR). 못 쓰면 model-viewer 크로스페이드 그대로 (빈 끝에서 끊지도 않는다)
       const poseLayers = attachPoseLayers(mv)
       poseLayersRef.current = poseLayers
@@ -434,10 +461,10 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         tapAnimation: behaviorRef.current.tapAnimation,
         playbackRate: behaviorRef.current.playbackRate,
         onPose: setPose,
-        onBusy: setAnimBusy,
         onClipStart: (clip) => clipStartRef.current(clip),
         onReact: (source) => onReactRef.current(source),
         onReserve: setReserved,
+        onResting: setAnimResting,
         poseBlend: poseLayers !== null,
         clipEnds: poseLayers ? clipQuietEnds(mv, REACTION_CLIPS) : undefined,
       })
@@ -503,7 +530,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
    */
   const showTapResult = (result: TapResult) => {
     if (result === 'tilt') {
-      poseLayersRef.current?.tiltHead()
+      if (poseLayersRef.current?.tiltHead()) setTiltAt(Date.now())
       showReaction('puzzled')
     } else if (result === 'lowerPaw') showReaction('heart')
     else if (result === 'bubble') showReaction('puzzled')
@@ -537,18 +564,23 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   /** 개 3초 누르기가 다 참: 빵 ('꾹' 발도장, 예약이어도) */
   const holdDog = () => stamp({ type: 'hold', accepted: accepted(runCommand(HOLD_COMMAND)) })
 
+  /**
+   * 개발용 ?greetheart=0: 처음 놓을 때·처음 3D 로 볼 때 인사 꼬리 흔들기의 하트를 뺀다 (위 안내 줄 인사말과 겹침, 폰에서 견주기용).
+   * 기본과 배포 빌드는 띄운다. 마무리 축하의 꼬리 하트는 그대로
+   */
+  const greetHeart = !(import.meta.env.DEV && searchParams.get('greetheart') === '0')
   /** 인사: 서 있고 꼬리 흔들기가 있으면 한 번 흔들고, 위 안내 자리에 인사 → 체고 비교 */
   const startIntro = () => {
-    animatorRef.current?.greet()
+    greetDog(animatorRef.current, muteHeartRef, greetHeart)
     setIntro('hello')
   }
   // 처음 놓는 순간 (다시 놓기 때는 안 한다)
   useEffect(() => {
     if (!dogReady || greetedRef.current.ar) return
     greetedRef.current.ar = true
-    animatorRef.current?.greet()
+    greetDog(animatorRef.current, muteHeartRef, greetHeart)
     setIntro('hello')
-  }, [dogReady])
+  }, [dogReady, greetHeart])
   /** 화면 안 3D 로 처음 볼 때도 같은 인사 (한 번) */
   const startPreview = () => {
     setShowGuide(false)
@@ -667,18 +699,31 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   useEffect(() => {
     openCardRef.current = openCard
   })
-  // 다 모으면: 개가 쉴 때(산책·명령·몸 돌리기가 끝난 뒤) 한 번 짖고 꼬리를 흔든 다음 마무리 카드
+  /**
+   * 개가 쉬는 상태: 자세 루프만 돌고 (명령·반응·손 줘 들기·예약 없음) 몸 돌리기·산책(출발 준비 포함)·절차적 갸우뚱이 아님.
+   * 발도장 다음 안내와 마무리 축하는 이 상태로 PAW_NEXT_DELAY_MS 가 지난 뒤
+   */
+  const resting = animResting && !walking && !walkPrep && !gaze.turning && tiltAt === null
   useEffect(() => {
-    if (!pawsComplete || celebrated || walking || animBusy || gaze.turning) return
+    if (pawNextReady || !resting) return
+    const timer = window.setTimeout(() => setPawNextReady(true), PAW_NEXT_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [pawNextReady, resting])
+  // 다 모으면: 마지막 동작(예약된 것까지)이 끝나고 쉰 뒤 한 번 짖고 꼬리를 흔든 다음 마무리 카드
+  useEffect(() => {
+    if (!pawsComplete || celebrated || !resting) return
     const timer = window.setTimeout(() => {
       setCelebrated(true)
       const done = animatorRef.current?.celebrate() ?? Promise.resolve()
       void done.then(() => {
         if (!cardSeenRef.current) openCardRef.current('complete')
       })
-    }, CELEBRATE_DELAY_MS)
+    }, PAW_NEXT_DELAY_MS)
     return () => window.clearTimeout(timer)
-  }, [pawsComplete, celebrated, walking, animBusy, gaze.turning])
+  }, [pawsComplete, celebrated, resting])
+  /** 다음 할 일 (개가 쉰 뒤에만 권하고 버튼도 그때 강조). 그 전에는 방금 한 것을 칭찬 */
+  const pawHint = arLocked ? null : !pawNextReady ? PAW_PRAISE : nextPawId ? PAW_HINT[nextPawId] : null
+  const pawButton = nextPawId && !arLocked && pawNextReady ? (PAW_BUTTON[nextPawId] ?? null) : null
 
   /** 위 안내 한 줄 (우선순위는 pickHint) */
   const hint = pickHint({
@@ -704,7 +749,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
             ? PUPPY_NOTICE
             : null,
     follow: followNotice ? FOLLOW_NOTICE[followNotice.on ? 'on' : 'off'] : null,
-    paw: nextPawId && !arLocked ? PAW_HINT[nextPawId] : null,
+    paw: pawHint,
     pose: hasCommands
       ? `${POSE_LABEL[pose]} · ${POSE_HINT.commands}`
       : inAr
@@ -842,7 +887,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
                 onWag={wagReaction}
                 wagDisabled={!loaded || arLocked}
                 walk={walkButton}
-                highlight={nextPawId && !arLocked ? (PAW_BUTTON[nextPawId] ?? null) : null}
+                highlight={pawButton}
               />
             </>
           )}
@@ -1101,7 +1146,7 @@ function readWalkTuning(params: URLSearchParams): WalkTuning {
  * 개발용 고개 바라보기: ?gaze=0 끔 (기본 켬) · ?gazemax (좌우 한계 °, 10–120) · ?gazeup (위 한계 °, 0–80) ·
  * ?gazeon·?gazeoff (바라보기·딴청 평균 초, 0.5–30) · ?bodyturn (몸 돌리기 기다리는 기준 초: 한계를 막 넘었을 때, 뒤쪽 120° 는 그 0.4 배, 0 이면 끔, 0–30) ·
  * ?gazejaw (위로 들었을 때 턱 남기는 비율, 0–1) · ?gazejawup (그 비율까지 줄이는 위 각 °, 1–80) ·
- * ?closesit=1 (가까이 붙으면 스스로 앉아 올려다봄, 기본 끔) · ?follow=0 ('따라보기' 꺼짐으로 시작). 없거나 숫자가 아니면 기본값
+ * ?closesit=0 (가까이 붙으면 스스로 앉아 올려다보기를 끔, 기본 켬) · ?follow=0 ('따라보기' 꺼짐으로 시작). 없거나 숫자가 아니면 기본값
  */
 function readGazeOptions(params: URLSearchParams): { enabled: boolean; tuning: GazeTuning; follow: boolean } {
   const read = numberParam(params)
@@ -1116,7 +1161,7 @@ function readGazeOptions(params: URLSearchParams): { enabled: boolean; tuning: G
       bodyTurnS: read('bodyturn', 30),
       jawKeep: read('gazejaw', 1),
       jawFullUpDeg: read('gazejawup', 80, 1),
-      closeSit: params.get('closesit') === '1',
+      closeSit: params.get('closesit') === '0' ? false : undefined,
     },
   }
 }

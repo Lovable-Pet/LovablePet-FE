@@ -149,6 +149,9 @@ export class DogAnimator {
   /** 마지막으로 끝난 1회 클립 (자세 층이 없을 때 루프로 갈 크로스페이드) */
   private lastClip: string | null = null
   private busy = false
+  /** 마지막으로 알린 resting (처음은 루프만 도는 쉬는 상태) */
+  private wasResting = true
+  private readonly onResting?: (resting: boolean) => void
   private disposed = false
   readonly hasCommands: boolean
   /** 개를 탭하면 갸우뚱하는지 (안내 문구용) */
@@ -170,6 +173,11 @@ export class DogAnimator {
       onReact?: (source: ReactSource) => void
       /** 예약이 바뀔 때 */
       onReserve?: (id: ReserveId | null) => void
+      /**
+       * 쉬는 상태(자세 루프만 돌고 명령·반응·손 줘 들기·예약·몸 돌리기가 없음)가 바뀔 때.
+       * busy 와 달리 손 줘를 들고 있는 동안도 쉬지 않는 것으로 본다 (발도장 다음 안내·마무리 축하)
+       */
+      onResting?: (resting: boolean) => void
       /** 자세 층이 클립 사이를 섞으면 true (model-viewer 크로스페이드를 끈다) */
       poseBlend?: boolean
       /** 클립의 빈 끝 (거기서 끊고 다음으로). 없으면 끝까지 */
@@ -183,6 +191,7 @@ export class DogAnimator {
     this.onClipStart = options.onClipStart
     this.onReact = options.onReact
     this.onReserve = options.onReserve
+    this.onResting = options.onResting
     this.clipEnds = options.clipEnds ?? {}
     const clips = new Set(mv.availableAnimations)
     this.hasCommands = COMMAND_CLIPS.every((clip) => clips.has(clip))
@@ -302,7 +311,9 @@ export class DogAnimator {
       const job = this.reserved
       this.setReserved(null, false)
       this.begin(job)
+      return
     }
+    this.syncBusy()
   }
 
   /** 개 탭. 무엇을 했는지 돌려준다 (tilt·lowerPaw·bubble 은 부르는 쪽이 갸우뚱·말풍선을 띄운다) */
@@ -329,10 +340,16 @@ export class DogAnimator {
     return 'clip'
   }
 
-  /** 처음 놓았을 때 인사. 서서 쉬고 있고 tail_wag 가 있을 때 한 번 */
-  greet() {
-    if (!this.idle || this.pose !== 'stand' || !this.wagClip) return
+  /** 처음 놓았을 때 인사. 서서 쉬고 있고 tail_wag 가 있을 때 한 번. 흔들었으면 true (onClipStart 는 이 안에서 바로 온다) */
+  greet(): boolean {
+    if (!this.idle || this.pose !== 'stand' || !this.wagClip) return false
     this.begin({ id: 'greet', steps: [['react', this.wagClip, 'greet']] })
+    return true
+  }
+
+  /** 쉬는 상태: 자세 루프만 돌고 명령·반응·손 줘 들기·예약·몸 돌리기가 없다 */
+  get resting() {
+    return this.idle
   }
 
   /** 음성 명령을 못 알아들었을 때. 쉬고 있으면 갸우뚱 (앉거나 엎드려 있으면 'tilt'), 아니면 말풍선만 */
@@ -443,6 +460,7 @@ export class DogAnimator {
       if (this.playing?.token !== token || this.disposed) return
       this.playing = null
       void this.start(this.loopOf(this.pose), { reset: true })
+      this.syncBusy()
     }, SHAKE_HOLD_S * 1000)
     const job = this.job
     this.job = null
@@ -497,9 +515,15 @@ export class DogAnimator {
 
   private syncBusy() {
     const busy = this.job !== null || this.reserved !== null
-    if (busy === this.busy) return
-    this.busy = busy
-    if (!this.disposed) this.onBusy?.(busy)
+    if (busy !== this.busy) {
+      this.busy = busy
+      if (!this.disposed) this.onBusy?.(busy)
+    }
+    const resting = this.idle
+    if (resting !== this.wasResting) {
+      this.wasResting = resting
+      if (!this.disposed) this.onResting?.(resting)
+    }
   }
 
   private setPose(pose: Pose) {

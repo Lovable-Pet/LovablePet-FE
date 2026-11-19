@@ -40,7 +40,7 @@ export interface ArGazeOptions {
   readWalk: () => { active: boolean; standing: boolean; requestTurn: (reason: string) => boolean }
   /** 산책 밖 몸 돌리기에 쓸 리그 (회전 클립이 없으면 고개만) */
   walkHost: WalkHost | null
-  /** 가까이 앉기·일어나기 (?closesit). 받아서 시작했으면 true */
+  /** 가까이 앉기·일어나기 (기본 켬, ?closesit=0 끔). 받아서 시작했으면 true */
   requestPose?: (pose: 'sit' | 'stand') => boolean
   /** 몸 돌려 따라보기 (끄면 고개만: 몸 돌리기·가까이 앉기·일어나기 없음). 꺼짐 → 켜짐이면 한계 밖일 때 바로 돈다 */
   follow: boolean

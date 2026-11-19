@@ -25,6 +25,14 @@ export const PAW_HINT: Record<PawId, string> = {
   walk: '산책을 눌러 같이 걸어 보세요',
 }
 
+/**
+ * 발도장을 찍은 뒤 다음 할 일 안내(문구·버튼 강조)는 개가 그 동작을 마치고 쉬는 상태가 된 뒤 이만큼(ms) 지나서 바꾼다.
+ * 쉬는 상태 = 자세 루프만 돌고 예약·자세 전환·몸 돌리기·손 줘 들기·산책(출발 준비 포함)이 아님. 마무리 축하도 같은 때
+ */
+export const PAW_NEXT_DELAY_MS = 800
+/** 그 사이 안내 줄 (방금 한 것을 칭찬) */
+export const PAW_PRAISE = '잘했어요!'
+
 /** 다음 할 일이 아래 버튼이면 그 버튼을 살짝 강조한다 */
 export const PAW_BUTTON: Partial<Record<PawId, 'talk' | 'walk'>> = { talk: 'talk', walk: 'walk' }
 

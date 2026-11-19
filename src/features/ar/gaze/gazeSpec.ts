@@ -166,7 +166,8 @@ export function gazeJaw(template: string | null | undefined): GazeJaw {
   return { ...GAZE_JAW, ...(template ? GAZE_JAW_BY_TEMPLATE[template] : undefined) }
 }
 
-// ── 가까이 붙으면 앉아서 올려다보기 (개발용 ?closesit=1, 기본 끔) ──
+// ── 가까이 붙으면 앉아서 올려다보기 (기본 켬, 개발용 ?closesit=0 으로 끔) ──
+// 바라보기 컨트롤러(GazeController)가 거리를 재므로 바라보기가 꺼져 있으면 (GAZE_IN_PRODUCTION false 인 배포 빌드, ?gaze=0) 같이 꺼진다
 /**
  * 서 있는 개(서기 루프만 돌 때) 발밑에서 사용자가 수평 SIT_M 안에 SIT_S 넘게 있으면 스스로 앉는다.
  * 스스로 앉았을 때만 사용자가 STAND_M 밖으로 STAND_S 넘게 물러나면 일어난다. 명령·산책·회전 중에는 안 한다.
@@ -187,12 +188,13 @@ export function closeStandDistance(bodyLength: number | null | undefined): numbe
   const ratio = bodyLength && bodyLength > 0 ? Math.min(1, Math.max(CLOSE_STAND_MIN_SCALE, bodyLength / CLOSE_STAND_REF_LENGTH_M)) : 1
   return CLOSE_SIT_M + (CLOSE_STAND_M - CLOSE_SIT_M) * ratio
 }
-export const CLOSE_SIT_DEFAULT = false
+/** 폰(진도·리트리버)에서 자연스러워 기본으로 켠다 */
+export const CLOSE_SIT_DEFAULT = true
 
 /** 배포 빌드에서 켤지. 폰 확인 뒤 정한다 (개발 모드는 ?gaze=0 이 아니면 켬) */
 export const GAZE_IN_PRODUCTION = false
 
-/** 개발용 (?gazemax·?gazeup·?gazeon·?gazeoff·?bodyturn·?gazejaw·?gazejawup·?closesit). 없으면 위 기본값 */
+/** 개발용 (?gazemax·?gazeup·?gazeon·?gazeoff·?bodyturn·?gazejaw·?gazejawup·?closesit=0). 없으면 위 기본값 */
 export interface GazeTuning {
   yawDeg?: number
   upDeg?: number

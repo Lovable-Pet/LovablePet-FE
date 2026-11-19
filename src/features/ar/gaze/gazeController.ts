@@ -156,7 +156,7 @@ export interface GazeDebug {
   bodyTurnBlock: string | null
   /** 가까움: 머리 위 안정화 · 앉음 대기 · 스스로 앉음 등. 없으면 null */
   near: string | null
-  /** 앉거나 엎드린 까닭 (스스로 = ?closesit, 명령). 서 있으면 null */
+  /** 앉거나 엎드린 까닭 (스스로 = 가까이 앉기, 명령). 서 있으면 null */
   sitReason: '스스로' | '명령' | null
   /** 지금 자세 (sitReason 표시용) */
   pose: GazePose
@@ -186,7 +186,7 @@ export interface GazeControllerOptions {
   tuning?: GazeTuning
   /** 몸 돌리기 요청. 받아서 돌기 시작했으면 true. need = 개 정면에서 사용자까지 각 (rad, + 왼쪽) */
   onTurn?: (need: number, reason: string, clip: string | null) => boolean
-  /** 가까이 붙으면 앉기·물러나면 일어나기 요청 (?closesit). 받아서 시작했으면 true */
+  /** 가까이 붙으면 앉기·물러나면 일어나기 요청 (가까이 앉기). 받아서 시작했으면 true */
   onPose?: (pose: 'sit' | 'stand', reason: string) => boolean
   /** 몸 돌려 따라보기 처음 상태 (기본 켜짐). 바꾸기는 setFollow */
   follow?: boolean
@@ -236,7 +236,7 @@ const JAW_SNAP = 1e-3
  * - 몸 돌리기: 서기 루프만 돌 때 (명령 없음·서 있음) 사용자가 좌우 한계 밖이면 기다렸다가 onTurn 으로 제자리 회전을 맡긴다.
  *   기다리는 시간은 몸 기준 사용자 각 70° 이하 1.5초 ~ 120° 이상 0.6초 (선형, 진행률로 센다). 0.5초 안에 잠깐 범위 안으로
  *   들어왔다 나가면 이어서 센다. 회전 클립이 끝나면 2초 동안은 돌지 않는다 (기다리는 시간은 센다)
- * - 가까이 앉기 (?closesit): 서 있는 개 0.6 m 안에 2초 → 스스로 앉아 올려다봄, 스스로 앉았으면 1 m 밖 2초 → 일어남
+ * - 가까이 앉기 (기본 켬, 개발용 ?closesit=0 끔): 서 있는 개 0.6 m 안에 2초 → 스스로 앉아 올려다봄, 스스로 앉았으면 1 m 밖 2초 → 일어남
  *   (일어나는 거리는 몸길이에 맞춘다: 1 m 넘는 개 1 m, 작은 개 0.8 m 쯤, closeStandDistance)
  * - 따라보기 (setFollow, 기본 켜짐): 끄면 몸 돌리기·가까이 앉기·일어나기를 하지 않고 고개만 (한계 밖이면 1.5초 뒤 포기).
  *   켜는 순간 한계 밖이면 기다림 없이 바로 돌기를 시도한다
@@ -900,7 +900,7 @@ export class GazeController {
     if (this.turnRequestedAt !== null) return { reason: '도는 중', hard: false }
     if (!this.followOn) return hard('따라보기 꺼짐')
     if (!this.options.onTurn || !input.canTurn) return hard('회전 클립 없음·돌 수 없는 단계')
-    // 스스로 앉은 개(?closesit)는 일어나서 돈다. 명령으로 앉거나 엎드린 개는 고개만
+    // 스스로 앉은 개(가까이 앉기)는 일어나서 돈다. 명령으로 앉거나 엎드린 개는 고개만
     const selfSit = this.selfSitTurnable(input, sample)
     if (input.pose !== 'stand' && !selfSit) return hard(input.pose === 'sit' ? '앉아 있음 (명령)' : '엎드려 있음')
     if (input.busy || (sample.clip !== 'standing' && !selfSit)) return hard('동작 중')
@@ -981,7 +981,7 @@ export class GazeController {
     this.standWaitSweep = false
   }
 
-  /** 가까이 앉기 (?closesit). 상태 한 줄 (없으면 null) */
+  /** 가까이 앉기. 상태 한 줄 (없으면 null) */
   private closeSitStep(input: GazeInput, sample: GazeSample, dt: number): string | null {
     const request = this.options.onPose
     if (!this.closeSit || !request) return null
