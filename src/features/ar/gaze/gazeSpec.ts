@@ -27,10 +27,13 @@ export function gazeLimits(template: string | null | undefined): GazeLimits {
 /** 각: 임계 감쇠 시간상수 (s) · 최고 각속도 (°/s) */
 export const GAZE_ANGLE_TAU_S = 0.25
 export const GAZE_MAX_SPEED_DEG = 180
-/** weight 를 올리는 시간 (바라보기 시작) · 내리는 시간 (딴청·한계 밖 포기) · 동작 세기 0 인 클립에서 푸는 시간 (s). 모두 smoothstep */
+/**
+ * weight 를 올리는 시간 (바라보기 시작) · 내리는 시간 (딴청·한계 밖 포기) · 동작 세기 0 인 클립에서 푸는 시간 (s). 모두 smoothstep.
+ * 푸는 시간은 클립 사이 자세 섞기의 가장 짧은 길이 (../poseBlend.ts POSE_BLEND_MIN_S) 와 같게: 고개가 몸보다 먼저 홱 돌아가지 않게
+ */
 export const GAZE_WEIGHT_IN_S = 0.4
 export const GAZE_WEIGHT_OUT_S = 0.6
-export const GAZE_WEIGHT_RELEASE_S = 0.2
+export const GAZE_WEIGHT_RELEASE_S = 0.3
 /** 바라보기를 시작할 때 늦추는 시간 (s, 이 사이 무작위) */
 export const GAZE_REACTION_S: readonly [number, number] = [0.2, 0.4]
 
@@ -86,7 +89,8 @@ export const GAZE_STUCK_S = 1
 
 /**
  * 동작별 세기 (클립 이름). 없는 클립은 0 (돌리지 않는다). 0 인 클립으로 바뀌면 GAZE_WEIGHT_RELEASE_S 안에 풀고
- * 루프로 돌아오면 다시 본다. 회전 클립(turn_*)도 0
+ * 루프로 돌아오면 다시 본다 (풀기 전에 보고 있었으면 반응 늦춤 없이). 회전 클립(turn_*)도 0.
+ * 자세 전환은 0 으로 끄지 않고 좌우만 (GAZE_YAW_ONLY_CLIPS) 절반: 앉고 서는 동안에도 사용자 쪽을 보고 있다
  */
 export const GAZE_CLIP_WEIGHT: Readonly<Record<string, number>> = {
   standing: 1,
@@ -101,10 +105,10 @@ export const GAZE_CLIP_WEIGHT: Readonly<Record<string, number>> = {
   bark: 0,
   play_dead: 0,
   rollover: 0,
-  sit_down: 0,
-  stand_up: 0,
-  lie_down: 0,
-  get_up: 0,
+  sit_down: 0.5,
+  stand_up: 0.5,
+  lie_down: 0.5,
+  get_up: 0.5,
   // 산책: 걷는 중에는 가끔만 조금
   walk: 0.3,
   walk_start: 0,
@@ -113,6 +117,15 @@ export const GAZE_CLIP_WEIGHT: Readonly<Record<string, number>> = {
 /** 루프 클립. 1회 클립에서 루프로 돌아오면 (명령·반응·walk_stop·회전이 끝남) 바로 바라본다 */
 export const GAZE_LOOP_CLIPS: ReadonlySet<string> = new Set(['standing', 'sitting', 'lying', 'idle', 'walk'])
 export const isTurnClip = (clip: string | null) => !!clip && clip.startsWith('turn_')
+/**
+ * 좌우만 보는 클립 (자세 전환). 몸이 기울며 내려가고 올라가서 위아래는 클립대로 두고 좌우만 더한다.
+ * 위아래 따라가기는 GAZE_PITCH_FOLLOW_S 동안 smoothstep 으로 빼고 넣는다
+ */
+export const GAZE_YAW_ONLY_CLIPS: ReadonlySet<string> = new Set(['sit_down', 'stand_up', 'lie_down', 'get_up'])
+export const GAZE_PITCH_FOLLOW_S = 0.3
+/** 몸이 움직이는 클립 (세기 0 이거나 자세 전환): 머리 위 안정화를 풀고, 그동안은 켜지 않는다 */
+export const gazeClipMovesBody = (clip: string | null) =>
+  !clip || !((GAZE_CLIP_WEIGHT[clip] ?? 0) > 0) || GAZE_YAW_ONLY_CLIPS.has(clip)
 
 // ── 몸 돌리기 (서 있을 때, 제자리 회전 클립이 있을 때만) ──
 /**

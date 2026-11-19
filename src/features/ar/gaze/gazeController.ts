@@ -27,6 +27,7 @@ import {
   GAZE_OVERHEAD_ENTER_M,
   GAZE_OVERHEAD_EXIT_M,
   GAZE_OVERHEAD_RELEASE_S,
+  GAZE_PITCH_FOLLOW_S,
   GAZE_REACTION_S,
   GAZE_SPEED_TAU_S,
   GAZE_SPREAD,
@@ -43,7 +44,9 @@ import {
   GAZE_WEIGHT_IN_S,
   GAZE_WEIGHT_OUT_S,
   GAZE_WEIGHT_RELEASE_S,
+  GAZE_YAW_ONLY_CLIPS,
   closeStandDistance,
+  gazeClipMovesBody,
   gazeJaw,
   gazeLimits,
   isTurnClip,
@@ -106,6 +109,11 @@ export interface GazeCommand {
    * weight 0 이거나 수평·아래면 정확히 1
    */
   jaw: number
+  /**
+   * 위아래를 따라가는 정도 0~1. 1 (또는 없음) 이면 pitch 까지, 0 이면 좌우만 (위아래는 클립대로).
+   * 자세 전환 클립(GAZE_YAW_ONLY_CLIPS) 동안 0 으로 내려간다
+   */
+  pitchFollow?: number
 }
 
 /** 바로 바라보는 계기 */
@@ -219,7 +227,8 @@ const JAW_SNAP = 1e-3
  *   클립(회전·자세 전환)이 시작되거나 사용자 쪽이 고정값에서 30° 넘게 옮겨 가면 0.6초 동안 풀어 사용자 쪽으로, 세기 0 인 클립
  *   동안은 켜지 않는다. 고정된 동안 한계 밖·몸 돌리기 시간은 멈춘다
  * - 사용자가 거의 바로 뒤 (150° 밖) 면 좌우 한계 중 지금 쪽을 그대로 둔다 (뒤를 가로질러도 +70°↔−70° 로 휙 넘어가지 않게)
- * - 세기는 클립별 (GAZE_CLIP_WEIGHT): 0 인 클립(짖기·전환·walk_start·회전 등)이면 0.2초 안에 풀고 끝나면 다시 본다
+ * - 세기는 클립별 (GAZE_CLIP_WEIGHT): 0 인 클립(짖기·빵·구르기·walk_start·회전 등)이면 0.3초 안에 풀고 끝나면 다시 본다.
+ *   풀기 전에 보고 있었으면 끝난 뒤 반응 늦춤 없이 바로. 자세 전환(앉기·일어나기·엎드리기)은 좌우만 절반 (위아래는 클립대로)
  * - 몸 돌리기: 서기 루프만 돌 때 (명령 없음·서 있음) 사용자가 좌우 한계 밖이면 기다렸다가 onTurn 으로 제자리 회전을 맡긴다.
  *   기다리는 시간은 몸 기준 사용자 각 70° 이하 1.5초 ~ 120° 이상 0.6초 (선형, 진행률로 센다). 0.5초 안에 잠깐 범위 안으로
  *   들어왔다 나가면 이어서 센다. 회전 클립이 끝나면 2초 동안은 돌지 않는다 (기다리는 시간은 센다)
@@ -264,6 +273,13 @@ export class GazeController {
   private angleReady = false
   private weight = 0
   private ramp: { from: number; to: number; start: number; duration: number } | null = null
+  /** 위아래 따라가기 (자세 전환 동안 0) · 그 변화 */
+  private pitchFollow = 1
+  private pitchRamp: { from: number; to: number; start: number } | null = null
+  /** 루프에서 1회 클립으로 넘어갈 때 보고 있었는지 (돌아오면 반응 늦춤 없이 바로 본다) */
+  private lookingAtClipStart = false
+  /** 이번 프레임 계기는 늦춤 없이 바라본다 */
+  private resumeNow = false
   private speed = 0
   private moving = false
   private stillFor = 0
@@ -417,6 +433,10 @@ export class GazeController {
     this.lastTime = null
     this.weight = 0
     this.ramp = null
+    this.pitchFollow = 1
+    this.pitchRamp = null
+    this.lookingAtClipStart = false
+    this.resumeNow = false
     this.angleReady = false
     this.mode = 'away'
     this.modeUntil = 0
@@ -472,6 +492,7 @@ export class GazeController {
     const clipWeight = sample.clip ? (GAZE_CLIP_WEIGHT[sample.clip] ?? 0) : 0
     const looking = this.mode === 'look' && now >= this.lookFrom && !this.gaveUp && this.rawYaw !== null
     this.follow(looking ? clipWeight : 0, clipWeight === 0)
+    this.followPitch(sample.clip !== null && GAZE_YAW_ONLY_CLIPS.has(sample.clip) ? 0 : 1)
 
     const turn = turnedAfterStand
       ? { waitFor: null, angle: null, wait: null, grace: null, block: '일어나서 도는 중', started: true }
@@ -517,7 +538,23 @@ export class GazeController {
       lastTrigger: this.lastTrigger,
       still: this.stillFor > GAZE_STILL_LONG_S,
     }
-    return this.angleReady ? { yaw: this.yaw, pitch: this.pitch, weight: this.weight, jaw } : null
+    if (!this.angleReady) return null
+    const command: GazeCommand = { yaw: this.yaw, pitch: this.pitch, weight: this.weight, jaw }
+    if (this.pitchFollow < 1) command.pitchFollow = this.pitchFollow
+    return command
+  }
+
+  /** 위아래 따라가기를 목표로 smoothstep (GAZE_PITCH_FOLLOW_S) */
+  private followPitch(target: number) {
+    const { now } = this
+    if (!this.pitchRamp || this.pitchRamp.to !== target) {
+      if (this.pitchRamp === null && this.pitchFollow === target) return
+      this.pitchRamp = { from: this.pitchFollow, to: target, start: now }
+    }
+    const { from, to, start } = this.pitchRamp
+    const progress = clamp((now - start) / GAZE_PITCH_FOLLOW_S, 0, 1)
+    this.pitchFollow = progress >= 1 ? to : from + (to - from) * smoothstep(progress)
+    if (progress >= 1) this.pitchRamp = null
   }
 
   /** 턱 남기는 비율: 대기 루프에서 1 − weight × 위로 든 정도 × (1 − keep). 수평·아래·weight 0 이면 정확히 1 */
@@ -556,11 +593,20 @@ export class GazeController {
     }
   }
 
-  /** 1회 동작이 루프로 돌아오면 계기, 회전 클립이 끝나면 몸 돌리기 쉼 */
+  /**
+   * 1회 동작이 루프로 돌아오면 계기 (루프를 떠날 때 보고 있었으면 반응 늦춤 없이), 회전 클립이 끝나면 몸 돌리기 쉼
+   */
   private watchClip(clip: string | null) {
     const last = this.lastClip
     if (clip === last) return
-    if (last !== null && !GAZE_LOOP_CLIPS.has(last) && clip !== null && GAZE_LOOP_CLIPS.has(clip)) this.trigger('clipEnd')
+    if (last !== null && GAZE_LOOP_CLIPS.has(last) && clip !== null && !GAZE_LOOP_CLIPS.has(clip)) {
+      this.lookingAtClipStart = this.mode === 'look' && this.now >= this.lookFrom && !this.gaveUp
+    }
+    if (last !== null && !GAZE_LOOP_CLIPS.has(last) && clip !== null && GAZE_LOOP_CLIPS.has(clip)) {
+      this.trigger('clipEnd')
+      this.resumeNow = this.lookingAtClipStart
+      this.lookingAtClipStart = false
+    }
     if (isTurnClip(last) && !isTurnClip(clip)) {
       this.turnCooldownUntil = this.now + BODY_TURN_COOLDOWN_S
       this.outFor = 0
@@ -602,7 +648,7 @@ export class GazeController {
     }
     // 머리 위 가까이: 좌우 목표를 고정 (폰을 조금 흔들어도 고개가 휙휙 돌지 않게). 세기 0 인 클립(회전·자세 전환 등)은 몸이 움직여
     // 고정한 방향이 뜻을 잃으니 풀고, 그동안은 켜지 않는다 (끝나면 새 몸 기준으로 다시 판단)
-    const bodyMoving = !(sample.clip && (GAZE_CLIP_WEIGHT[sample.clip] ?? 0) > 0)
+    const bodyMoving = gazeClipMovesBody(sample.clip)
     if (this.overhead !== 'on' && !bodyMoving && input.tracking && horizontal < GAZE_OVERHEAD_ENTER_M) {
       this.overhead = 'on'
       // 그 순간의 목표 (머리 위로 들어오는 길의 사용자 쪽). 고개는 거기까지 부드럽게 간 뒤 멈춘다
@@ -689,11 +735,17 @@ export class GazeController {
   /** 계기·시간으로 보기·딴청을 바꾼다 */
   private schedule(input: GazeInput) {
     const { now } = this
+    const resume = this.resumeNow
+    this.resumeNow = false
     if (this.pending.length) {
       this.lastTrigger = this.pending[this.pending.length - 1]
       this.pending.length = 0
-      if (this.mode === 'away') this.startLook(input)
-      else this.modeUntil = Math.max(this.modeUntil, Math.max(now, this.lookFrom) + GAZE_TRIGGER_HOLD_S)
+      if (this.mode === 'away') this.startLook(input, resume)
+      else {
+        // 동작 전에 보고 있었으면 아직 늦추는 중이라도 바로
+        if (resume) this.lookFrom = Math.min(this.lookFrom, now)
+        this.modeUntil = Math.max(this.modeUntil, Math.max(now, this.lookFrom) + GAZE_TRIGGER_HOLD_S)
+      }
     }
     if (now < this.modeUntil) return
     if (this.mode === 'look') {
@@ -704,10 +756,11 @@ export class GazeController {
     }
   }
 
-  private startLook(input: GazeInput) {
+  /** 바라보기 시작. immediate 면 반응 늦춤 없이 (동작 전에 보고 있었음) */
+  private startLook(input: GazeInput, immediate = false) {
     const [min, max] = GAZE_REACTION_S
     this.mode = 'look'
-    this.lookFrom = this.now + min + (max - min) * this.random()
+    this.lookFrom = immediate ? this.now : this.now + min + (max - min) * this.random()
     this.modeUntil = this.lookFrom + this.duration(input, 'look')
   }
 

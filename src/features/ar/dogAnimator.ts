@@ -28,9 +28,9 @@ const HEAD_TILT = 'head_tilt'
 /** 루프의 첫 프레임에서 정확히 끝나는 클립. 이어지는 루프로 바로 넘긴다 (섞으면 시작 자세가 비친다) */
 const ENDS_ON_LOOP = new Set([...Object.keys(MOVES), 'rollover', HEAD_TILT])
 /**
- * 루프끼리 바꿀 때의 크로스페이드. 1회 클립이 끝나면 model-viewer 가 paused 가 되고, 다음 재생에서
- * stopAllAction 을 먼저 불러(ModelScene.playAnimation) 1회 클립 뒤에는 실제로는 섞이지 않고 바로 넘어간다.
- * 팀원 미리보기 페이지도 같다
+ * 자세 섞기(../modelViewerArStage.ts 의 자세 층)를 못 쓸 때만 쓰는 model-viewer 크로스페이드 (루프끼리 바꿀 때).
+ * 1회 클립이 끝나면 model-viewer 가 paused 가 되고, 다음 재생에서 stopAllAction 을 먼저 불러(ModelScene.playAnimation)
+ * 1회 클립 뒤에는 실제로는 섞이지 않고 바로 넘어간다. 자세 층이 있으면 0 으로 두고 모든 연결을 자세 층이 섞는다 (두 번 섞지 않게)
  */
 const FADE_MS = 300
 
@@ -80,6 +80,8 @@ export class DogAnimator {
   readonly tapIsHeadTilt: boolean
   /** 대기 루프. 진도 템플릿은 standing, 다른 템플릿은 idle */
   private readonly idleClip: string
+  /** model-viewer 크로스페이드 (ms). 자세 층이 섞으면 0 */
+  private readonly fadeMs: number
 
   constructor(
     mv: ModelViewerElement,
@@ -93,9 +95,12 @@ export class DogAnimator {
       onClipStart?: (clip: string) => void
       /** 반응 클립이 실제로 재생될 때 */
       onReact?: (source: ReactSource) => void
+      /** 자세 층이 클립 사이를 섞으면 true (model-viewer 크로스페이드를 끈다) */
+      poseBlend?: boolean
     },
   ) {
     this.mv = mv
+    this.fadeMs = options.poseBlend ? 0 : FADE_MS
     this.onPose = options.onPose
     this.onBusy = options.onBusy
     this.onClipStart = options.onClipStart
@@ -218,10 +223,10 @@ export class DogAnimator {
    * model-viewer 는 animationName 을 바꾸면 다음 업데이트에서 무한 반복으로 덮어쓴다.
    * updateComplete 를 기다린 뒤 play({repetitions}) 를 해야 횟수가 지켜진다 (docs/ANIMATION.md)
    */
-  private async start(clip: string, { times = 0, fade = FADE_MS, reset = false } = {}) {
+  private async start(clip: string, { times = 0, fade = this.fadeMs, reset = false } = {}) {
     if (!clip || this.disposed) return
     const mv = this.mv
-    mv.animationCrossfadeDuration = fade
+    mv.animationCrossfadeDuration = Math.min(fade, this.fadeMs)
     if (reset) mv.currentTime = 0
     mv.animationName = clip
     this.onClipStart?.(clip)
@@ -258,7 +263,7 @@ export class DogAnimator {
 
   /** 1회 클립 뒤 자세의 루프로. 루프 첫 프레임에서 끝나는 클립이면 섞지 않는다 */
   private settle(last: string) {
-    return this.start(this.loopOf(this.pose), { reset: true, fade: ENDS_ON_LOOP.has(last) ? 0 : FADE_MS })
+    return this.start(this.loopOf(this.pose), { reset: true, fade: ENDS_ON_LOOP.has(last) ? 0 : this.fadeMs })
   }
 
   private async perform(steps: readonly Step[], mine: number) {

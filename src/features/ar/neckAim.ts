@@ -294,9 +294,11 @@ export class NeckAim {
       this.record(rootQ, animated, animated)
       return changed
     }
-    // 몸 기준 회전 Q: 원래 머리 방향 → 목표 방향
+    // 몸 기준 회전 Q: 원래 머리 방향 → 목표 방향. pitchFollow < 1 이면 위아래는 원래 쪽으로 (0 이면 좌우만)
+    const pitchFollow = command.pitchFollow ?? 1
+    const pitch = pitchFollow >= 1 ? command.pitch : animated.pitch + (command.pitch - animated.pitch) * Math.max(0, pitchFollow)
     const qRoot = multiply(
-      multiply(multiply(axisAngle('y', command.yaw), axisAngle('x', -command.pitch)), axisAngle('x', animated.pitch)),
+      multiply(multiply(axisAngle('y', command.yaw), axisAngle('x', -pitch)), axisAngle('x', animated.pitch)),
       axisAngle('y', -animated.yaw),
     )
     const qWorld = normalize(multiply(multiply(rootQ, qRoot), conjugate(rootQ)))

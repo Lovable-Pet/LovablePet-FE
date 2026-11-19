@@ -45,6 +45,7 @@ import {
 import { DogAnimator, POSE_LABEL, type CommandId, type Pose, type ReactSource } from '../features/ar/dogAnimator'
 import { useVoiceCommand } from '../features/ar/useVoiceCommand'
 import { STANDING_CLIP, WALK_CLIPS } from '../features/ar/walk/walkSpec'
+import { attachPoseLayers } from '../features/ar/modelViewerArStage'
 import { useArPlacement, type ArOcclusionOptions, type ArPlacement } from '../features/ar/useArPlacement'
 import { useArWalk, type ArWalk } from '../features/ar/useArWalk'
 import { useArGaze } from '../features/ar/useArGaze'
@@ -387,6 +388,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
       setPose('stand')
       setAnimBusy(false)
       setActiveCommand(null)
+      // 클립 사이 자세 섞기 (화면 안 3D·AR). 못 쓰면 model-viewer 크로스페이드 그대로
+      const poseLayers = attachPoseLayers(mv)
       const animator = new DogAnimator(mv, {
         tapAnimation: behaviorRef.current.tapAnimation,
         playbackRate: behaviorRef.current.playbackRate,
@@ -394,6 +397,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         onBusy: setAnimBusy,
         onClipStart: (clip) => clipStartRef.current(clip),
         onReact: (source) => onReactRef.current(source),
+        poseBlend: poseLayers !== null,
       })
       animatorRef.current = animator
       setHasCommands(animator.hasCommands)
