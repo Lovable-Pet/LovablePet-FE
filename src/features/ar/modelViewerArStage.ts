@@ -1,5 +1,18 @@
 import type { ModelViewerElement } from '@google/model-viewer'
-import { CircleGeometry, DoubleSide, Group, Mesh, MeshBasicMaterial, RingGeometry, type BufferGeometry } from 'three'
+import {
+  AnimationMixer,
+  CircleGeometry,
+  DoubleSide,
+  Group,
+  Matrix4,
+  Mesh,
+  MeshBasicMaterial,
+  RingGeometry,
+  Vector3,
+  type AnimationClip,
+  type BufferGeometry,
+  type Object3D,
+} from 'three'
 import {
   YAW_MISMATCH_RAD,
   type ArStage,
@@ -22,6 +35,7 @@ import { GAZE_JAW_CLIPS } from './gaze/gazeSpec'
 import { findNeckBones, NeckAim, type BoneLike } from './neckAim'
 import { buildBodyProxy, type BodyProxy, type ProxyNode } from './bodyProxy'
 import type { NearFadeMode, NearRig } from './nearCamera'
+import { computeTurnSweep, type SweepCapsule } from './walk/turnSweep'
 import {
   parseTurnExtras,
   parseWalkExtras,
@@ -678,6 +692,14 @@ export class ModelViewerArStage implements ArStage {
       clips.set(name, clip)
       turns.push({ clip: name, angle: (entry.angle_deg * Math.PI) / 180, duration: clip.duration, offset: entry.end_offset_m })
     }
+    // 회전 클립마다 개 몸이 쓸고 지나가는 바닥 자리 (몸 돌리기가 사용자 발과 겹치는지)
+    if (turns.length) {
+      try {
+        this.addTurnSweeps(turns, clips)
+      } catch (error) {
+        if (import.meta.env.DEV) console.warn('[ar] 회전 클립이 쓸고 지나가는 자리를 못 구함:', error)
+      }
+    }
     const info: WalkModelInfo = { extras, extrasSource, durations, scale, scaleSource, size: { ...this.dogSize }, turns }
     this.walkRig = new ModelViewerWalkRig(mv, scene, scene, this.ar, info, clips)
     return this.walkRig
@@ -964,13 +986,74 @@ export class ModelViewerArStage implements ArStage {
     if (this.disposed) return null
     return {
       distance: (point) => {
-        if (this.bodyProxy === undefined) {
-          const { model } = this.scene
-          this.bodyProxy = isNode(model) ? buildBodyProxy(model as unknown as ProxyNode) : null
-        }
-        return this.bodyProxy && this.dogPlaced ? this.bodyProxy.distance(point) : null
+        const proxy = this.ensureBodyProxy()
+        return proxy && this.dogPlaced ? proxy.distance(point) : null
       },
       setOpacity: (opacity, mode) => this.setDogOpacity(opacity, mode),
+    }
+  }
+
+  /** 개 몸 캡슐 (모델마다 한 번). 몸통 뼈가 없으면 null */
+  private ensureBodyProxy(): BodyProxy | null {
+    if (this.bodyProxy === undefined) {
+      const { model } = this.scene
+      this.bodyProxy = isNode(model) ? buildBodyProxy(model as unknown as ProxyNode) : null
+    }
+    return this.bodyProxy
+  }
+
+  /**
+   * 회전 클립마다 쓸고 지나가는 바닥 자리를 turns[].sweep 에 넣는다. 모델을 복제해 (형상·재질은 같이 쓰고 뼈만 새로) 새 믹서로
+   * 클립을 41 프레임 재생하고, 몸 캡슐 양 끝을 pivot 기준 (= 회전을 시작할 때의 개 기준, m) 으로 옮겨 바닥에 내린다.
+   * 지금 보이는 개의 자세·믹서는 건드리지 않는다
+   */
+  private addTurnSweeps(turns: TurnClipSpec[], clips: Map<string, ClipLike>) {
+    const proxy = this.ensureBodyProxy()
+    const model = this.scene.model as Object3D | null
+    if (!proxy || !model || typeof model.clone !== 'function') return
+    const pivot = this.scene.pivot as unknown as Object3D
+    pivot.updateWorldMatrix(true, false)
+    model.updateWorldMatrix(true, false)
+    const clone = model.clone(true)
+    clone.updateMatrixWorld(true)
+    const bones = new Map<string, Object3D>()
+    clone.traverse((node) => {
+      if (!bones.has(node.name)) bones.set(node.name, node)
+    })
+    // 복제 월드 → 실제 모델 월드 → pivot 기준. pivot 배율을 곱해 m 로
+    const toPivot = new Matrix4().copy(pivot.matrixWorld).invert().multiply(model.matrixWorld).multiply(new Matrix4().copy(clone.matrixWorld).invert())
+    const pivotScale = new Vector3().setFromMatrixColumn(pivot.matrixWorld, 0).length()
+    const radiusScale = proxy.scale
+    const capsules = proxy.capsules
+      .map((capsule) => ({ a: bones.get(capsule.a.name), b: bones.get(capsule.b.name), radius: capsule.radius }))
+      .filter((capsule): capsule is { a: Object3D; b: Object3D; radius: number } => !!capsule.a && !!capsule.b)
+    const mixer = new AnimationMixer(clone)
+    const point = new Vector3()
+    const floor = (node: Object3D) => {
+      point.setFromMatrixPosition(node.matrixWorld).applyMatrix4(toPivot)
+      return { u: point.x * pivotScale, v: point.z * pivotScale }
+    }
+    for (const turn of turns) {
+      const clip = clips.get(turn.clip)
+      if (!clip) continue
+      const action = mixer.clipAction(clip as unknown as AnimationClip)
+      action.play()
+      turn.sweep = computeTurnSweep(
+        turn.duration,
+        (time) => {
+          action.time = time
+          mixer.update(0)
+          clone.updateMatrixWorld(true)
+        },
+        () =>
+          capsules.map(({ a, b, radius }): SweepCapsule => {
+            const pa = floor(a)
+            const pb = floor(b)
+            return { au: pa.u, av: pa.v, bu: pb.u, bv: pb.v, r: radius * radiusScale }
+          }),
+      )
+      action.stop()
+      mixer.uncacheAction(clip as unknown as AnimationClip)
     }
   }
 

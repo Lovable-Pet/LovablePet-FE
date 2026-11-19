@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { describeGaze, GazeController, type GazePose } from './gaze/gazeController'
 import type { GazeTuning } from './gaze/gazeSpec'
 import type { GazeHost } from './gaze/gazeStage'
-import { StandTurn } from './walk/standTurn'
+import { StandTurn, type TurnPlan } from './walk/standTurn'
 import type { WalkHost } from './walk/walkStage'
 
 export interface ArGaze {
@@ -80,15 +80,18 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
     const controller = new GazeController({
       template,
       tuning,
-      onTurn: (need, reason) => {
+      onTurn: (need, reason, clip) => {
         const walk = latest.current.readWalk()
         if (walk.active) return walk.requestTurn(reason)
-        return standTurnRef.current?.start(need) ?? false
+        return standTurnRef.current?.start(need, clip as TurnPlan['clip']) ?? false
       },
       onPose: (pose) => latest.current.requestPose?.(pose) ?? false,
     })
     controllerRef.current = controller
     let lastDebugAt = -Infinity
+    /** ?debug 바닥 윤곽을 그렸는지 (산책 발자취 점과 같은 자리를 쓴다) */
+    let outlineShown = false
+    let lastOutlineAt = -Infinity
     const unsubscribe = host.subscribe((frame) => {
       const { readAnimator, readWalk, isHidden } = latest.current
       if (isHidden?.()) return
@@ -96,6 +99,11 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
       const walk = readWalk()
       const standTurn = standTurnRef.current
       const canTurn = !!standTurn?.available && (walk.active ? walk.standing : !standTurn.turning)
+      // 쓸고 지나가는 자리 검사. 산책 중이면 산책이 고르는 클립 하나만 (다른 클립으로 바꾸지 않는다)
+      const checked: { plan: TurnPlan | null } = { plan: null }
+      const turnCheck = standTurn?.available
+        ? (need: number) => (checked.plan = standTurn.plan(need, frame.camera, !walk.active))
+        : undefined
       const command = controller.update({
         time: frame.time,
         camera: frame.camera,
@@ -105,9 +113,22 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
         pose,
         walking: walk.active,
         canTurn,
-        turnClearance: standTurn ? (need) => standTurn.clearance(need) : undefined,
+        turnCheck,
       })
       host.rig.set(command)
+      // ?debug: 몸 돌리기를 기다리는 동안 처음 고른 클립이 쓸고 지나가는 자리 윤곽 (흰 점) 과 사용자 발 (진한 점)
+      if (debug && walkHost?.showPath && !walk.active) {
+        const waiting = controller.debug.bodyTurnIn !== null || /겹침/.test(controller.debug.bodyTurnBlock ?? '')
+        const shown = waiting ? checked.plan : null
+        if (shown && frame.time - lastOutlineAt >= DEBUG_INTERVAL_MS) {
+          lastOutlineAt = frame.time
+          walkHost.showPath({ points: shown.outline, aim: shown.feet, y: shown.y })
+          outlineShown = true
+        } else if (!shown && outlineShown) {
+          walkHost.showPath(null)
+          outlineShown = false
+        }
+      }
       if (debug && frame.time - lastDebugAt >= DEBUG_INTERVAL_MS) {
         lastDebugAt = frame.time
         setDebugLine(describeGaze(controller.debug))
@@ -115,11 +136,12 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
     })
     return () => {
       unsubscribe()
+      if (outlineShown && !latest.current.readWalk().active) walkHost?.showPath?.(null)
       host.rig.set(null)
       if (controllerRef.current === controller) controllerRef.current = null
       setDebugLine(null)
     }
-  }, [host, enabled, debug, template, tuning])
+  }, [host, enabled, debug, template, tuning, walkHost])
 
   const trigger = useCallback((kind: 'tap' | 'mic') => controllerRef.current?.trigger(kind), [])
   const isTurning = useCallback(() => !!standTurnRef.current?.turning, [])

@@ -1,3 +1,4 @@
+import type { TurnSweep } from './turnSweep'
 import type { Vec3 } from '../placement/types'
 
 // 산책(걷기) 클립의 약속. AI 저장소 ar_pipeline/walk_clips.py 머리 주석 (앱 계약, 11-14)
@@ -58,6 +59,8 @@ export interface TurnClipSpec {
   duration: number
   /** end_offset_m (m, 크기 배율 1) */
   offset: [number, number]
+  /** 도는 동안 개 몸이 쓸고 지나가는 바닥 자리 (렌더 쪽이 미리 계산, ./turnSweep.ts). 없으면 거리로만 판단 */
+  sweep?: TurnSweep
 }
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)

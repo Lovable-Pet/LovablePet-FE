@@ -2,10 +2,29 @@ import type { StageFrame } from '../placement/arStage'
 import type { Vec3 } from '../placement/types'
 import { MAX_FRAME_S, STANDING_FADE_S } from './walkController'
 import type { WalkHost } from './walkStage'
-import { pickTurnClip, turnEndPose, walkSpec, type TurnClipSpec, type WalkSpec } from './walkSpec'
+import { pickTurnClip, turnEndPose, walkSpec, type TurnClip, type TurnClipSpec, type WalkSpec } from './walkSpec'
+import { fromDogFrame, sweepHits, sweepOutline, USER_FEET_BACK_M, USER_FEET_RADIUS_M, userFeet } from './turnSweep'
 
-/** 사용자 발이 폰보다 뒤에 있는 만큼 − 발 반지름 (m). StandTurn.clearance */
-export const TURN_FEET_GAP_M = 0.05
+/** 쓸고 지나가는 자리를 모를 때 (계산 실패): 거리로만. 몸길이/2 + end_offset − (발 뒤 0.2 − 발 반지름 0.15) */
+const FALLBACK_FEET_GAP_M = USER_FEET_BACK_M - USER_FEET_RADIUS_M
+
+const wrap = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle))
+
+/** 몸 돌리기를 할 수 있는지 (사용자 발과 클립이 쓸고 지나가는 자리가 겹치는지) */
+export interface TurnPlan {
+  /** 돌 수 있으면 true. clip 이 그 클립 */
+  ok: boolean
+  /** 돌 클립. 막혔으면 처음 고른 클립 */
+  clip: TurnClip | null
+  /** 처음 고른 클립이 겹쳐 다른 클립(남은 각이 더 작아지는 것)으로 바꿨는지 */
+  alternative: boolean
+  /** 막힌 까닭 (돌 수 있으면 null) */
+  reason: string | null
+  /** ?debug 바닥 윤곽 (처음 고른 클립이 쓸고 지나가는 자리, 월드 x·z) · 발 원 가운데 · 개 발밑 높이 */
+  outline: { x: number; z: number }[]
+  feet: { x: number; z: number }
+  y: number
+}
 
 /**
  * 산책 밖에서 서 있는 개의 제자리 회전 (고개 바라보기의 몸 돌리기, ../gaze/gazeController.ts).
@@ -39,20 +58,55 @@ export class StandTurn {
   }
 
   /**
-   * need 만큼 돌 때 사용자(카메라)가 개 발밑에서 떨어져 있어야 하는 수평 거리 (m). 고를 클립이 없으면 null.
-   * 클립이 휩쓰는 자리 ≈ 몸길이/2 + end_offset (진도 헤드리스 측정: 90° 0.63 m·180° 0.735 m) 에서, 사용자 발이 폰보다
-   * 0.2 m 뒤·반지름 0.15 m 라고 보고 0.05 m 를 뺀다 (측정한 '발과 안 겹치는 거리' 90° 0.56 m·180° 0.69 m 와 맞음)
+   * need 만큼 돌 때 사용자 발 (폰에서 개 반대쪽으로 0.2 m, 반지름 0.15 m 원) 이 클립이 쓸고 지나가는 자리와 겹치는지.
+   * 처음 고른 클립 (135° 기준 같은 쪽 90°·180°) 이 겹치면, alternatives 일 때 다른 클립 중 돈 뒤 남는 각이 지금보다 작은 것을
+   * 남는 각이 작은 순서로 본다. 클립이 없으면 null
    */
-  clearance(need: number): number | null {
-    const spec = pickTurnClip(this.spec.turns ?? [], need)
-    if (!spec) return null
-    return this.spec.bodyLength / 2 + Math.hypot(spec.offset[0], spec.offset[1]) * this.spec.scale - TURN_FEET_GAP_M
+  plan(need: number, camera: Vec3, alternatives = true): TurnPlan | null {
+    const turns = this.spec.turns ?? []
+    const primary = pickTurnClip(turns, need)
+    const pose = this.host.dogPose()
+    if (!primary || !pose) return null
+    const dog = { x: pose.position.x, z: pose.position.z }
+    const feet = userFeet(camera, dog, pose.yaw)
+    const others = alternatives
+      ? turns
+          .filter((turn) => turn !== primary && Math.abs(wrap(need - turn.angle)) < Math.abs(need))
+          .sort((a, b) => Math.abs(wrap(need - a.angle)) - Math.abs(wrap(need - b.angle)))
+      : []
+    const fits = (turn: TurnClipSpec) =>
+      turn.sweep
+        ? !sweepHits(turn.sweep, feet.u, feet.v, USER_FEET_RADIUS_M)
+        : Math.hypot(camera.x - dog.x, camera.z - dog.z) >=
+          this.spec.bodyLength / 2 + Math.hypot(turn.offset[0], turn.offset[1]) * this.spec.scale - FALLBACK_FEET_GAP_M
+    const chosen = [primary, ...others].find(fits) ?? null
+    const outline = primary.sweep ? this.outlineOf(primary).map((point) => fromDogFrame(point, dog, pose.yaw)) : []
+    return {
+      ok: !!chosen,
+      clip: (chosen ?? primary).clip,
+      alternative: !!chosen && chosen !== primary,
+      reason: chosen ? null : `쓸고 지나가는 자리와 겹침 (${[primary, ...others].map((turn) => turn.clip).join('·')})`,
+      outline,
+      feet: fromDogFrame(feet, dog, pose.yaw),
+      y: pose.position.y,
+    }
   }
 
-  /** need: 개 정면에서 돌아야 할 각 (rad, + 왼쪽). 맞는 클립이 있어 돌기 시작했으면 true */
-  start(need: number): boolean {
+  private readonly outlines = new Map<TurnClip, { u: number; v: number }[]>()
+  private outlineOf(turn: TurnClipSpec) {
+    let outline = this.outlines.get(turn.clip)
+    if (!outline) {
+      outline = turn.sweep ? sweepOutline(turn.sweep) : []
+      this.outlines.set(turn.clip, outline)
+    }
+    return outline
+  }
+
+  /** need: 개 정면에서 돌아야 할 각 (rad, + 왼쪽). clip 을 주면 그 클립 (plan 이 고른 것). 돌기 시작했으면 true */
+  start(need: number, clip?: TurnClip | null): boolean {
     if (this.play) return false
-    const spec = pickTurnClip(this.spec.turns ?? [], need)
+    const turns = this.spec.turns ?? []
+    const spec = (clip ? turns.find((turn) => turn.clip === clip) : null) ?? pickTurnClip(turns, need)
     const pose = this.host.dogPose()
     if (!spec || !pose) return false
     this.host.rig.takeOver()
