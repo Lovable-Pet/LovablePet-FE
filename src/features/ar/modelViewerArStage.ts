@@ -20,6 +20,8 @@ import type { GazeCommand } from './gaze/gazeController'
 import type { GazeRig } from './gaze/gazeStage'
 import { GAZE_JAW_CLIPS } from './gaze/gazeSpec'
 import { findNeckBones, NeckAim, type BoneLike } from './neckAim'
+import { buildBodyProxy, type BodyProxy, type ProxyNode } from './bodyProxy'
+import type { NearFadeMode, NearRig } from './nearCamera'
 import {
   parseTurnExtras,
   parseWalkExtras,
@@ -172,6 +174,8 @@ interface ModelSceneLike extends NodeLike {
   queueShadowRender(): void
   /** 그림자가 필요하면 찍는다. AR 은 매 프레임 애니메이션 뒤·그리기 전에 부른다 (고개 바라보기가 감싼다) */
   renderShadow?(renderer: unknown): void
+  /** 바닥 그림자 (shadow-intensity 가 0 이면 없다). floor 는 그림자 텍스처를 붙인 평면 */
+  shadow?: { floor?: { visible: boolean; material: { opacity: number } } } | null
 }
 interface PlacementBoxLike {
   show: boolean
@@ -425,6 +429,13 @@ export class ModelViewerArStage implements ArStage {
   private walkRig: ModelViewerWalkRig | null = null
   /** 고개 바라보기. 만들지 않았으면 null */
   private gaze: { rig: GazeRig; unhook: () => void } | null = null
+  /** 카메라가 가까울 때 개 몸 캡슐 (모델마다 한 번) */
+  private bodyProxy: BodyProxy | null | undefined = undefined
+  /** 가까워서 흐리거나 숨긴 동안 원래 값 (1 로 돌아오면 되돌린다) */
+  private nearSaved: {
+    materials: { material: MaterialLike; transparent: boolean; opacity: number }[]
+    floor: { visible: boolean; opacity: number } | null
+  } | null = null
   private disposed = false
 
   private constructor(
@@ -579,6 +590,7 @@ export class ModelViewerArStage implements ArStage {
 
   hideDog() {
     if (this.disposed) return
+    this.restoreNear()
     this.stopFade()
     this.dogPlaced = false
     this.scene.target.visible = false
@@ -766,6 +778,7 @@ export class ModelViewerArStage implements ArStage {
     this.occluder = null
     this.gaze?.unhook()
     this.gaze = null
+    this.restoreNear()
     this.removeRing()
     this.stopFade()
     this.scene.target.visible = true
@@ -943,8 +956,89 @@ export class ModelViewerArStage implements ArStage {
     return [...found]
   }
 
+  /**
+   * 카메라가 너무 가까울 때 (./nearCamera.ts, 배포 빌드에도): 몸 표면까지 거리와 개·그림자 불투명도.
+   * 몸 캡슐은 처음 부를 때 한 번 만든다 (몸통 뼈가 없으면 거리는 null)
+   */
+  createNearRig(): NearRig | null {
+    if (this.disposed) return null
+    return {
+      distance: (point) => {
+        if (this.bodyProxy === undefined) {
+          const { model } = this.scene
+          this.bodyProxy = isNode(model) ? buildBodyProxy(model as unknown as ProxyNode) : null
+        }
+        return this.bodyProxy && this.dogPlaced ? this.bodyProxy.distance(point) : null
+      },
+      setOpacity: (opacity, mode) => this.setDogOpacity(opacity, mode),
+    }
+  }
+
+  /**
+   * 개와 그림자 불투명도. 1 이면 원래대로, 0 이면 모델과 그림자를 숨긴다. 사이 값은 fade 방식에서만
+   * (재질을 transparent 로, depthWrite 는 그대로 둬서 몸 안쪽이 덜 비친다). 다음 렌더부터 보인다
+   */
+  private setDogOpacity(opacity: number, mode: NearFadeMode) {
+    if (this.disposed || !this.dogPlaced) return
+    const { model } = this.scene
+    if (!isNode(model)) return
+    if (!(opacity < 1)) {
+      this.restoreNear()
+      return
+    }
+    if (!this.nearSaved) {
+      // 놓을 때의 페이드인이 돌고 있으면 끝낸다 (재질 원래 값을 같이 쓰지 않게)
+      this.stopFade()
+      const floor = this.scene.shadow?.floor
+      this.nearSaved = {
+        materials: this.materials().map((material) => ({ material, transparent: material.transparent, opacity: material.opacity })),
+        floor: floor ? { visible: floor.visible, opacity: floor.material.opacity } : null,
+      }
+    }
+    const saved = this.nearSaved
+    const floor = this.scene.shadow?.floor
+    if (opacity <= 0 || mode === 'hide') {
+      model.visible = false
+      if (floor) floor.visible = false
+      return
+    }
+    model.visible = true
+    for (const { material, opacity: base } of saved.materials) {
+      if (!material.transparent) {
+        material.transparent = true
+        material.needsUpdate = true
+      }
+      material.opacity = base * opacity
+    }
+    if (floor && saved.floor) {
+      floor.visible = saved.floor.visible
+      floor.material.opacity = saved.floor.opacity * opacity
+    }
+  }
+
+  private restoreNear() {
+    const saved = this.nearSaved
+    if (!saved) return
+    this.nearSaved = null
+    const { model } = this.scene
+    if (isNode(model)) model.visible = true
+    for (const { material, transparent, opacity } of saved.materials) {
+      if (material.transparent !== transparent) {
+        material.transparent = transparent
+        material.needsUpdate = true
+      }
+      material.opacity = opacity
+    }
+    const floor = this.scene.shadow?.floor
+    if (floor && saved.floor) {
+      floor.visible = saved.floor.visible
+      floor.material.opacity = saved.floor.opacity
+    }
+  }
+
   /** 투명에서 짧게 페이드인. 재질의 transparent·opacity 는 끝나면 원래대로 돌린다 */
   private revealDog() {
+    this.restoreNear()
     this.stopFade()
     const saved =
       REVEAL_FADE_MS > 0

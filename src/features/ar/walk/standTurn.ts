@@ -4,6 +4,9 @@ import { MAX_FRAME_S, STANDING_FADE_S } from './walkController'
 import type { WalkHost } from './walkStage'
 import { pickTurnClip, turnEndPose, walkSpec, type TurnClipSpec, type WalkSpec } from './walkSpec'
 
+/** 사용자 발이 폰보다 뒤에 있는 만큼 − 발 반지름 (m). StandTurn.clearance */
+export const TURN_FEET_GAP_M = 0.05
+
 /**
  * 산책 밖에서 서 있는 개의 제자리 회전 (고개 바라보기의 몸 돌리기, ../gaze/gazeController.ts).
  * 산책의 회전(WalkController)과 같은 클립 고르기(135° 기준 90°·180°)·재생 배율(1/√s × ?turnspeed)·시작 섞기(서기 0.3초)·
@@ -33,6 +36,17 @@ export class StandTurn {
 
   get turning(): boolean {
     return this.play !== null
+  }
+
+  /**
+   * need 만큼 돌 때 사용자(카메라)가 개 발밑에서 떨어져 있어야 하는 수평 거리 (m). 고를 클립이 없으면 null.
+   * 클립이 휩쓰는 자리 ≈ 몸길이/2 + end_offset (진도 헤드리스 측정: 90° 0.63 m·180° 0.735 m) 에서, 사용자 발이 폰보다
+   * 0.2 m 뒤·반지름 0.15 m 라고 보고 0.05 m 를 뺀다 (측정한 '발과 안 겹치는 거리' 90° 0.56 m·180° 0.69 m 와 맞음)
+   */
+  clearance(need: number): number | null {
+    const spec = pickTurnClip(this.spec.turns ?? [], need)
+    if (!spec) return null
+    return this.spec.bodyLength / 2 + Math.hypot(spec.offset[0], spec.offset[1]) * this.spec.scale - TURN_FEET_GAP_M
   }
 
   /** need: 개 정면에서 돌아야 할 각 (rad, + 왼쪽). 맞는 클립이 있어 돌기 시작했으면 true */

@@ -37,6 +37,8 @@ export interface ArGazeOptions {
   walkHost: WalkHost | null
   /** 가까이 앉기·일어나기 (?closesit). 받아서 시작했으면 true */
   requestPose?: (pose: 'sit' | 'stand') => boolean
+  /** 카메라가 너무 가까워 개를 숨긴 동안: 판단을 멈춘다 (고개는 그 자리, 몸 돌리기·가까이 앉기 없음) */
+  isHidden?: () => boolean
 }
 
 const DEBUG_INTERVAL_MS = 200
@@ -88,7 +90,8 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
     controllerRef.current = controller
     let lastDebugAt = -Infinity
     const unsubscribe = host.subscribe((frame) => {
-      const { readAnimator, readWalk } = latest.current
+      const { readAnimator, readWalk, isHidden } = latest.current
+      if (isHidden?.()) return
       const { pose, busy } = readAnimator()
       const walk = readWalk()
       const standTurn = standTurnRef.current
@@ -102,6 +105,7 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
         pose,
         walking: walk.active,
         canTurn,
+        turnClearance: standTurn ? (need) => standTurn.clearance(need) : undefined,
       })
       host.rig.set(command)
       if (debug && frame.time - lastDebugAt >= DEBUG_INTERVAL_MS) {

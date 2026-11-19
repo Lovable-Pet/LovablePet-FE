@@ -20,6 +20,8 @@ import { COMMANDS, DogAnimator, POSE_LABEL, type CommandId, type Pose } from '..
 import { useArPlacement, type ArOcclusionOptions, type ArPlacement } from '../features/ar/useArPlacement'
 import { useArWalk, type ArWalk } from '../features/ar/useArWalk'
 import { useArGaze } from '../features/ar/useArGaze'
+import { useArNear } from '../features/ar/useArNear'
+import { NEAR_HINT_TEXT, type NearTuning } from '../features/ar/nearCamera'
 import { GAZE_IN_PRODUCTION, type GazeTuning } from '../features/ar/gaze/gazeSpec'
 import type { WalkTuning } from '../features/ar/walk/walkController'
 import { LONG_PRESS_MS, useLongPress, type LongPressHandlers } from '../features/ar/useLongPress'
@@ -207,6 +209,12 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const stuck = useLongActive(arLocked && placement.manual && placement.phase === 'blocked')
   /** 개발 모드에서 ?floor=0.85·?keep=0.1 로 산책 최저선 값을, ?tight=0.15 로 크게 돌 때 반지름을, ?turnspeed=1.3 으로 제자리 회전 빠르기를 바꾼다 (다음 산책부터, 배포 파일에는 들어가지 않는다) */
   const walkTuning = useMemo(() => (import.meta.env.DEV ? readWalkTuning(searchParams) : undefined), [searchParams])
+  /**
+   * 카메라가 개에 너무 가까우면 안내 문구를 바꾸고 개·그림자를 흐리거나 숨긴다 (배포 빌드에도).
+   * 개발 모드에서 ?nearhint=0.35 안내 거리 (m), ?nearfadeat=0.2 흐리기 시작 거리 (m), ?nearfade=fade|hide 방식
+   */
+  const nearTuning = useMemo(() => (import.meta.env.DEV ? readNearTuning(searchParams) : undefined), [searchParams])
+  const near = useArNear(placement.nearHost, { debug, tuning: nearTuning })
   /** 고개 바라보기가 매 프레임 읽는 산책 상태 (산책 훅이 고개 훅보다 뒤라 ref 로 넘긴다) */
   const walkStateRef = useRef<{ active: boolean; standing: boolean; requestTurn: (reason: string) => boolean }>({
     active: false,
@@ -230,6 +238,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
       animator.command(next)
       return true
     },
+    isHidden: near.isHidden,
   })
   const walk = useArWalk(placement.walkHost, {
     canStart: dogReady && pose === 'stand' && !animBusy && !gaze.turning,
@@ -242,7 +251,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   /** 산책 중: 명령 칩·음성·다시 놓기를 숨기고 개 탭을 막는다 */
   const walking = walk.active
   /** ?debug 상자: 산책 중이면 산책 줄을 위에, 맨 위에 고개 한 줄 */
-  const gazeLines = gaze.debugLine ? [gaze.debugLine] : []
+  const gazeLines = [near.debugLine, gaze.debugLine].filter((line): line is string => !!line)
   const hitDebug = walk.debug
     ? { summary: walk.debug.summary, lines: [...gazeLines, ...walk.debug.lines, ...(placement.debug?.lines ?? [])] }
     : placement.debug && { ...placement.debug, lines: [...gazeLines, ...placement.debug.lines] }
@@ -472,7 +481,9 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           <p aria-live="polite" className="text-center text-body text-on-dark [text-shadow:0_1px_3px_rgb(0_0_0/0.6)]">
             {arLocked
               ? placementHint(placement)
-              : walking
+              : near.hint
+                ? NEAR_HINT_TEXT
+                : walking
                 ? walkHint(walk)
                 : hasCommands
                 ? `${POSE_LABEL[pose]} · 명령을 눌러 보세요`
@@ -894,6 +905,17 @@ function readGazeOptions(params: URLSearchParams): { enabled: boolean; tuning: G
       jawFullUpDeg: read('gazejawup', 80, 1),
       closeSit: params.get('closesit') === '1',
     },
+  }
+}
+
+/** 개발용 가까움: ?nearhint (안내 거리 m, 0.05–1) · ?nearfadeat (흐리기 시작 m, 0.13–0.6) · ?nearfade=fade|hide. 없으면 기본값 */
+function readNearTuning(params: URLSearchParams): NearTuning {
+  const read = numberParam(params)
+  const mode = params.get('nearfade')
+  return {
+    hintM: read('nearhint', 1, 0.05),
+    fadeM: read('nearfadeat', 0.6, 0.13),
+    mode: mode === 'fade' || mode === 'hide' ? mode : undefined,
   }
 }
 

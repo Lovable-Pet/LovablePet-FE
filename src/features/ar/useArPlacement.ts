@@ -10,6 +10,7 @@ import {
 } from './placement/placementController'
 import type { WalkHost, WalkRig } from './walk/walkStage'
 import type { GazeHost, GazeRig } from './gaze/gazeStage'
+import type { NearHost, NearRig } from './nearCamera'
 import { requestDepthWithArSessions } from './xrDepthRequest'
 import type { OccluderOptions } from './depthOcclusion'
 
@@ -48,6 +49,8 @@ export interface ArPlacement {
    * 아이폰 Quick Look·Scene Viewer·화면 안 3D·자동 착지에서는 null
    */
   gazeHost: GazeHost | null
+  /** 카메라가 개에 너무 가까울 때 (안내·흐리기). 직접 놓은 뒤(placed)만, 배포 빌드에도 */
+  nearHost: NearHost | null
 }
 
 interface PlacementState {
@@ -91,6 +94,8 @@ export function useArPlacement(
   const [walk, setWalk] = useState<{ controller: PlacementController; rig: WalkRig } | null>(null)
   /** 이번 세션의 고개 바라보기 리그 (목·머리 뼈가 없으면 null) */
   const [gaze, setGaze] = useState<{ controller: PlacementController; rig: GazeRig } | null>(null)
+  /** 이번 세션의 가까움 리그 */
+  const [near, setNear] = useState<{ controller: PlacementController; rig: NearRig } | null>(null)
   // 세션 중에 ?debug 를 바꾸면 다음 세션부터 적용된다
   const debugRef = useRef(debug)
   const occlusionRef = useRef(occlusion)
@@ -113,6 +118,7 @@ export function useArPlacement(
       controllerRef.current = null
       setWalk(null)
       setGaze(null)
+      setNear(null)
     }
 
     /** 직접 놓기를 못 할 때: 개를 보이고 model-viewer 가 스스로 바닥에 놓게 둔다 */
@@ -160,6 +166,9 @@ export function useArPlacement(
         // 목·머리 뼈 (고개 바라보기, 켰을 때만)
         const gazeRig = gazeEnabledRef.current ? stage.createGazeRig() : null
         if (gazeRig) setGaze({ controller, rig: gazeRig })
+        // 카메라가 너무 가까울 때 (늘 켬)
+        const nearRig = stage.createNearRig()
+        if (nearRig) setNear({ controller, rig: nearRig })
         // 걷기 클립·extras.walk 를 읽는다 (GLB 를 다시 받아야 하면 늦게 온다)
         void stage.createWalkRig().then((rig) => {
           if (rig && controllerRef.current === controller) setWalk({ controller, rig })
@@ -227,5 +236,11 @@ export function useArPlacement(
     return { rig, subscribe: (listener) => controller.addPlacedFrameListener((frame) => listener(frame)) }
   }, [gaze, placed])
 
-  return { ...state, debug: debugInfo, place, replace, resetFloor, walkHost, gazeHost }
+  const nearHost = useMemo<NearHost | null>(() => {
+    if (!near || !placed) return null
+    const { controller, rig } = near
+    return { rig, subscribe: (listener) => controller.addPlacedFrameListener((frame) => listener(frame)) }
+  }, [near, placed])
+
+  return { ...state, debug: debugInfo, place, replace, resetFloor, walkHost, gazeHost, nearHost }
 }
