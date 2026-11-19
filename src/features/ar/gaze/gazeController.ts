@@ -211,6 +211,13 @@ const BODY_TURN_RETRY_S = 1
 const STAND_TURN_WAIT_S = 3
 /** 쓸고 지나가는 자리 때문에 이만큼(s) 넘게 못 돌면 '한 걸음 물러나면 돌아봐요' */
 export const STEP_BACK_HINT_S = 3
+/**
+ * 쓸고 지나가는 자리 때문에 이만큼(s, 안내 뒤 3 s 더) 넘게 못 돌고 사용자가 가까이 앉기 거리 안이면 회전을 포기하고 앉는다.
+ * 고개는 계속 본다. 사용자가 그 자리 밖으로 나가면 회전 판단을 처음부터 다시 (앉아 있으면 일어나서 돈다)
+ */
+export const SWEEP_GIVE_UP_SIT_S = 6
+/** 스스로 앉았다가 돌려고 일어난 개: 회전이 끝나고 이만큼(s) 쉰 뒤 사용자가 아직 가까우면 다시 앉는다 */
+export const RESIT_AFTER_TURN_S = 1
 /** 회전 요청 뒤 이만큼(s) 지나도 회전 클립이 안 보이면 기다림을 푼다 */
 const TURN_START_TIMEOUT_S = 1
 /** 포기한 고개를 다시 한계로 (몸 돌리기를 기다림) 되돌리려면 돌 수 있는 상태가 이만큼(s) 이어져야 한다 (막힘이 깜빡일 때 포기·보기가 번갈지 않게) */
@@ -323,6 +330,10 @@ export class GazeController {
   private standToTurn = false
   /** 스스로 앉았다가 돌려고 일어남: 회전이 끝나면 사용자가 아직 가까우면 바로 다시 앉는다 */
   private resitAfterTurn = false
+  /** 회전 클립이 끝난 때 (s, RESIT_AFTER_TURN_S 쉼) */
+  private turnEndedAt = -Infinity
+  /** 쓸고 지나가는 자리에 막혀 회전을 포기하고 앉음: 사용자가 그 자리에 있는 동안 회전 진행률을 세지 않는다 */
+  private sweepGaveUp = false
   /** 돌려고 일어나 선 때 (s) · 선 채 기다리는 까닭 · 그 까닭이 쓸고 지나가는 자리와 겹침인지 */
   private standReadyAt: number | null = null
   private standWaitReason: string | null = null
@@ -397,6 +408,7 @@ export class GazeController {
     this.selfSat = false
     this.endStandToTurn()
     this.resitAfterTurn = false
+    this.sweepGaveUp = false
     this.closeSitArmed = false
     this.closeFor = 0
     this.farFor = 0
@@ -416,6 +428,7 @@ export class GazeController {
     this.inFor = 0
     this.turnRefused = false
     this.turnRefusedAt = null
+    this.sweepGaveUp = false
     if (on) {
       this.followKick = true
       // 회전이 이미 시작됐으면 그 쉼은 그대로
@@ -465,6 +478,7 @@ export class GazeController {
     this.closeFor = 0
     this.farFor = 0
     this.sweepBlockedFor = 0
+    this.sweepGaveUp = false
     this.endStandToTurn()
     this.turnRequestedAt = null
     this.lastCamera = null
@@ -624,6 +638,7 @@ export class GazeController {
       this.lookingAtClipStart = false
     }
     if (isTurnClip(last) && !isTurnClip(clip)) {
+      this.turnEndedAt = this.now
       this.turnCooldownUntil = this.now + BODY_TURN_COOLDOWN_S
       this.outFor = 0
       this.gaveUp = false
@@ -827,6 +842,17 @@ export class GazeController {
     }
     if (this.overhead === 'on') return { ...none, block: '머리 위 (시간 멈춤)' }
     if (!input.tracking) return { ...none, block: block?.reason ?? '추적 끊김' }
+    // 쓸고 지나가는 자리에 막혀 포기하고 앉았다: 사용자가 그 자리에 있는 동안은 세지 않고, 나가면 (또는 범위 안으로 오면) 처음부터 다시 센다
+    if (this.sweepGaveUp) {
+      if (outOfRange && block?.sweep) {
+        this.turnProgress = 0
+        this.inFor = 0
+        return { ...none, block: '회전 포기 (쓸고 지나가는 자리, 나가면 다시 셈)' }
+      }
+      this.sweepGaveUp = false
+      this.turnProgress = 0
+      this.inFor = 0
+    }
     if (!outOfRange) {
       if (this.turnProgress > 0 || this.turnRefused) {
         this.inFor += dt
@@ -902,6 +928,8 @@ export class GazeController {
     if (!this.options.onTurn || !input.canTurn) return hard('회전 클립 없음·돌 수 없는 단계')
     // 스스로 앉은 개(가까이 앉기)는 일어나서 돈다. 명령으로 앉거나 엎드린 개는 고개만
     const selfSit = this.selfSitTurnable(input, sample)
+    // 쓸고 지나가는 자리에 막혀 회전을 포기하고 앉는 중: 고개는 한계에서 포기하지 않고 계속 본다 (자리 막힘으로 이어서 센다)
+    if (this.sweepGaveUp && input.busy && !input.walking) return { reason: '회전 포기 → 앉는 중', hard: false, sweep: true }
     if (input.pose !== 'stand' && !selfSit) return hard(input.pose === 'sit' ? '앉아 있음 (명령)' : '엎드려 있음')
     if (input.busy || (sample.clip !== 'standing' && !selfSit)) return hard('동작 중')
     if (!input.turnCheck && this.userDistance(input, sample) < BODY_TURN_MIN_M) return hard('너무 가까움')
@@ -986,11 +1014,13 @@ export class GazeController {
     const request = this.options.onPose
     if (!this.closeSit || !request) return null
     const distance = this.userDistance(input, sample)
-    // 돌려고 일어났던 개: 회전이 끝나 서기 루프로 돌아오면 사용자가 아직 1 m 안이면 기다림 없이 바로 다시 앉는다
+    // 돌려고 일어났던 개: 회전이 끝나 서기 루프로 돌아오고 RESIT_AFTER_TURN_S 쉰 뒤 사용자가 아직 일어나는 거리 안이면 다시 앉는다
+    // (돌지 못하고 끝났으면 쉼 없이)
     if (
       this.resitAfterTurn &&
       !this.standToTurn &&
       this.turnRequestedAt === null &&
+      this.now - this.turnEndedAt >= RESIT_AFTER_TURN_S &&
       !input.busy &&
       input.pose === 'stand' &&
       sample.clip === 'standing'
@@ -1017,7 +1047,16 @@ export class GazeController {
     // 몸 회전을 기다리는 중 (한계 밖 타이머·잠깐 범위 안 grace)·도는 중·회전 뒤 쉼에는 앉기를 보류한다. 앉으면 곧 일어나서 돌게 돼
     // 앉음 → 일어남 → 회전 → 다시 앉음이 연달아 나온다. 쉼이 끝난 뒤 처음부터 CLOSE_SIT_S 를 센다
     const turnHold = this.turnProgress > 0 || this.turnRequestedAt !== null || this.now < this.turnCooldownUntil
-    if (wantsSit && !turnHold) {
+    if (wantsSit && this.sweepBlockedFor > SWEEP_GIVE_UP_SIT_S) {
+      // 쓸고 지나가는 자리에 막혀 오래 못 돎: 회전을 포기하고 앉는다 (사용자가 그 자리 밖으로 나가면 bodyTurn 이 처음부터 다시 센다)
+      this.closeFor = 0
+      if (request('sit', '회전 포기 → 가까이 앉기')) {
+        this.selfSat = true
+        this.sweepGaveUp = true
+        this.turnProgress = 0
+        this.inFor = 0
+      }
+    } else if (wantsSit && !turnHold) {
       this.closeFor += dt
       if (this.closeFor > CLOSE_SIT_S) {
         this.closeFor = 0
@@ -1041,9 +1080,15 @@ export class GazeController {
   private describeCloseSit(): string | null {
     if (!this.closeSit) return null
     if (this.standToTurn) return '돌려고 일어나는 중'
-    if (this.resitAfterTurn) return '도는 중 (끝나면 가까우면 다시 앉음)'
+    if (this.resitAfterTurn) {
+      const rest = this.turnEndedAt + RESIT_AFTER_TURN_S - this.now
+      return this.turnRequestedAt === null && rest > 0
+        ? `돈 뒤 쉼 ${rest.toFixed(1)}초 (끝나면 가까우면 다시 앉음)`
+        : '도는 중 (끝나면 가까우면 다시 앉음)'
+    }
     const stand = metres(this.closeStandM)
     if (this.selfSat) {
+      if (this.sweepGaveUp) return '회전 포기 → 가까이 앉음 (쓸고 지나가는 자리 밖으로 나가면 일어나서 돎)'
       if (this.farFor > 0) return `스스로 앉음 · 일어남 ${(CLOSE_STAND_S - this.farFor).toFixed(1)}초 뒤`
       // 일어나려면 얼마나 더 물러나야 하는지 (개 발밑에서 잰 수평 거리)
       const more = this.lastUserDistance === null ? null : this.closeStandM - this.lastUserDistance

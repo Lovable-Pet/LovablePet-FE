@@ -40,8 +40,8 @@ export interface ArGazeOptions {
   readWalk: () => { active: boolean; standing: boolean; requestTurn: (reason: string) => boolean }
   /** 산책 밖 몸 돌리기에 쓸 리그 (회전 클립이 없으면 고개만) */
   walkHost: WalkHost | null
-  /** 가까이 앉기·일어나기 (기본 켬, ?closesit=0 끔). 받아서 시작했으면 true */
-  requestPose?: (pose: 'sit' | 'stand') => boolean
+  /** 가까이 앉기·일어나기 (기본 켬, ?closesit=0 끔). 받아서 시작했으면 true. reason 은 개발 기록용 */
+  requestPose?: (pose: 'sit' | 'stand', reason: string) => boolean
   /** 몸 돌려 따라보기 (끄면 고개만: 몸 돌리기·가까이 앉기·일어나기 없음). 꺼짐 → 켜짐이면 한계 밖일 때 바로 돈다 */
   follow: boolean
   /** 카메라가 너무 가까워 개를 숨긴 동안: 판단을 멈춘다 (고개는 그 자리, 몸 돌리기·가까이 앉기 없음) */
@@ -162,7 +162,7 @@ export function useArGaze(host: GazeHost | null, options: ArGazeOptions): ArGaze
         }
         return started
       },
-      onPose: (pose) => latest.current.requestPose?.(pose) ?? false,
+      onPose: (pose, reason) => latest.current.requestPose?.(pose, reason) ?? false,
       // 다시 놓기·산책으로 새로 만들어도 지금 상태 그대로
       follow: followRef.current,
       bodyLength: walkInfo.bodyLength,

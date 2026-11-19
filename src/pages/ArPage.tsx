@@ -441,11 +441,11 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     readWalk: () => walkStateRef.current,
     walkHost: hosts.walkHost,
     // 가까이 앉기 (기본 켬, ?closesit=0 끔): 가까이 붙으면 스스로 앉고, 물러나면 일어난다 (명령 칩 표시는 바꾸지 않는다)
-    requestPose: (next) => {
+    requestPose: (next, reason) => {
       const animator = animatorRef.current
       if (!animator?.hasCommands || walkStateRef.current.active) return false
       const result = animator.command(next)
-      if (import.meta.env.DEV) logArEvent('가까이 앉기', `${next === 'sit' ? '앉기' : '일어나기'} 요청 → ${result}`)
+      if (import.meta.env.DEV) logArEvent('가까이 앉기', `${next === 'sit' ? '앉기' : '일어나기'} 요청 → ${result} · ${reason}`)
       return result === 'started'
     },
     isHidden: near.isHidden,
