@@ -929,7 +929,10 @@ export class GazeController {
     // 스스로 앉은 개(가까이 앉기)는 일어나서 돈다. 명령으로 앉거나 엎드린 개는 고개만
     const selfSit = this.selfSitTurnable(input, sample)
     // 쓸고 지나가는 자리에 막혀 회전을 포기하고 앉는 중: 고개는 한계에서 포기하지 않고 계속 본다 (자리 막힘으로 이어서 센다)
-    if (this.sweepGaveUp && input.busy && !input.walking) return { reason: '회전 포기 → 앉는 중', hard: false, sweep: true }
+    // (자세는 sit 인데 sitting 루프가 아직 아닌 한 프레임도: 막힌 시간이 끊겨 안내가 깜빡이지 않게)
+    if (this.sweepGaveUp && !input.walking && (input.busy || (input.pose === 'sit' && sample.clip !== 'sitting'))) {
+      return { reason: '회전 포기 → 앉는 중', hard: false, sweep: true }
+    }
     if (input.pose !== 'stand' && !selfSit) return hard(input.pose === 'sit' ? '앉아 있음 (명령)' : '엎드려 있음')
     if (input.busy || (sample.clip !== 'standing' && !selfSit)) return hard('동작 중')
     if (!input.turnCheck && this.userDistance(input, sample) < BODY_TURN_MIN_M) return hard('너무 가까움')
