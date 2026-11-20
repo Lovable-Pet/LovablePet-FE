@@ -38,6 +38,9 @@ const withFavorite =
 
 const adoptablePets = () => petDetails.filter((pet) => pet.adoptable)
 
+/** 기본순(MIXED) 흉내: id 로 정해지는 섞인 순서 (페이지를 넘겨도 같다) */
+const mixedRank = (id: number) => (id * 2654435761) % 4294967296
+
 export const petHandlers = [
   http.get('/api/pets/filters', ({ request }) => {
     const pets = adoptablePets()
@@ -55,7 +58,7 @@ export const petHandlers = [
     const minWeight = numberParam(url, 'minWeight')
     const maxWeight = numberParam(url, 'maxWeight')
     const hasModel = url.searchParams.get('hasModel')
-    const sort = url.searchParams.get('sort') ?? 'NEWEST'
+    const sort = url.searchParams.get('sort') ?? 'MIXED'
 
     const filtered = adoptablePets()
       .filter((pet) => !region || pet.orgName.startsWith(region))
@@ -64,7 +67,11 @@ export const petHandlers = [
       .filter((pet) => maxWeight === null || (pet.weightKg !== null && pet.weightKg <= maxWeight))
       .filter((pet) => hasModel === null || String(pet.model !== null) === hasModel)
       .sort((a, b) =>
-        sort === 'OLDEST' ? a.noticeStart.localeCompare(b.noticeStart) : b.noticeStart.localeCompare(a.noticeStart),
+        sort === 'OLDEST'
+          ? a.noticeStart.localeCompare(b.noticeStart)
+          : sort === 'NEWEST'
+            ? b.noticeStart.localeCompare(a.noticeStart)
+            : mixedRank(a.id) - mixedRank(b.id),
       )
       .map(toSummary)
       .map(withFavorite(request))

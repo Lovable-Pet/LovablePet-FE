@@ -37,6 +37,7 @@ export const samplePets: SamplePet[] = [
     "model": {
       "glbUrl": "/mock/models/441407202600741/441407202600741-mock.glb",
       "usdzUrl": "/mock/models/441407202600741/441407202600741-mock.usdz",
+      "previewUrl": "/mock/models/441407202600741/441407202600741-mock-preview.webp",
       "withersM": 0.541,
       "template": "jindo",
       "behavior": {
@@ -75,6 +76,7 @@ export const samplePets: SamplePet[] = [
     "model": {
       "glbUrl": "/mock/models/447510202600669/447510202600669-mock.glb",
       "usdzUrl": "/mock/models/447510202600669/447510202600669-mock.usdz",
+      "previewUrl": "/mock/models/447510202600669/447510202600669-mock-preview.webp",
       "withersM": 0.457,
       "template": "jindo",
       "behavior": {
@@ -113,6 +115,7 @@ export const samplePets: SamplePet[] = [
     "model": {
       "glbUrl": "/mock/models/444461202600256/444461202600256-mock.glb",
       "usdzUrl": "/mock/models/444461202600256/444461202600256-mock.usdz",
+      "previewUrl": "/mock/models/444461202600256/444461202600256-mock-preview.webp",
       "withersM": 0.457,
       "template": "jindo",
       "behavior": {
@@ -151,6 +154,7 @@ export const samplePets: SamplePet[] = [
     "model": {
       "glbUrl": "/mock/models/413587202600172/413587202600172-mock.glb",
       "usdzUrl": "/mock/models/413587202600172/413587202600172-mock.usdz",
+      "previewUrl": "/mock/models/413587202600172/413587202600172-mock-preview.webp",
       "withersM": 0.331,
       "template": "jindo",
       "behavior": {
@@ -189,6 +193,7 @@ export const samplePets: SamplePet[] = [
     "model": {
       "glbUrl": "/mock/models/441399202601337/441399202601337-mock.glb",
       "usdzUrl": "/mock/models/441399202601337/441399202601337-mock.usdz",
+      "previewUrl": "/mock/models/441399202601337/441399202601337-mock-preview.webp",
       "withersM": 0.485,
       "template": "jindo",
       "behavior": {
@@ -227,6 +232,7 @@ export const samplePets: SamplePet[] = [
     "model": {
       "glbUrl": "/mock/models/441554202601431/441554202601431-mock.glb",
       "usdzUrl": "/mock/models/441554202601431/441554202601431-mock.usdz",
+      "previewUrl": "/mock/models/441554202601431/441554202601431-mock-preview.webp",
       "withersM": 0.354,
       "template": "jindo",
       "behavior": {
@@ -265,6 +271,7 @@ export const samplePets: SamplePet[] = [
     "model": {
       "glbUrl": "/mock/models/447508202601188/447508202601188-mock.glb",
       "usdzUrl": "/mock/models/447508202601188/447508202601188-mock.usdz",
+      "previewUrl": "/mock/models/447508202601188/447508202601188-mock-preview.webp",
       "withersM": 0.497,
       "template": "jindo",
       "behavior": {
@@ -303,6 +310,7 @@ export const samplePets: SamplePet[] = [
     "model": {
       "glbUrl": "/mock/models/427342202600461/427342202600461-mock.glb",
       "usdzUrl": "/mock/models/427342202600461/427342202600461-mock.usdz",
+      "previewUrl": "/mock/models/427342202600461/427342202600461-mock-preview.webp",
       "withersM": 0.467,
       "template": "jindo",
       "behavior": {
@@ -341,6 +349,7 @@ export const samplePets: SamplePet[] = [
     "model": {
       "glbUrl": "/mock/models/441383202600291/441383202600291-mock.glb",
       "usdzUrl": "/mock/models/441383202600291/441383202600291-mock.usdz",
+      "previewUrl": null,
       "withersM": 0.457,
       "template": "jindo",
       "behavior": {

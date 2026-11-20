@@ -13,6 +13,7 @@ export const NEUTERED_LABEL: Record<PetNeutered, string> = {
 }
 
 export const SORT_LABEL: Record<PetSort, string> = {
+  MIXED: '기본순',
   NEWEST: '최근 공고순',
   OLDEST: '오래 기다린 순',
 }

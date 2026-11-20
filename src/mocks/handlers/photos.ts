@@ -1,15 +1,24 @@
 import { http, HttpResponse } from 'msw'
 
-// 목업 공고 사진 (/mock/photos/{id}-{n}.jpg). 실제 파일 대신 따뜻한 회색 바탕에 번호를 그린 SVG를 돌려준다
-const TINTS = ['#E8DCCB', '#EEEAE2', '#DAD6CF', '#E9D9C2', '#E4DED6', '#D9D2C6']
+// 목업 공고 사진 (/mock/photos/{id}-{n}.jpg). 실제 파일 대신 파스텔 바탕에 강아지 발바닥을 그린 SVG를 돌려준다.
+// 사진이 없는 공고의 빈 타일(PetPhoto)과 같은 모습이다
+const TINTS = [
+  { background: '#FFC9D1', paw: '#D43D5A' },
+  { background: '#BFE8CD', paw: '#24744A' },
+  { background: '#F6B66F', paw: '#94530C' },
+  { background: '#CFE0FF', paw: '#3A66C4' },
+]
 
 const photoSvg = (petId: number, photoNumber: number) => {
   const tint = TINTS[(petId + photoNumber) % TINTS.length]
   return `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600" viewBox="0 0 600 600">
-  <rect width="600" height="600" fill="${tint}"/>
-  <ellipse cx="300" cy="350" rx="150" ry="110" fill="#1A1A17" opacity="0.12"/>
-  <circle cx="300" cy="230" r="80" fill="#1A1A17" opacity="0.12"/>
-  <text x="300" y="540" text-anchor="middle" font-family="sans-serif" font-size="34" fill="#5E5D57">목업 사진 ${petId}-${photoNumber + 1}</text>
+  <rect width="600" height="600" fill="${tint.background}"/>
+  <g transform="translate(180 180) scale(10)" fill="none" stroke="${tint.paw}" stroke-opacity="0.45" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="11" cy="4" r="2"/>
+    <circle cx="18" cy="8" r="2"/>
+    <circle cx="20" cy="16" r="2"/>
+    <path d="M9 10a5 5 0 0 1 5 5v3.5a3.5 3.5 0 0 1-6.84 1.045Q6.52 17.48 4.46 16.84A3.5 3.5 0 0 1 5.5 10Z"/>
+  </g>
 </svg>`
 }
 

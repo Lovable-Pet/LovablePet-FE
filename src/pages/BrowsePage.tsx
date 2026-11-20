@@ -1,5 +1,5 @@
 import { Box, Search, SlidersHorizontal } from 'lucide-react'
-import { Link, Navigate, useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import type { PetSort } from '../apis/dto/pet.dto'
 import { Button } from '../components/Button/Button'
 import { buttonClass } from '../components/Button/buttonClass'
@@ -20,7 +20,6 @@ import {
 } from '../features/pet/browseQuery'
 import { PetCard } from '../features/pet/components/PetCard'
 import { usePetList } from '../features/pet/queries'
-import { hasWelcomed } from '../features/welcome/welcomed'
 import { useEntranceStagger } from '../hooks/useEntranceStagger'
 
 const SORT_OPTIONS = (Object.keys(SORT_LABEL) as PetSort[]).map((value) => ({ value, label: SORT_LABEL[value] }))
@@ -31,7 +30,7 @@ const SIZE_CHIPS: { key: WeightPresetKey; label: string }[] = [
   { key: 'LARGE', label: '대형견' },
 ]
 
-// / — 홈. 검색창(→ 검색 화면), 크기 칩, 두 줄 카드 목록. 조건과 정렬은 주소(쿼리)에 담는다
+// /search — 검색 탭. 검색창·조건 버튼(→ 조건 고르기 화면), 크기 칩, 두 줄 카드 목록. 조건과 정렬은 주소(쿼리)에 담는다
 export function BrowsePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const query = parseBrowseQuery(searchParams)
@@ -40,9 +39,6 @@ export function BrowsePage() {
   const total = pages[0]?.totalElements
   const entrance = useEntranceStagger(pages.length, searchParams.toString())
 
-  // 처음 온 사람은 시작 화면부터 (조건이 붙은 주소로 바로 들어온 경우는 그대로 보여 준다)
-  if (!hasWelcomed() && searchParams.size === 0) return <Navigate to="/welcome" replace />
-
   const update = (next: BrowseQuery) => setSearchParams(toSearchParams(next), { preventScrollReset: true })
   const preset = weightPresetOf(query)
   const hasSize = query.minWeight !== undefined || query.maxWeight !== undefined
@@ -50,7 +46,7 @@ export function BrowsePage() {
     const { minWeight, maxWeight } = key ? WEIGHT_PRESETS[key] : { minWeight: undefined, maxWeight: undefined }
     update({ ...query, minWeight, maxWeight })
   }
-  const searchTo = `/search?${toSearchParams(query)}`
+  const searchTo = `/search/filters?${toSearchParams(query)}`
   const searchLabel = [query.region, query.kind].filter(Boolean).join(', ')
   const filterCount = activeFilterCount(query)
 
@@ -85,7 +81,7 @@ export function BrowsePage() {
 
       <div className="no-scrollbar sticky top-0 z-30 flex scroll-px-5 gap-2 overflow-x-auto bg-canvas/90 px-5 pt-[calc(8px+env(safe-area-inset-top))] pb-2 backdrop-blur">
         <Chip selected={!hasSize} onClick={() => pickSize(null)}>
-          전체
+          모든 크기
         </Chip>
         {SIZE_CHIPS.map(({ key, label }) => (
           <Chip key={key} selected={preset === key} onClick={() => pickSize(preset === key ? null : key)}>
@@ -129,7 +125,7 @@ export function BrowsePage() {
             title="조건에 맞는 유기견이 없어요"
             description="조건을 줄이면 더 많은 유기견을 볼 수 있어요."
             action={
-              <Link to="/" className={buttonClass({ variant: 'soft' })}>
+              <Link to="/search" className={buttonClass({ variant: 'soft' })}>
                 조건 모두 지우기
               </Link>
             }

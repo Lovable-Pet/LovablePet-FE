@@ -7,8 +7,11 @@ export type PetSex = 'M' | 'F' | 'Q'
 /** Y 예, N 아니오, U 미상 */
 export type PetNeutered = 'Y' | 'N' | 'U'
 
-/** NEWEST 최근 공고순, OLDEST 오래 기다린 순 */
-export type PetSort = 'NEWEST' | 'OLDEST'
+/**
+ * MIXED 기본순 (지역·공고일 상관없이 섞은 순서. 동기화 때마다 다시 섞이고, 그 사이에는 페이지를 넘겨도 순서가 같다),
+ * NEWEST 최근 공고순, OLDEST 오래 기다린 순. 비우면 MIXED
+ */
+export type PetSort = 'MIXED' | 'NEWEST' | 'OLDEST'
 
 export interface PetSummary {
   id: number
@@ -44,6 +47,12 @@ export interface PetModelView {
   glbUrl: string
   /** 아이폰 Quick Look 용 USDZ (대기 루프 하나만 들어 있음). 없으면 null. glbUrl 과 같은 기준의 경로 */
   usdzUrl: string | null
+  /**
+   * 모델을 찍어 둔 미리보기 그림 (1200x930, 투명 배경 WebP). glbUrl 과 같은 기준의 경로라 resolveModelUrl 로 붙여 쓴다.
+   * 아직 못 찍었으면 null (모델 완성 직후 잠깐). 이 항목이 없는 예전 서버 응답도 있으니 `?? null` 로 다룬다.
+   * 주소는 다시 찍으면 바뀌므로 규칙을 추측하지 말고 받은 값만 쓴다
+   */
+  previewUrl?: string | null
   /** 체고(m). 표시용 — GLB 에 이미 미터 단위로 적용돼 있어 AR 에서 크기를 다시 조정하지 않는다 */
   withersM: number
   /** jindo, jindo_puppy, maltese, toypoodle, chihuahua, retriever */

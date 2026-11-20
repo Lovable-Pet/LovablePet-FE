@@ -11,7 +11,7 @@ export interface BrowseFilters {
   hasModel?: boolean
 }
 
-/** 둘러보기 화면의 URL 쿼리 전체 (필터 + 정렬) */
+/** 검색 탭 목록(/search)의 URL 쿼리 전체 (필터 + 정렬) */
 export interface BrowseQuery extends BrowseFilters {
   sort: PetSort
 }
@@ -26,6 +26,8 @@ const parseNumber = (value: string | null) => {
 
 const parseText = (value: string | null) => (value && value.trim() !== '' ? value : undefined)
 
+const parseSort = (value: string | null): PetSort => (value === 'NEWEST' || value === 'OLDEST' ? value : 'MIXED')
+
 /** URL 쿼리 → 둘러보기 조건. 모르는 값은 버린다 */
 export const parseBrowseQuery = (params: URLSearchParams): BrowseQuery => ({
   region: parseText(params.get('region')),
@@ -33,10 +35,10 @@ export const parseBrowseQuery = (params: URLSearchParams): BrowseQuery => ({
   minWeight: parseNumber(params.get('minWeight')),
   maxWeight: parseNumber(params.get('maxWeight')),
   hasModel: params.get('hasModel') === 'true' ? true : undefined,
-  sort: params.get('sort') === 'OLDEST' ? 'OLDEST' : 'NEWEST',
+  sort: parseSort(params.get('sort')),
 })
 
-/** 둘러보기 조건 → URL 쿼리. 기본값(전체, 최근 공고순)은 넣지 않는다 */
+/** 둘러보기 조건 → URL 쿼리. 기본값(전체, 기본순)은 넣지 않는다 */
 export const toSearchParams = (query: BrowseQuery) => {
   const params = new URLSearchParams()
   if (query.region) params.set('region', query.region)
@@ -44,7 +46,7 @@ export const toSearchParams = (query: BrowseQuery) => {
   if (query.minWeight !== undefined) params.set('minWeight', String(query.minWeight))
   if (query.maxWeight !== undefined) params.set('maxWeight', String(query.maxWeight))
   if (query.hasModel) params.set('hasModel', 'true')
-  if (query.sort === 'OLDEST') params.set('sort', 'OLDEST')
+  if (query.sort !== 'MIXED') params.set('sort', query.sort)
   return params
 }
 
@@ -97,6 +99,6 @@ export const weightPresetForKg = (weightKg: number): WeightPresetKey => {
 export const similarSizeLinkOf = (weightKg: number | null) => {
   if (weightKg === null) return null
   const preset = WEIGHT_PRESETS[weightPresetForKg(weightKg)]
-  const params = toSearchParams({ minWeight: preset.minWeight, maxWeight: preset.maxWeight, sort: 'NEWEST' })
-  return { to: `/?${params}`, range: preset.range }
+  const params = toSearchParams({ minWeight: preset.minWeight, maxWeight: preset.maxWeight, sort: 'MIXED' })
+  return { to: `/search?${params}`, range: preset.range }
 }

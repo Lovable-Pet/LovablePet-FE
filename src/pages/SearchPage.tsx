@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from 'react'
-import { Box, Search } from 'lucide-react'
+import { Box, ChevronLeft } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router'
 import type { PetFilterOption } from '../apis/dto/pet.dto'
 import { Button } from '../components/Button/Button'
 import { Character } from '../components/Character/Character'
 import { Chip } from '../components/Chip/Chip'
+import { IconButton } from '../components/IconButton/IconButton'
 import { WEIGHT_PRESETS, type WeightPresetKey } from '../constants/pet'
 import {
   EMPTY_FILTERS,
@@ -15,19 +16,20 @@ import {
   type BrowseFilters,
 } from '../features/pet/browseQuery'
 import { usePetCount, usePetFilters } from '../features/pet/queries'
+import { useGoBack } from '../hooks/useGoBack'
 
 /** 처음에는 마릿수가 많은 것만 보이고, 나머지는 '더 보기'로 편다 */
 const FOLDED_COUNT = 8
 
-// /search — 지역·품종·크기·AR 로 찾기. 고르면 아래 버튼의 마릿수가 바뀌고, 누르면 홈 목록에 적용된다
+// /search/filters — 지역·품종·크기·AR 조건 고르기. 고르면 아래 버튼의 마릿수가 바뀌고, 누르면 검색 탭 목록(/search)에 적용된다
 export function SearchPage() {
   const navigate = useNavigate()
+  const goBack = useGoBack('/search')
   const [searchParams] = useSearchParams()
   const applied = parseBrowseQuery(searchParams)
   const [draft, setDraft] = useState<BrowseFilters>(applied)
-  const [keyword, setKeyword] = useState('')
   const { data: options, isError } = usePetFilters()
-  const { data: count } = usePetCount(toListParams({ ...draft, sort: 'NEWEST' }))
+  const { data: count } = usePetCount(toListParams({ ...draft, sort: 'MIXED' }))
   const preset = weightPresetOf(draft)
 
   const pickPreset = (key: WeightPresetKey) => {
@@ -36,8 +38,11 @@ export function SearchPage() {
   }
 
   return (
-    <main className="px-5 pt-[calc(16px+env(safe-area-inset-top))] pb-24">
-      <div className="flex items-end justify-between">
+    <main className="px-5 pt-[calc(6px+env(safe-area-inset-top))] pb-24">
+      <IconButton aria-label="뒤로" onClick={goBack} className="-ml-3">
+        <ChevronLeft className="size-6" strokeWidth={2} aria-hidden />
+      </IconButton>
+      <div className="mt-1 flex items-end justify-between">
         <h1 className="font-display text-title">
           어떤 유기견을
           <br />
@@ -45,18 +50,6 @@ export function SearchPage() {
         </h1>
         <Character name="searching" size={92} className="-mb-1" />
       </div>
-
-      <label className="mt-4 flex h-12 items-center gap-2.5 rounded-full bg-surface px-4 shadow-soft focus-within:shadow-[inset_0_0_0_2px_var(--color-primary)]">
-        <Search className="size-5 shrink-0 text-ink-mute" strokeWidth={2.2} aria-hidden />
-        <input
-          type="search"
-          value={keyword}
-          onChange={(event) => setKeyword(event.target.value)}
-          placeholder="지역이나 품종 이름을 적어 보세요"
-          aria-label="지역·품종 이름으로 거르기"
-          className="h-full min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-ink-mute"
-        />
-      </label>
 
       <Group title="크기" note="공고에 적힌 지금 체중 기준이에요">
         <div className="grid grid-cols-3 gap-2">
@@ -94,7 +87,6 @@ export function SearchPage() {
       <OptionGroup
         title="지역"
         unit="곳"
-        keyword={keyword}
         options={options?.regions}
         value={draft.region}
         onChange={(region) => setDraft((prev) => ({ ...prev, region }))}
@@ -102,7 +94,6 @@ export function SearchPage() {
       <OptionGroup
         title="품종"
         unit="종"
-        keyword={keyword}
         options={options?.kinds}
         value={draft.kind}
         onChange={(kind) => setDraft((prev) => ({ ...prev, kind }))}
@@ -117,7 +108,7 @@ export function SearchPage() {
             size="lg"
             full
             disabled={count === 0}
-            onClick={() => navigate(`/?${toSearchParams({ ...draft, sort: applied.sort })}`)}
+            onClick={() => navigate(`/search?${toSearchParams({ ...draft, sort: applied.sort })}`, { replace: true })}
           >
             {count === undefined ? (
               '유기견 보기'
@@ -146,7 +137,6 @@ function Group({ title, note, children }: { title: string; note?: string; childr
 function OptionGroup({
   title,
   unit,
-  keyword,
   options,
   value,
   onChange,
@@ -154,8 +144,6 @@ function OptionGroup({
   title: string
   /** '8곳 더 보기'의 단위 */
   unit: string
-  /** 검색창에 적은 글자. 있으면 이름에 그 글자가 든 것만 모두 보인다 */
-  keyword: string
   options: PetFilterOption[] | undefined
   value: string | undefined
   onChange: (value: string | undefined) => void
@@ -163,38 +151,32 @@ function OptionGroup({
   const [expanded, setExpanded] = useState(false)
   if (!options || options.length === 0) return null
 
-  const trimmed = keyword.trim()
-  const matched = trimmed ? options.filter((option) => option.name.includes(trimmed)) : options
   // 접혀 있어도 고른 값은 보이게 한다
-  const folded = matched.slice(0, FOLDED_COUNT)
+  const folded = options.slice(0, FOLDED_COUNT)
   const picked = value ? options.find((option) => option.name === value) : undefined
-  const visible = expanded || trimmed ? matched : picked && !folded.includes(picked) ? [...folded, picked] : folded
-  const hiddenCount = matched.length - FOLDED_COUNT
+  const visible = expanded ? options : picked && !folded.includes(picked) ? [...folded, picked] : folded
+  const hiddenCount = options.length - FOLDED_COUNT
 
   return (
     <Group title={title}>
-      {visible.length === 0 ? (
-        <p className="text-label text-ink-mute">'{trimmed}'이 들어간 {title}이 없어요.</p>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {visible.map((option) => (
-            <Chip key={option.name} selected={value === option.name} onClick={() => onChange(value === option.name ? undefined : option.name)}>
-              {option.name}
-              <span className="font-normal tabular-nums opacity-75">{option.count.toLocaleString()}</span>
-            </Chip>
-          ))}
-          {!trimmed && hiddenCount > 0 && (
-            <button
-              type="button"
-              aria-expanded={expanded}
-              onClick={() => setExpanded((prev) => !prev)}
-              className="h-10 rounded-full px-3 text-label font-bold text-primary-deep"
-            >
-              {expanded ? '접기' : `${hiddenCount}${unit} 더 보기`}
-            </button>
-          )}
-        </div>
-      )}
+      <div className="flex flex-wrap gap-2">
+        {visible.map((option) => (
+          <Chip key={option.name} selected={value === option.name} onClick={() => onChange(value === option.name ? undefined : option.name)}>
+            {option.name}
+            <span className="font-normal tabular-nums opacity-75">{option.count.toLocaleString()}</span>
+          </Chip>
+        ))}
+        {hiddenCount > 0 && (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((prev) => !prev)}
+            className="h-10 rounded-full px-3 text-label font-bold text-primary-deep"
+          >
+            {expanded ? '접기' : `${hiddenCount}${unit} 더 보기`}
+          </button>
+        )}
+      </div>
     </Group>
   )
 }

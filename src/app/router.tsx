@@ -1,5 +1,6 @@
 import { createBrowserRouter } from 'react-router'
 import { BrowsePage } from '../pages/BrowsePage'
+import { HomePage } from '../pages/HomePage'
 import { FavoritesPage } from '../pages/FavoritesPage'
 import { KakaoCallbackPage } from '../pages/KakaoCallbackPage'
 import { LoginPage } from '../pages/LoginPage'
@@ -28,8 +29,9 @@ export const router = createBrowserRouter([
         element: <TabLayout />,
         errorElement: <NotFoundPage />,
         children: [
-          { index: true, element: <BrowsePage /> },
-          { path: 'search', element: <SearchPage /> },
+          { index: true, element: <HomePage /> },
+          { path: 'search', element: <BrowsePage /> },
+          { path: 'search/filters', element: <SearchPage /> },
           {
             path: 'favorites',
             element: (
