@@ -98,8 +98,8 @@ export function BrowsePage() {
         </Chip>
       </div>
 
-      <section aria-label="유기견 목록" className="px-4 pt-2">
-        <div className="mb-2 flex min-h-9 items-center justify-between px-1">
+      <section aria-label="유기견 목록" className="px-5 pt-2">
+        <div className="mb-2 flex min-h-9 items-center justify-between">
           <p className="text-label text-ink-soft">
             {total !== undefined && (
               <>

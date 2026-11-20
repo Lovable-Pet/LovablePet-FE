@@ -62,7 +62,7 @@ export function AdminAttemptsPage() {
         <UsageMeter todayCount={data.todayCount} dailyLimit={data.dailyLimit} />
       </div>
 
-      <div role="group" aria-label="상태로 걸러 보기" className="no-scrollbar -mx-4 mt-3.5 flex scroll-px-4 gap-2 overflow-x-auto px-4 py-1.5 sm:flex-wrap">
+      <div role="group" aria-label="상태로 걸러 보기" className="no-scrollbar -mx-5 mt-3.5 flex scroll-px-5 gap-2 overflow-x-auto px-5 py-1.5 sm:flex-wrap">
         <Chip selected={filter === null} onClick={() => setFilter(null)}>
           전체 <span className="font-normal tabular-nums opacity-70">{data.items.length}</span>
         </Chip>

@@ -192,7 +192,7 @@ function Gallery({ pet }: { pet: PetDetail }) {
 
   if (photos.length === 0) {
     return (
-      <div className="px-4">
+      <div className="px-5">
         <PetPhoto src={null} alt={`${pet.kindName} 공고 사진`} seed={pet.id} className={cn(frame, 'rounded-[1.75rem]')} />
       </div>
     )
@@ -236,7 +236,7 @@ function Gallery({ pet }: { pet: PetDetail }) {
   }
 
   return (
-    <div className="px-4">
+    <div className="px-5">
       <div
         role="group"
         aria-roledescription="사진 넘겨 보기"

@@ -12,7 +12,7 @@ const TABS = [
 export function AdminLayout() {
   return (
     <div className="mx-auto min-h-dvh w-full max-w-[860px] bg-canvas pb-16">
-      <header className="sticky top-0 z-30 bg-canvas/90 px-4 pt-[env(safe-area-inset-top)] backdrop-blur sm:px-6">
+      <header className="sticky top-0 z-30 bg-canvas/90 px-5 pt-[env(safe-area-inset-top)] backdrop-blur sm:px-6">
         <div className="flex h-14 items-center gap-2">
           <Link to="/" aria-label="앱으로 돌아가기" className="-ml-2 flex size-11 items-center justify-center rounded-full hover:bg-pink-soft">
             <ChevronLeft className="size-6" strokeWidth={2} aria-hidden />
@@ -38,7 +38,7 @@ export function AdminLayout() {
           ))}
         </nav>
       </header>
-      <div className="px-4 pt-6 sm:px-6">
+      <div className="px-5 pt-6 sm:px-6">
         <Outlet />
       </div>
     </div>
