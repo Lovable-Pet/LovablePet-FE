@@ -75,6 +75,7 @@ import { useArNear } from '../features/ar/useArNear'
 import { NEAR_HINT_TEXT, type NearTuning } from '../features/ar/nearCamera'
 import { GAZE_IN_PRODUCTION, type GazeTuning } from '../features/ar/gaze/gazeSpec'
 import type { WalkTuning } from '../features/ar/walk/walkController'
+import { dogNearPoint } from '../features/ar/dogPressHit'
 import { LONG_PRESS_MS, useLongPress } from '../features/ar/useLongPress'
 import { PetPhoto } from '../features/pet/components/PetPhoto'
 import { usePetDetail } from '../features/pet/queries'
@@ -712,14 +713,18 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
 
   // 개를 누른 채 2초 (LONG_PRESS_MS) → 빵(죽은 척, '빵!' 명령과 같다: 서 있지 않으면 일어난 뒤). 그 뒤 손을 떼도 탭 반응은 내지 않는다 (onPointerUp).
   // 예전의 '꼬리 흔들기' 칩 3초(짖기)는 없앴다: 그 칩은 이제 명령 클립이 없는 모델에만 있고, 그런 모델에는 짖기 클립도 없다
+  // 누른 곳에서 24 px (HOLD_SLOP_PX) 까지 움직여도 되고, 개 위가 아니어도 화면에 그려진 개에서 24 px 안이면 시작한다 (작은 개 대비).
+  // 탭은 지금처럼 개 위 + TAP_SLOP_PX 안
   const dogHold = useLongPress<ReactPointerEvent>({
     enabled: hasCommands,
-    slopPx: TAP_SLOP_PX,
     canStart: (event) => {
       const mv = mvRef.current
-      return event.target === mv && !!mv?.positionAndNormalFromPoint(event.clientX, event.clientY)
+      const near = mv && event.target === mv ? dogNearPoint(mv, event.clientX, event.clientY) : null
+      if (import.meta.env.DEV && near) logArEvent('길게 누르기', `강아지에서 ${Math.round(near)} px 밖 → 시작 허용`)
+      return near !== null
     },
     onLongPress: () => holdDog(),
+    onLog: import.meta.env.DEV ? (text) => logArEvent('길게 누르기', text) : undefined,
   })
 
   // 말 걸기 (음성 명령). 놓기 전·산책 중에는 막혀 듣던 것도 조용히 멈춘다. 같은 말을 다시 해도 예약은 그대로 (취소는 칩으로)
@@ -728,6 +733,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     disabled: arLocked || walking,
     onCommand: (id) => stamp({ type: 'voiceCommand', accepted: accepted(runCommand(id)) }),
     onMiss: puzzledReaction,
+    // 들린 말 → 명령 [규칙]·후보는 ?debug 에서만. 없으면 개발 서버도 배포와 같은 문구
+    debug,
   })
   // 듣기 시작하면 개가 사용자를 바라본다
   const gazeTriggerRef = useRef(gaze.trigger)
@@ -741,7 +748,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   // 화면 안 3D 에서 개를 탭하면 반응한다. 카메라를 돌린 드래그는 빼고, 개를 맞혔을 때만
   const onPointerDown = (event: ReactPointerEvent) => {
     pointerStart.current = { x: event.clientX, y: event.clientY }
-    dogHold.handlers.onPointerDown(event)
+    // 버튼·AR 터치 층에서 올라온 누르기는 보지 않는다 (누르는 중이면 두 번째 손가락으로 취소되게 넘긴다)
+    if (event.target === mvRef.current || dogHold.press) dogHold.handlers.onPointerDown(event)
   }
   const onPointerUp = (event: ReactPointerEvent) => {
     const start = pointerStart.current
@@ -895,12 +903,16 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         shadow-intensity="1"
         shadow-softness="0.8"
         loading="eager"
-        className="block size-full bg-ar-camera"
+        className="block size-full bg-ar-camera select-none [-webkit-touch-callout:none]"
         style={{ '--poster-color': 'transparent' } as CSSProperties}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
         onPointerMove={dogHold.handlers.onPointerMove}
         onPointerCancel={dogHold.handlers.onPointerCancel}
+        // 개를 누르는 중에는 브라우저의 길게 누르기 메뉴가 누르기를 가져가지 않게 한다
+        onContextMenu={(event) => {
+          if (dogHold.press) event.preventDefault()
+        }}
       >
         {/* 기본 AR 버튼은 숨기고 아래 '우리 집 바닥에 놓기' 로 연다 */}
         <span slot="ar-button" hidden />
@@ -922,6 +934,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           onTap={tapReaction}
           onLongPress={holdDog}
           onPlaceTap={placement.place}
+          onHoldLog={import.meta.env.DEV ? (text) => logArEvent('길게 누르기', text) : undefined}
           locked={walking}
         />
         {/* ?debug 상자는 오버레이보다 앞(아래)에 둬 버튼·트레이를 가리지 않는다 */}

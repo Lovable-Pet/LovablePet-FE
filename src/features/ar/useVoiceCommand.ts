@@ -10,6 +10,7 @@ import { AR_PERMISSION_TEXT, LISTEN_VIBRATE_MS, startVoiceSession, type Recognit
 // - 말하는 중간 결과(interimResults)에서 단어(includes)가 잡히면 바로 명령하고 듣기를 멈춘다.
 //   문장 전체로만 맞추는 말(exact)과 자모 비교는 최종 결과에서만
 // - 들린 말에서 명령을 못 찾으면 onMiss 를 부른다 (한 번 들을 때 한 번). 중간 결과, 오류, 아무 말도 안 들린 때는 부르지 않는다
+// - 들린 말 → 명령 [규칙]·후보·중간 결과 글자는 개발 모드 + ?debug (debug) 에서만. ?debug 없는 개발 서버는 배포와 같은 문구
 // - 개발 모드에서는 한 번 들을 때마다 후보·잡힌 규칙·걸린 시간을 voiceLog 에 남긴다 (?debug 에서 보기·복사)
 // - 안드로이드 Chrome 의 음성 인식은 구글 서버를 거쳐 인터넷이 필요하다
 // - 아이폰 Quick Look AR 은 페이지 밖에서 돌아 음성이 안 된다 (화면 안 3D 에서만)
@@ -73,8 +74,11 @@ export function useVoiceCommand({
   disabled = false,
   onCommand,
   onMiss,
+  debug = false,
 }: {
   inAr: boolean
+  /** 개발 모드 + ?debug: 들린 말 → 명령 [규칙]·후보·중간 결과 글자를 보인다. 아니면 배포와 같은 문구 */
+  debug?: boolean
   /** 막혔는지 (AR 에서 개를 놓기 전). 듣는 중에 막히면 결과 없이 조용히 멈춘다 */
   disabled?: boolean
   onCommand: (id: CommandId) => void
@@ -83,15 +87,15 @@ export function useVoiceCommand({
 }) {
   const [supported] = useState(() => getRecognition() !== undefined && (VOICE_ON_IOS || !isIos()))
   const [phase, setPhase] = useState<VoicePhase>('idle')
-  /** 듣는 중에 들린 말 (중간 결과). 개발 모드에서만 채운다 */
+  /** 듣는 중에 들린 말 (중간 결과). 개발 모드 + ?debug 에서만 채운다 */
   const [heard, setHeard] = useState('')
   const { flash, show } = useFlashMessage(VOICE_FLASH_MS)
   const permission = useMicPermission()
   const sessionRef = useRef<VoiceSession | null>(null)
   // 듣는 동안 바뀔 수 있는 값은 콜백 안에서 최신 값으로 읽는다
-  const latest = useRef({ inAr, onCommand, onMiss, permission })
+  const latest = useRef({ inAr, onCommand, onMiss, permission, debug })
   useEffect(() => {
-    latest.current = { inAr, onCommand, onMiss, permission }
+    latest.current = { inAr, onCommand, onMiss, permission, debug }
   })
 
   useEffect(() => () => sessionRef.current?.silence(), [])
@@ -117,6 +121,7 @@ export function useVoiceCommand({
       create: () => new RecognitionClass(),
       onPhase: setPhase,
       onHeard: setHeard,
+      debug: import.meta.env.DEV && latest.current.debug,
       onCommand: (id) => latest.current.onCommand(id),
       onMiss: () => latest.current.onMiss?.(),
       show,

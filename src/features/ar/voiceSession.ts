@@ -10,7 +10,8 @@ import { matchVoiceAlternatives, voiceMissHint } from './voiceWords'
 //   마이크가 열리면 '지금 말해 주세요' 와 짧은 진동 (알림음은 마이크에 다시 들어가 쓰지 않는다)
 // - 소리가 한 번도 없이 (onsoundstart 없음) 'no-speech' 로 끝나면 알리지 않고 한 번만 다시 듣는다. 두 번째도 같으면 안내
 // - 배포 화면: 알아들으면 아무 문구 없이 명령만, 못 알아들으면 들린 글자 없이 MISS_TEXT. 듣는 중 들린 글자도 안 보인다
-// - 개발 모드: 들린 말 → 명령 [규칙·후보], 중간 결과 글자, 누름부터 각 이벤트까지 걸린 시간 (음성 기록·이벤트 기록)
+// - 개발 모드 + ?debug (options.debug): 들린 말 → 명령 [규칙·후보], 중간 결과 글자. ?debug 가 없으면 개발 서버도 배포와 같은 문구
+// - 개발 모드: 누름부터 각 이벤트까지 걸린 시간 (음성 기록·이벤트 기록, ?debug 에서 보인다)
 
 export type VoicePhase = 'idle' | 'starting' | 'listening' | 'hearing'
 
@@ -62,7 +63,7 @@ export interface Recognition {
   abort(): void
 }
 
-/** 말풍선: 듣는 중이면 상태 문구 (개발 모드 hearing 은 들린 글자), 아니면 잠깐 보이는 결과·오류 */
+/** 말풍선: 듣는 중이면 상태 문구 (개발 모드 ?debug 의 hearing 은 들린 글자), 아니면 잠깐 보이는 결과·오류 */
 export function voiceBubble(phase: VoicePhase, heard: string, flash: string | null | undefined): string | null {
   if (phase === 'idle') return flash ?? null
   if (phase === 'hearing' && heard) return `“${heard}”`
@@ -73,8 +74,10 @@ export interface VoiceSessionOptions {
   /** 인식기 하나 만들기 (다시 들을 때 새로 만든다) */
   create: () => Recognition
   onPhase: (phase: VoicePhase) => void
-  /** 들린 글자 (개발 모드에서만 부른다) */
+  /** 들린 글자 (개발 모드 + debug 에서만 부른다) */
   onHeard: (text: string) => void
+  /** 개발용 문구 (들린 말 → 명령 [규칙]·후보·중간 결과 글자)를 보일지: 개발 모드 + ?debug. 배포 빌드에서는 보지 않는다 */
+  debug?: boolean
   onCommand: (id: CommandId) => void
   /** 들린 말에서 명령을 못 찾음 (갸우뚱) */
   onMiss: () => void
@@ -144,9 +147,9 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession | 
   const log = (entry: Omit<VoiceLogEntry, 'at' | 'interims' | 'timings'>) => {
     if (import.meta.env.DEV) addVoiceLog({ ...entry, at: Date.now(), interims: [...interims], timings: [...timings] })
   }
-  /** 못 알아들음: 배포는 들린 글자 없이, 개발은 들린 말 · 덧붙일 안내 · 다른 후보 */
+  /** 못 알아들음: 배포(와 ?debug 없는 개발)는 들린 글자 없이, 개발 ?debug 는 들린 말 · 덧붙일 안내 · 다른 후보 */
   const showMiss = (texts: readonly string[]) => {
-    if (import.meta.env.DEV) {
+    if (import.meta.env.DEV && options.debug) {
       const hint = voiceMissHint(texts)
       const others = texts.length > 1 ? ` (후보: ${texts.slice(1).join(' / ')})` : ''
       options.show(`“${texts[0] ?? ''}” · 알아듣지 못했어요${hint ? ` · ${hint}` : ''}${others}`)
@@ -207,7 +210,7 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession | 
       if (import.meta.env.DEV && !interims.length && !result.isFinal) mark('첫 중간 결과')
       hearing()
       lastAlternatives = alternatives
-      if (import.meta.env.DEV) options.onHeard(text)
+      if (import.meta.env.DEV && options.debug) options.onHeard(text)
       const match = matchVoiceAlternatives(texts, result.isFinal)
       if (!match && !result.isFinal) {
         if (import.meta.env.DEV && text && interims.at(-1) !== text) interims.push(text)
@@ -219,8 +222,8 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession | 
       if (match) {
         options.onCommand(match.command)
         r.stop()
-        // 배포 화면은 알아들었을 때 문구 없이 명령만
-        if (import.meta.env.DEV) {
+        // 배포 화면(과 ?debug 없는 개발)은 알아들었을 때 문구 없이 명령만
+        if (import.meta.env.DEV && options.debug) {
           const rule = ` [${match.rule}${match.distance !== undefined ? ` ${match.distance}` : ''}${match.alternative ? ` · 후보${match.alternative + 1}` : ''}]`
           const others = texts.length > 1 ? ` (후보: ${texts.filter((_, index) => index !== match.alternative).join(' / ')})` : ''
           options.show(`“${texts[match.alternative]}” → ${labelOf(match.command)}${rule}${others}`)
@@ -265,7 +268,7 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession | 
       }
       recognition = null
       setPhase('idle')
-      if (import.meta.env.DEV) options.onHeard('')
+      if (import.meta.env.DEV && options.debug) options.onHeard('')
       options.onEnd()
     }
     recognition = r
