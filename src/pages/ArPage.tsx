@@ -62,7 +62,7 @@ import {
 } from '../features/ar/dogAnimator'
 import { useVoiceCommand } from '../features/ar/useVoiceCommand'
 import { useBarkSound } from '../features/ar/useBarkSound'
-import { BARK_CLIP, barkListenerFrom } from '../features/ar/barkSound'
+import { barkListenerFrom } from '../features/ar/barkSound'
 import { STANDING_CLIP, WALK_CLIPS } from '../features/ar/walk/walkSpec'
 import { attachPoseLayers, clipQuietEnds, type PoseLayersHandle } from '../features/ar/modelViewerArStage'
 import { ArEventLog } from '../features/ar/devlog/ArEventLog'
@@ -98,9 +98,8 @@ import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 // - AR 이 안 되는 기기(데스크톱 등): 화면 안 3D 로 보여 준다. 명령·탭 반응은 된다
 //
 // 화면 배치 (WebXR 과 화면 안 3D 가 같다. 개가 주인공이라 가운데는 비운다)
-// - 위: 닫기 · 이름·체고 알약(누르면 정보 시트: 다시 놓기도 여기) · 따라보기(몸 돌리기가 되는 개만) · 짖는 소리(짖기 클립이 있는 개만) · 찜.
-//   그 아래 안내 한 줄 (pickHint)
-// - 짖을 때 입 모양에 맞춰 짖는 소리 (../features/ar/barkSound.ts, 화면 안 3D 도). 마이크로 듣는 중에는 내지 않는다
+// - 위: 닫기 · 이름·체고 알약(누르면 정보 시트: 다시 놓기도 여기) · 따라보기(몸 돌리기가 되는 개만) · 찜. 그 아래 안내 한 줄 (pickHint)
+// - 짖을 때 입 모양에 맞춰 짖는 소리 (../features/ar/barkSound.ts, 화면 안 3D 도, 켜기/끄기 버튼 없음). 마이크로 듣는 중에는 내지 않는다
 // - 가운데: 개 머리 위 반응 말풍선 ('?', 하트, '멍!', '빵!')
 // - 아래: [묘기 | 말 걸기 | 산책]. 묘기는 명령 트레이(3×2)를 펼친다. 명령 클립이 없으면 묘기 자리에 꼬리 흔들기 하나.
 //   산책 중에는 '산책 끝' 하나
@@ -301,8 +300,6 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const [activeCommand, setActiveCommand] = useState<CommandId | null>(null)
   /** 걷기 클립(walk_start·walk·walk_stop·standing)이 다 있는지. AR 에서 '산책' 버튼 자리를 정한다 */
   const [hasWalkClips, setHasWalkClips] = useState(false)
-  /** 짖기(bark) 클립이 있는지. 있으면 위에 짖는 소리 켜기/끄기 버튼 */
-  const [hasBark, setHasBark] = useState(false)
   /** 애니메이터가 1회 클립을 실제로 틀 때 (짖는 소리, 아래에서 채운다) */
   const clipPlayRef = useRef<(clip: string, info: ClipPlayInfo) => void>(() => {})
   /** 묘기 트레이. 명령을 눌러도 열려 있고, 묘기 버튼을 다시 누르거나 개를 탭하면 닫힌다 */
@@ -612,7 +609,6 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
       setTapIsHeadTilt(animator.tapIsHeadTilt)
       setCanTap(animator.canTap)
       setHasWalkClips([...WALK_CLIPS, STANDING_CLIP].every((clip) => mv.availableAnimations.includes(clip)))
-      setHasBark(mv.availableAnimations.includes(BARK_CLIP))
     }
     // 'webglcontextlost' 도 error 로 오지만 렌더러가 스스로 복구한다. 파일을 못 받았을 때만 실패로 본다
     const onError = (event: Event) => {
@@ -1001,7 +997,6 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
             withersCm={withersCm}
             onOpenInfo={() => setInfoOpen(true)}
             follow={gaze.canFollow && dogReady ? { on: follow, onToggle: toggleFollow } : null}
-            sound={hasBark ? { on: bark.on, onToggle: bark.toggle } : null}
             petId={pet.id}
             favorited={pet.favorited}
           />

@@ -1,20 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { logArEvent } from './devlog/eventLog'
-import { BARK_CLIP, BarkPlayer, readBarkSoundOn, writeBarkSoundOn, type BarkListener, type BarkScheduleResult } from './barkSound'
+import { BARK_CLIP, BarkPlayer, type BarkListener, type BarkScheduleResult } from './barkSound'
 import type { ClipPlayInfo } from './dogAnimator'
 
 // 짖는 소리 (규칙은 ./barkSound.ts). 이 화면 동안 BarkPlayer 하나:
 // - 화면을 열 때 소리 파일을 받아 디코드해 둔다
 // - 탭할 때마다 (캡처 단계, 화면 어디든) AudioContext 를 만들거나 다시 켠다. '우리 집 바닥에 놓기'·'3D로 보기' 도 부른다 (unlock)
 // - bark 클립이 실제로 재생을 시작하면 (DogAnimator.onClipPlay) 클립 시각에 맞춰 예약, 다른 클립이 시작하면 (onClipStart) 남은 소리 취소
-// - 스피커 버튼 켜기/끄기는 localStorage 에 기억
+// - 켜기/끄기 버튼은 없다 (늘 켜짐, 마이크로 듣는 동안만 무음). 전체 끄기는 BARK_SOUND_ENABLED
 
 const UNLOCK_EVENTS = ['pointerup', 'touchend', 'click', 'keydown'] as const
 
 export interface BarkSound {
-  /** 소리 켜짐 (스피커 버튼) */
-  on: boolean
-  toggle: () => void
   /** 사용자 탭 안에서 부른다 */
   unlock: () => void
   /** DogAnimator.onClipStart: bark 가 아닌 클립이 시작하면 남은 소리 취소 */
@@ -34,7 +31,6 @@ export function useBarkSound({
   readListener: () => BarkListener | null
 }): BarkSound {
   const [player] = useState(() => new BarkPlayer())
-  const [on, setOn] = useState(() => readBarkSoundOn())
   const latest = useRef({ template, readListener })
   useEffect(() => {
     latest.current = { template, readListener }
@@ -52,18 +48,6 @@ export function useBarkSound({
       player.deactivate()
     }
   }, [player])
-
-  useEffect(() => {
-    player.setEnabled(on)
-  }, [player, on])
-
-  const toggle = useCallback(() => {
-    const next = !on
-    setOn(next)
-    writeBarkSoundOn(next)
-    if (import.meta.env.DEV) logArEvent('소리', next ? '켬' : '끔')
-    player.unlock()
-  }, [player, on])
 
   const unlock = useCallback(() => player.unlock(), [player])
 
@@ -102,13 +86,13 @@ export function useBarkSound({
     [player],
   )
 
-  return { on, toggle, unlock, onClipStart, onClipPlay, setMicOpen }
+  return { unlock, onClipStart, onClipPlay, setMicOpen }
 }
 
 /** 개발 기록 한 줄 */
 function describeBark(result: BarkScheduleResult, state: string): string {
   if (!result.scheduled) {
-    const reason = { off: '소리 꺼짐', mic: '마이크로 듣는 중', locked: `AudioContext ${state}`, loading: '파일 준비 전', disposed: '화면 끝' }[result.reason]
+    const reason = { off: 'BARK_SOUND_ENABLED 꺼짐', mic: '마이크로 듣는 중', locked: `AudioContext ${state}`, loading: '파일 준비 전', disposed: '화면 끝' }[result.reason]
     return `짖기 소리 안 냄 (${reason})`
   }
   const at = result.delays.map((delay) => delay.toFixed(2)).join('·')

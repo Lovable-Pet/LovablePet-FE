@@ -16,8 +16,11 @@
 // - 짖기가 중간에 끊기면 (다른 명령·탭 등 다른 클립이 시작) 아직 안 난 소리는 취소한다 (나고 있는 소리는 끝까지)
 // - 기본 볼륨 0.6. 폰에서 개까지 바닥 거리 1 m 안은 1 배, 멀면 1/거리 로 줄이고 최소 0.35 배. 개가 폰 기준 왼쪽·오른쪽이면 그쪽으로 (StereoPanner)
 // - 마이크로 듣는 중에는 소리를 내지 않는다: 듣기를 시작하면 나고 있던 소리·예약을 모두 멈추고, 듣는 동안은 예약하지 않는다
-// - 소리 끄기 (위 스피커 버튼) 는 기억한다 (localStorage). 꺼져 있으면 예약하지 않는다
+// - 켜기/끄기 버튼은 없다 (사용자가 '짖어' 를 시켰을 때만 나는 소리라). 소리 전체는 BARK_SOUND_ENABLED 로만 끈다
 // - 자동재생 제한: AudioContext 는 사용자 탭 안에서 만들거나 다시 켠다 (unlock). 파일은 페이지를 열 때 받아 디코드해 둔다
+
+/** 짖는 소리 전체 켜기 (false 면 파일도 받지 않고 예약하지 않는다) */
+export const BARK_SOUND_ENABLED: boolean = true
 
 export type BarkSoundId = 'big' | 'small'
 
@@ -133,36 +136,6 @@ export function barkListenerFrom(camera: Vec3, viewMatrix: ArrayLike<number>, do
   return { distance: Math.hypot(dog.x - camera.x, dog.z - camera.z), pan }
 }
 
-// ── 소리 켜기/끄기 기억 ──
-
-export const BARK_SOUND_STORAGE_KEY = 'lovablepet.ar.barkSound'
-
-type StorageLike = Pick<Storage, 'getItem' | 'setItem'>
-const defaultStorage = (): StorageLike | null => {
-  try {
-    return typeof localStorage === 'undefined' ? null : localStorage
-  } catch {
-    return null
-  }
-}
-
-/** 기본 켜짐. 껐던 것만 기억해서 꺼짐 (읽을 수 없으면 켜짐) */
-export function readBarkSoundOn(storage: StorageLike | null = defaultStorage()): boolean {
-  try {
-    return storage?.getItem(BARK_SOUND_STORAGE_KEY) !== 'off'
-  } catch {
-    return true
-  }
-}
-
-export function writeBarkSoundOn(on: boolean, storage: StorageLike | null = defaultStorage()) {
-  try {
-    storage?.setItem(BARK_SOUND_STORAGE_KEY, on ? 'on' : 'off')
-  } catch {
-    // 개인 정보 보호 모드 등: 이번 화면에서만
-  }
-}
-
 // ── Web Audio ──
 // 쓰는 것만 적은 모양 (단위 시험은 가짜 AudioContext 를 넣는다)
 
@@ -227,6 +200,8 @@ export interface BarkPlayerOptions {
   /** 파일 받아 디코드 (페이지를 열 때 한 번) */
   loadBuffers?: () => Promise<Record<BarkSoundId, unknown>>
   random?: () => number
+  /** 시험용. 기본은 BARK_SOUND_ENABLED */
+  enabled?: boolean
 }
 
 const browserContext = (): AudioContextLike | null => {
@@ -270,7 +245,7 @@ export class BarkPlayer {
   private buffers: Record<BarkSoundId, unknown> | null = null
   private loading: Promise<void> | null = null
   private voices: Voice[] = []
-  private enabled = true
+  private readonly enabled: boolean
   private micOpen = false
   private active = true
   /** 디코드에 실패 (이 브라우저가 Ogg Opus 를 못 푸는 등). 소리 없이 지나간다 */
@@ -280,10 +255,12 @@ export class BarkPlayer {
     this.createContext = options.createContext ?? browserContext
     this.loadBuffers = options.loadBuffers ?? (() => loadBarkBuffers())
     this.random = options.random ?? Math.random
+    this.enabled = options.enabled ?? BARK_SOUND_ENABLED
   }
 
   /** 파일을 받아 디코드해 둔다 (한 번) */
   preload(): Promise<void> {
+    if (!this.enabled) return Promise.resolve()
     this.loading ??= this.loadBuffers().then(
       (buffers) => {
         this.buffers = buffers
@@ -306,11 +283,6 @@ export class BarkPlayer {
   /** AudioContext 상태 (시험·개발 기록). 아직 안 만들었으면 'none' */
   get contextState(): string {
     return this.context?.state ?? 'none'
-  }
-
-  setEnabled(on: boolean) {
-    this.enabled = on
-    if (!on) this.stopAll()
   }
 
   /** 마이크로 듣는 중: 켜지면 나고 있던 소리·예약을 모두 멈추고, 듣는 동안은 예약하지 않는다 */
