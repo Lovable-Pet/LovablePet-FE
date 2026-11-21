@@ -84,17 +84,18 @@ export const HEIGHT_REFERENCE: readonly { maxCm: number; text: string }[] = [
 
 export const heightPhrase = (withersCm: number) => HEIGHT_REFERENCE.find((row) => withersCm <= row.maxCm)!.text
 
+// AR 화면은 이름을 쓰지 않는다: 유기견이라 이름이 없고 displayName 은 '믹스견 · 경기도 화성시 · 14kg' 같은 긴 문자열이다 (정보 시트에만)
 export const INTRO_TEXT = {
-  hello: (name: string) => `안녕하세요, ${josa(name, '이에요', '예요')}`,
+  hello: '안녕하세요!',
   height: (withersCm: number) => `체고 ${withersCm}cm · ${josa(heightPhrase(withersCm), '이에요', '예요')}`,
 }
 
 export const FINISH_TEXT = {
   /** 발도장을 다 모음 */
-  title: (name: string) => `${josa(name, '과', '와')} 친해졌어요`,
+  title: '이 아이와 친해졌어요',
   /** 다 모으기 전에 닫기 */
-  exitTitle: (name: string) => `${josa(name, '이', '가')} 기다리고 있어요`,
-  body: (name: string, shelter: string) => `실제 ${josa(name, '은', '는')} ${shelter}에서 기다리고 있어요`,
+  exitTitle: '이 아이가 기다리고 있어요',
+  body: (shelter: string) => `실제 이 아이는 ${shelter}에서 기다리고 있어요`,
 }
 
 /** 정보 시트 줄 이름 */

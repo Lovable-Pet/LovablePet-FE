@@ -6,13 +6,13 @@ import { AR_TEXT } from '../arText'
 const ROUND = 'pointer-events-auto flex size-11 shrink-0 items-center justify-center rounded-full transition active:scale-97'
 
 /**
- * AR 화면 위 줄: 닫기 · 이름·체고 알약(누르면 정보 시트) · 따라보기 · 찜 하트.
+ * AR 화면 위 줄: 닫기 · 체고 알약(누르면 정보 시트) · 따라보기 · 찜 하트.
+ * 이름은 쓰지 않는다 (유기견이라 이름이 없고 displayName 은 긴 문자열, 정보 시트에만).
  * WebXR 중에는 닫기 자리를 비워 model-viewer 의 닫기 버튼을 쓴다
  */
 export function ArTopBar({
   inAr,
   onClose,
-  name,
   withersCm,
   onOpenInfo,
   follow,
@@ -21,7 +21,6 @@ export function ArTopBar({
 }: {
   inAr: boolean
   onClose: () => void
-  name: string
   withersCm: number
   onOpenInfo: () => void
   /** 몸 돌리기가 되는 개만 */
@@ -43,13 +42,12 @@ export function ArTopBar({
         type="button"
         onClick={onOpenInfo}
         aria-haspopup="dialog"
-        aria-label={`${name} · ${AR_TEXT.withers} ${withersCm}cm · ${AR_TEXT.info}`}
+        aria-label={`${AR_TEXT.withers} ${withersCm}cm · ${AR_TEXT.info}`}
         className="pointer-events-auto flex h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full bg-measure px-3.5 text-body font-bold text-ink transition active:scale-97"
       >
         <Ruler className="size-4 shrink-0" strokeWidth={2.2} aria-hidden />
-        <span className="min-w-0 truncate">{name}</span>
         <span className="shrink-0 whitespace-nowrap">
-          · {AR_TEXT.withers} <span className="font-mono">{withersCm}cm</span>
+          {AR_TEXT.withers} <span className="font-mono">{withersCm}cm</span>
         </span>
       </button>
       {follow && (

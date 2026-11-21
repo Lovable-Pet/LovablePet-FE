@@ -98,7 +98,7 @@ import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 // - AR 이 안 되는 기기(데스크톱 등): 화면 안 3D 로 보여 준다. 명령·탭 반응은 된다
 //
 // 화면 배치 (WebXR 과 화면 안 3D 가 같다. 개가 주인공이라 가운데는 비운다)
-// - 위: 닫기 · 이름·체고 알약(누르면 정보 시트: 다시 놓기도 여기) · 따라보기(몸 돌리기가 되는 개만) · 찜. 그 아래 안내 한 줄 (pickHint)
+// - 위: 닫기 · 체고 알약(이름은 쓰지 않음, 누르면 정보 시트: 다시 놓기도 여기) · 따라보기(몸 돌리기가 되는 개만) · 찜. 그 아래 안내 한 줄 (pickHint)
 // - 짖을 때 입 모양에 맞춰 짖는 소리 (../features/ar/barkSound.ts, 화면 안 3D 도, 켜기/끄기 버튼 없음). 마이크로 듣는 중에는 내지 않는다
 // - 가운데: 개 머리 위 반응 말풍선 ('?', 하트, '멍!', '빵!')
 // - 아래: [묘기 | 말 걸기 | 산책]. 묘기는 명령 트레이(3×2)를 펼친다. 명령 클립이 없으면 묘기 자리에 꼬리 흔들기 하나.
@@ -304,7 +304,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const clipPlayRef = useRef<(clip: string, info: ClipPlayInfo) => void>(() => {})
   /** 묘기 트레이. 명령을 눌러도 열려 있고, 묘기 버튼을 다시 누르거나 개를 탭하면 닫힌다 */
   const [trayOpen, setTrayOpen] = useState(false)
-  /** 이름·체고 알약을 누르면 여는 정보 시트 */
+  /** 체고 알약을 누르면 여는 정보 시트 */
   const [infoOpen, setInfoOpen] = useState(false)
   /** 개 머리 위 반응 말풍선. id 가 바뀌면 다시 띄운다 */
   const [reaction, setReaction] = useState<{ kind: ReactionKind; id: number } | null>(null)
@@ -890,7 +890,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
             : null,
     intro:
       intro === 'hello'
-        ? INTRO_TEXT.hello(pet.kindName)
+        ? INTRO_TEXT.hello
         : intro === 'height'
           ? INTRO_TEXT.height(withersCm)
           : intro === 'puppy'
@@ -993,7 +993,6 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           <ArTopBar
             inAr={inAr}
             onClose={closeAr}
-            name={pet.displayName}
             withersCm={withersCm}
             onOpenInfo={() => setInfoOpen(true)}
             follow={gaze.canFollow && dogReady ? { on: follow, onToggle: toggleFollow } : null}
@@ -1088,7 +1087,6 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         {card && (
           <ArFinishCard
             mode={card}
-            name={pet.kindName}
             careName={pet.careName}
             careTel={pet.careTel}
             petId={pet.id}
