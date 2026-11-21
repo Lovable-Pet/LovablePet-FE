@@ -1,5 +1,6 @@
 import type { ModelViewerElement } from '@google/model-viewer'
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
+import { dogNearPoint } from '../dogPressHit'
 import { LONG_PRESS_MS, useLongPress } from '../useLongPress'
 import { HoldRing } from './HoldRing'
 
@@ -10,8 +11,10 @@ import { HoldRing } from './HoldRing'
  * - 뒤에 오는 오버레이(명령 칩·마이크)는 이 층 위에 그려져 그대로 눌린다.
  *   model-viewer 의 AR 닫기 버튼은 그림자 DOM 에서 슬롯보다 뒤에 있어 이 층이 가리지 않는다
  * - 개를 놓기 전에는 화면 어디를 탭해도 onPlaceTap (바닥 원 자리에 놓기)
- * - 놓은 뒤 개 탭(갸우뚱이 있으면 갸우뚱, 없으면 꼬리 흔들기)과 3초 누르기(빵, 죽은 척)는 이 층에서 받아
- *   positionAndNormalFromPoint 로 개를 맞혔는지 본다
+ * - 놓은 뒤 개 탭(갸우뚱이 있으면 갸우뚱, 없으면 꼬리 흔들기)과 2초 누르기(빵, 죽은 척)는 이 층에서 받아
+ *   positionAndNormalFromPoint 로 개를 맞혔는지 본다. 탭은 개 위만, 2초 누르기는 화면에 그려진 개에서 24 px 안이면 시작
+ *   (dogNearPoint, 작은 개 대비)하고 누른 곳에서 24 px (HOLD_SLOP_PX) 까지 움직여도 된다. 탭과 끌기를 가르는 거리는 slopPx (8 px)
+ * - 브라우저의 길게 누르기 메뉴·글자 선택이 누르기를 가져가지 않게 contextmenu 를 막고 -webkit-touch-callout·user-select 를 끈다
  * - 산책 중(locked)에는 개 탭·누르기에 반응하지 않는다 (이동·회전 막기는 그대로)
  * 화면 안 3D 에서는 그리지 않아 카메라 돌리기는 그대로다
  */
@@ -25,12 +28,13 @@ export function ArTouchLayer({
   onLongPress,
   onPlaceTap,
   locked = false,
+  onHoldLog,
 }: {
   /** AR 중인지 */
   active: boolean
   /** 개가 바닥에 놓였는지. 그 전에는 개 탭·누르기에 반응하지 않고, 탭은 onPlaceTap 으로 간다 */
   dogReady: boolean
-  /** 명령 클립이 있는 모델인지 (3초 누르기 → 빵) */
+  /** 명령 클립이 있는 모델인지 (2초 누르기 → 빵) */
   holdEnabled: boolean
   /** 탭과 끌기를 가르는 거리 */
   slopPx: number
@@ -39,8 +43,10 @@ export function ArTouchLayer({
   onLongPress: () => void
   /** 개를 놓기 전 화면 탭 */
   onPlaceTap?: () => void
-  /** 산책 중: 개 탭·3초 누르기를 받지 않는다 */
+  /** 산책 중: 개 탭·2초 누르기를 받지 않는다 */
   locked?: boolean
+  /** 개발 모드 기록: 2초 누르기 시작·취소 이유·완료 (?debug 이벤트 기록) */
+  onHoldLog?: (text: string) => void
 }) {
   const layerRef = useRef<HTMLDivElement>(null)
   /** 첫 손가락이 닿은 곳. 다른 손가락이 닿으면 탭이 아니다 */
@@ -49,11 +55,19 @@ export function ArTouchLayer({
   const hitsDog = (event: { clientX: number; clientY: number }) =>
     !!mvRef.current?.positionAndNormalFromPoint(event.clientX, event.clientY)
 
+  /** 2초 누르기 시작: 개 위이거나 화면에 그려진 개에서 24 px 안 */
+  const holdStarts = (event: { clientX: number; clientY: number }) => {
+    const mv = mvRef.current
+    const near = mv ? dogNearPoint(mv, event.clientX, event.clientY) : null
+    if (import.meta.env.DEV && near) onHoldLog?.(`강아지에서 ${Math.round(near)} px 밖 → 시작 허용`)
+    return near !== null
+  }
+
   const hold = useLongPress<ReactPointerEvent>({
     enabled: active && dogReady && holdEnabled && !locked,
-    slopPx,
-    canStart: hitsDog,
+    canStart: holdStarts,
     onLongPress,
+    onLog: onHoldLog,
   })
 
   useEffect(() => {
@@ -90,7 +104,8 @@ export function ArTouchLayer({
     <div
       ref={layerRef}
       data-ar-touch
-      className="pointer-events-auto absolute inset-0 touch-none"
+      className="pointer-events-auto absolute inset-0 touch-none select-none [-webkit-touch-callout:none]"
+      onContextMenu={(event) => event.preventDefault()}
       onPointerDown={onPointerDown}
       onPointerMove={hold.handlers.onPointerMove}
       onPointerUp={onPointerUp}

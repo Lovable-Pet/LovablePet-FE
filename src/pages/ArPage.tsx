@@ -52,6 +52,7 @@ import {
 import {
   DogAnimator,
   POSE_LABEL,
+  type ClipPlayInfo,
   type CommandId,
   type Pose,
   type ReactSource,
@@ -60,6 +61,8 @@ import {
   type TapResult,
 } from '../features/ar/dogAnimator'
 import { useVoiceCommand } from '../features/ar/useVoiceCommand'
+import { useBarkSound } from '../features/ar/useBarkSound'
+import { barkListenerFrom } from '../features/ar/barkSound'
 import { STANDING_CLIP, WALK_CLIPS } from '../features/ar/walk/walkSpec'
 import { attachPoseLayers, clipQuietEnds, type PoseLayersHandle } from '../features/ar/modelViewerArStage'
 import { ArEventLog } from '../features/ar/devlog/ArEventLog'
@@ -75,6 +78,7 @@ import { useArNear } from '../features/ar/useArNear'
 import { NEAR_HINT_TEXT, type NearTuning } from '../features/ar/nearCamera'
 import { GAZE_IN_PRODUCTION, type GazeTuning } from '../features/ar/gaze/gazeSpec'
 import type { WalkTuning } from '../features/ar/walk/walkController'
+import { dogNearPoint } from '../features/ar/dogPressHit'
 import { LONG_PRESS_MS, useLongPress } from '../features/ar/useLongPress'
 import { PetPhoto } from '../features/pet/components/PetPhoto'
 import { usePetDetail } from '../features/pet/queries'
@@ -94,7 +98,8 @@ import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 // - AR 이 안 되는 기기(데스크톱 등): 화면 안 3D 로 보여 준다. 명령·탭 반응은 된다
 //
 // 화면 배치 (WebXR 과 화면 안 3D 가 같다. 개가 주인공이라 가운데는 비운다)
-// - 위: 닫기 · 이름·체고 알약(누르면 정보 시트: 다시 놓기도 여기) · 따라보기(몸 돌리기가 되는 개만) · 찜. 그 아래 안내 한 줄 (pickHint)
+// - 위: 닫기 · 체고 알약(이름은 쓰지 않음, 누르면 정보 시트: 다시 놓기도 여기) · 따라보기(몸 돌리기가 되는 개만) · 찜. 그 아래 안내 한 줄 (pickHint)
+// - 짖을 때 입 모양에 맞춰 짖는 소리 (../features/ar/barkSound.ts, 화면 안 3D 도, 켜기/끄기 버튼 없음). 마이크로 듣는 중에는 내지 않는다
 // - 가운데: 개 머리 위 반응 말풍선 ('?', 하트, '멍!', '빵!')
 // - 아래: [묘기 | 말 걸기 | 산책]. 묘기는 명령 트레이(3×2)를 펼친다. 명령 클립이 없으면 묘기 자리에 꼬리 흔들기 하나.
 //   산책 중에는 '산책 끝' 하나
@@ -120,7 +125,7 @@ const TAP_SLOP_PX = 8
 
 /** 배치 전 빨강(놓을 수 없음)이 이만큼(ms) 넘게 이어지면 다시 열어 보라는 줄을 더한다 */
 const STUCK_HINT_MS = 10_000
-/** 개를 3초 누르면 하는 명령. 짖기는 음성과 묘기 트레이로 */
+/** 개를 2초 누르면 하는 명령. 짖기는 음성과 묘기 트레이로 */
 const HOLD_COMMAND: CommandId = 'play_dead'
 /** 끝부분이 첫 프레임 자세로 돌아와 비어 있으면 거기서 끊는 클립 (목업은 갸우뚱만 비어 있다) */
 const REACTION_CLIPS = ['head_tilt', 'tail_wag', 'bark']
@@ -295,9 +300,11 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const [activeCommand, setActiveCommand] = useState<CommandId | null>(null)
   /** 걷기 클립(walk_start·walk·walk_stop·standing)이 다 있는지. AR 에서 '산책' 버튼 자리를 정한다 */
   const [hasWalkClips, setHasWalkClips] = useState(false)
+  /** 애니메이터가 1회 클립을 실제로 틀 때 (짖는 소리, 아래에서 채운다) */
+  const clipPlayRef = useRef<(clip: string, info: ClipPlayInfo) => void>(() => {})
   /** 묘기 트레이. 명령을 눌러도 열려 있고, 묘기 버튼을 다시 누르거나 개를 탭하면 닫힌다 */
   const [trayOpen, setTrayOpen] = useState(false)
-  /** 이름·체고 알약을 누르면 여는 정보 시트 */
+  /** 체고 알약을 누르면 여는 정보 시트 */
   const [infoOpen, setInfoOpen] = useState(false)
   /** 개 머리 위 반응 말풍선. id 가 바뀌면 다시 띄운다 */
   const [reaction, setReaction] = useState<{ kind: ReactionKind; id: number } | null>(null)
@@ -406,7 +413,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const dogReady = (inAr && placement.phase === 'placed') || sim.active
   /** 산책 발자취·몸 돌리기 쓸고 지나가는 자리를 받을지 (?debug 상자, 시뮬레이션은 화면에 늘 그린다) */
   const pathMarks = debug || sim.active
-  /** AR 에서 개를 놓기 전: 명령 칩·음성·개 탭·3초 누르기를 막는다 */
+  /** AR 에서 개를 놓기 전: 명령 칩·음성·개 탭·2초 누르기를 막는다 */
   const arLocked = inAr && !dogReady
   const canReplace = dogReady && placement.manual
   /** ?debug: 바닥 추정을 처음부터 다시 (잘못 잡힌 바닥 확인용) */
@@ -466,6 +473,39 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   }, [walk.active, walk.phase, walk.requestTurn])
   /** 산책 중: 아래 버튼(묘기·말 걸기)을 '산책 끝' 으로 바꾸고 개 탭을 막는다 */
   const walking = walk.active
+
+  // 짖는 소리 (../features/ar/barkSound.ts). 크기·좌우는 놓은 뒤 매 프레임 폰(카메라)과 개 자리 (AR·시뮬레이션),
+  // 화면 안 3D 는 모름 (1 m·가운데로 본다)
+  const soundWalkHost = hosts.walkHost
+  const soundViewRef = useRef({ ok: false, camera: { x: 0, y: 0, z: 0 }, view: new Float64Array(16) })
+  useEffect(() => {
+    const view = soundViewRef.current
+    view.ok = false
+    if (!soundWalkHost) return
+    const unsubscribe = soundWalkHost.subscribe((frame) => {
+      view.ok = frame.tracking
+      if (!frame.tracking) return
+      view.camera.x = frame.camera.x
+      view.camera.y = frame.camera.y
+      view.camera.z = frame.camera.z
+      view.view.set(frame.view.viewMatrix)
+    })
+    return () => {
+      unsubscribe()
+      view.ok = false
+    }
+  }, [soundWalkHost])
+  const bark = useBarkSound({
+    template: model.template,
+    readListener: () => {
+      const view = soundViewRef.current
+      const dog = soundWalkHost?.dogPose()
+      return view.ok && dog ? barkListenerFrom(view.camera, view.view, dog.position) : null
+    },
+  })
+  useEffect(() => {
+    clipPlayRef.current = bark.onClipPlay
+  })
   /** 반응 말풍선을 띄운다. 산책 중에는 띄우지 않는다 */
   const showReaction = useCallback(
     (kind: ReactionKind) => {
@@ -478,6 +518,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   useEffect(() => {
     clipStartRef.current = (clip) => {
       if (import.meta.env.DEV) logArEvent('클립', `${clip} 시작`)
+      // 짖기가 끊기면 아직 안 난 소리는 취소
+      bark.onClipStart(clip)
       if (muteHeartRef.current) return
       const kind = REACTION_BY_CLIP[clip]
       if (kind) showReaction(kind)
@@ -555,6 +597,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         },
         onLog: import.meta.env.DEV ? (event) => logArEvent('동작', describeAnimatorLog(event)) : undefined,
         onClipStart: (clip) => clipStartRef.current(clip),
+        onClipPlay: (clip, info) => clipPlayRef.current(clip, info),
         onReact: (source) => onReactRef.current(source),
         onReserve: setReserved,
         onResting: setAnimResting,
@@ -597,6 +640,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   }, [])
 
   const startAr = () => {
+    // 짖는 소리: 탭 안에서 AudioContext 를 만들거나 다시 켠다 (자동재생 제한)
+    bark.unlock()
     setShowGuide(false)
     setArFailed(false)
     // 버튼을 누른 그 순간에 불러야 브라우저가 카메라를 열어 준다
@@ -654,7 +699,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     showTapResult(animator.puzzled())
   }
 
-  /** 개 3초 누르기가 다 참: 빵 ('꾹' 발도장, 예약이어도) */
+  /** 개 2초 누르기가 다 참: 빵 ('꾹' 발도장, 예약이어도) */
   const holdDog = () => stamp({ type: 'hold', accepted: accepted(runCommand(HOLD_COMMAND)) })
 
   /**
@@ -676,6 +721,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   }, [dogReady, greetHeart])
   /** 화면 안 3D 로 처음 볼 때도 같은 인사 (한 번) */
   const startPreview = () => {
+    bark.unlock()
     setShowGuide(false)
     if (greetedRef.current.preview) return
     greetedRef.current.preview = true
@@ -710,16 +756,20 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     placement.replace()
   }
 
-  // 개를 누른 채 3초 → 빵(죽은 척, '빵!' 명령과 같다: 서 있지 않으면 일어난 뒤). 그 뒤 손을 떼도 탭 반응은 내지 않는다 (onPointerUp).
+  // 개를 누른 채 2초 (LONG_PRESS_MS) → 빵(죽은 척, '빵!' 명령과 같다: 서 있지 않으면 일어난 뒤). 그 뒤 손을 떼도 탭 반응은 내지 않는다 (onPointerUp).
   // 예전의 '꼬리 흔들기' 칩 3초(짖기)는 없앴다: 그 칩은 이제 명령 클립이 없는 모델에만 있고, 그런 모델에는 짖기 클립도 없다
+  // 누른 곳에서 24 px (HOLD_SLOP_PX) 까지 움직여도 되고, 개 위가 아니어도 화면에 그려진 개에서 24 px 안이면 시작한다 (작은 개 대비).
+  // 탭은 지금처럼 개 위 + TAP_SLOP_PX 안
   const dogHold = useLongPress<ReactPointerEvent>({
     enabled: hasCommands,
-    slopPx: TAP_SLOP_PX,
     canStart: (event) => {
       const mv = mvRef.current
-      return event.target === mv && !!mv?.positionAndNormalFromPoint(event.clientX, event.clientY)
+      const near = mv && event.target === mv ? dogNearPoint(mv, event.clientX, event.clientY) : null
+      if (import.meta.env.DEV && near) logArEvent('길게 누르기', `강아지에서 ${Math.round(near)} px 밖 → 시작 허용`)
+      return near !== null
     },
     onLongPress: () => holdDog(),
+    onLog: import.meta.env.DEV ? (text) => logArEvent('길게 누르기', text) : undefined,
   })
 
   // 말 걸기 (음성 명령). 놓기 전·산책 중에는 막혀 듣던 것도 조용히 멈춘다. 같은 말을 다시 해도 예약은 그대로 (취소는 칩으로)
@@ -728,6 +778,10 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     disabled: arLocked || walking,
     onCommand: (id) => stamp({ type: 'voiceCommand', accepted: accepted(runCommand(id)) }),
     onMiss: puzzledReaction,
+    // 마이크로 듣는 중에는 짖는 소리를 내지 않는다 (듣기 시작하면 나고 있던 소리도 멈춤)
+    onMicOpen: bark.setMicOpen,
+    // 들린 말 → 명령 [규칙]·후보는 ?debug 에서만. 없으면 개발 서버도 배포와 같은 문구
+    debug,
   })
   // 듣기 시작하면 개가 사용자를 바라본다
   const gazeTriggerRef = useRef(gaze.trigger)
@@ -741,7 +795,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   // 화면 안 3D 에서 개를 탭하면 반응한다. 카메라를 돌린 드래그는 빼고, 개를 맞혔을 때만
   const onPointerDown = (event: ReactPointerEvent) => {
     pointerStart.current = { x: event.clientX, y: event.clientY }
-    dogHold.handlers.onPointerDown(event)
+    // 버튼·AR 터치 층에서 올라온 누르기는 보지 않는다 (누르는 중이면 두 번째 손가락으로 취소되게 넘긴다)
+    if (event.target === mvRef.current || dogHold.press) dogHold.handlers.onPointerDown(event)
   }
   const onPointerUp = (event: ReactPointerEvent) => {
     const start = pointerStart.current
@@ -835,7 +890,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
             : null,
     intro:
       intro === 'hello'
-        ? INTRO_TEXT.hello(pet.kindName)
+        ? INTRO_TEXT.hello
         : intro === 'height'
           ? INTRO_TEXT.height(withersCm)
           : intro === 'puppy'
@@ -895,12 +950,16 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         shadow-intensity="1"
         shadow-softness="0.8"
         loading="eager"
-        className="block size-full bg-ar-camera"
+        className="block size-full bg-ar-camera select-none [-webkit-touch-callout:none]"
         style={{ '--poster-color': 'transparent' } as CSSProperties}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
         onPointerMove={dogHold.handlers.onPointerMove}
         onPointerCancel={dogHold.handlers.onPointerCancel}
+        // 개를 누르는 중에는 브라우저의 길게 누르기 메뉴가 누르기를 가져가지 않게 한다
+        onContextMenu={(event) => {
+          if (dogHold.press) event.preventDefault()
+        }}
       >
         {/* 기본 AR 버튼은 숨기고 아래 '우리 집 바닥에 놓기' 로 연다 */}
         <span slot="ar-button" hidden />
@@ -922,6 +981,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           onTap={tapReaction}
           onLongPress={holdDog}
           onPlaceTap={placement.place}
+          onHoldLog={import.meta.env.DEV ? (text) => logArEvent('길게 누르기', text) : undefined}
           locked={walking}
         />
         {/* ?debug 상자는 오버레이보다 앞(아래)에 둬 버튼·트레이를 가리지 않는다 */}
@@ -933,7 +993,6 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
           <ArTopBar
             inAr={inAr}
             onClose={closeAr}
-            name={pet.displayName}
             withersCm={withersCm}
             onOpenInfo={() => setInfoOpen(true)}
             follow={gaze.canFollow && dogReady ? { on: follow, onToggle: toggleFollow } : null}
@@ -1028,7 +1087,6 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         {card && (
           <ArFinishCard
             mode={card}
-            name={pet.kindName}
             careName={pet.careName}
             careTel={pet.careTel}
             petId={pet.id}

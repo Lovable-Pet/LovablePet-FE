@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { cn } from '../../../components/utils/cn'
 import { AR_TEXT } from '../arText'
 import { COMMANDS, POSE_COMMAND, type CommandId, type Pose, type ReserveId } from '../dogAnimator'
+import { voiceBubble, type VoicePhase } from '../voiceSession'
 
 /** 묘기 트레이 (3×2). 굴러는 칩에서만 뺀다 (클립·음성 '굴러'는 그대로) */
 const TRAY_COMMANDS = COMMANDS.filter((command) => command.id !== 'rollover')
@@ -11,8 +12,9 @@ const TRAY_ID = 'ar-trick-tray'
 
 /** 말 걸기 버튼이 쓰는 음성 상태 (useVoiceCommand) */
 export interface TalkState {
-  listening: boolean
-  /** 듣는 중에 들린 말 */
+  /** starting 마이크 여는 중 · listening 열림 (말해도 됨) · hearing 말소리가 들어옴 · idle 안 들음 */
+  phase: VoicePhase
+  /** 듣는 중에 들린 말 (개발 모드에서만 채워진다) */
   heard: string
   /** 들은 말·오류 말풍선 */
   flash: { id: number; text: string } | null
@@ -66,14 +68,15 @@ export function ArControls({
   /** 발도장 다음 할 일이 이 버튼이면 둘레를 약하게 강조한다 */
   highlight?: 'talk' | 'walk' | null
 }) {
-  const bubble = talk?.listening ? (talk.heard ? `“${talk.heard}”` : '듣고 있어요…') : talk?.flash?.text
+  const phase = talk?.phase ?? 'idle'
+  const bubble = talk ? voiceBubble(phase, talk.heard, talk.flash?.text) : null
 
   return (
     <div className="flex flex-col items-center gap-3">
       <p aria-live="polite" className="flex min-h-8 max-w-full items-center justify-center text-center">
         {bubble && (
           <span
-            key={talk?.listening ? 'listening' : talk?.flash?.id}
+            key={phase !== 'idle' ? phase : talk?.flash?.id}
             className="inline-block max-w-full animate-toast-in rounded-2xl bg-black/55 px-3 py-1.5 text-label text-white [overflow-wrap:anywhere]"
           >
             {bubble}
@@ -142,7 +145,7 @@ export function ArControls({
             icon={<Mic className="relative size-8" strokeWidth={2} aria-hidden />}
             onClick={talk.toggle}
             disabled={talkDisabled}
-            listening={talk.listening}
+            listening={phase}
             pulse={highlight === 'talk'}
           />
         )}
@@ -169,7 +172,7 @@ function RoundButton({
   big = false,
   pressed,
   controls,
-  listening = false,
+  listening = 'idle',
   reserved,
   pulse = false,
 }: {
@@ -181,13 +184,15 @@ function RoundButton({
   /** 트레이 같은 펼침 버튼 (aria-expanded) */
   pressed?: boolean
   controls?: string
-  /** 말 걸기: 듣는 중 */
-  listening?: boolean
+  /** 말 걸기: starting 이면 흐리게 (마이크 여는 중), listening·hearing 이면 깜빡임 (말해도 됨) */
+  listening?: VoicePhase
   /** 예약됨 (산책: 하던 동작이 끝나면 출발). 눌린 모양으로 남는다 */
   reserved?: boolean
   /** 다음 할 일 (둘레 약하게 강조, '동작 줄이기'면 끔) */
   pulse?: boolean
 }) {
+  const talking = listening !== 'idle'
+  const open = listening === 'listening' || listening === 'hearing'
   return (
     <button
       type="button"
@@ -195,20 +200,22 @@ function RoundButton({
       disabled={disabled}
       aria-expanded={pressed}
       aria-controls={controls}
-      aria-pressed={big ? listening : reserved}
+      aria-pressed={big ? talking : reserved}
       className="group pointer-events-auto flex w-20 flex-col items-center gap-1 disabled:opacity-45"
     >
       <span
         className={cn(
           'relative flex items-center justify-center rounded-full transition group-active:scale-97',
           big ? 'size-18' : 'size-14',
-          big || pressed || listening || reserved ? 'bg-measure text-ink' : 'bg-black/55 text-white',
+          big || pressed || talking || reserved ? 'bg-measure text-ink' : 'bg-black/55 text-white',
+          // 마이크가 열리기 전: 흐리게 (아직 말하면 빠진다)
+          listening === 'starting' && 'opacity-55',
           reserved && 'ring-2 ring-white ring-offset-2 ring-offset-black/40',
           big && !pulse && 'shadow-[0_2px_10px_rgb(0_0_0/0.35)]',
           pulse && !disabled && 'animate-soft-pulse motion-reduce:animate-none',
         )}
       >
-        {listening && <span aria-hidden className="absolute inset-0 animate-ping rounded-full bg-measure/60" />}
+        {open && <span aria-hidden className="absolute inset-0 animate-ping rounded-full bg-measure/60" />}
         {icon}
       </span>
       <span className="text-label font-semibold text-white [text-shadow:0_1px_3px_rgb(0_0_0/0.6)]">{label}</span>

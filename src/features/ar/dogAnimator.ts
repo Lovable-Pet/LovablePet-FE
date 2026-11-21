@@ -92,6 +92,18 @@ export type AnimatorLog =
   | { type: 'reserve' | 'unreserve' | 'runReserved'; id: string }
   | { type: 'release'; clip: string }
 
+/** 1회 클립이 실제로 재생을 시작할 때 (play 직후). 짖는 소리를 클립 시각에 맞춰 예약한다 (./barkSound.ts) */
+export interface ClipPlayInfo {
+  /** 몇 번 돌리는지 */
+  times: number
+  /** 실제 재생 배속 */
+  rate: number
+  /** 지금 클립 시각 (s) */
+  time: number
+  /** 클립 길이 (s) */
+  duration: number
+}
+
 /** 클립의 빈 끝: end (s) 부터 첫 프레임 자세와 거의 같다 (../modelViewerArStage.ts clipQuietEnds) */
 export interface ClipEnd {
   end: number
@@ -127,6 +139,8 @@ export class DogAnimator {
   private readonly onBusy?: (busy: boolean) => void
   /** 클립을 틀 때마다 (반응 말풍선) */
   private readonly onClipStart?: (clip: string) => void
+  /** 1회 클립이 실제로 재생을 시작할 때 (짖는 소리) */
+  private readonly onClipPlay?: (clip: string, info: ClipPlayInfo) => void
   /** 반응 클립이 실제로 재생될 때 */
   private readonly onReact?: (source: ReactSource) => void
   /** 예약이 바뀔 때 (누른 버튼 모양·안내) */
@@ -182,6 +196,11 @@ export class DogAnimator {
       onBusy?: (busy: boolean) => void
       /** 클립을 틀 때마다 (루프 포함) */
       onClipStart?: (clip: string) => void
+      /**
+       * 1회 클립이 실제로 재생을 시작할 때 (updateComplete 뒤 play 직후, 그 사이 다른 클립으로 바뀌었으면 오지 않는다).
+       * 다른 클립으로 바뀌면 onClipStart 가 먼저 온다
+       */
+      onClipPlay?: (clip: string, info: ClipPlayInfo) => void
       /** 반응 클립이 실제로 재생될 때 */
       onReact?: (source: ReactSource) => void
       /** 예약이 바뀔 때 */
@@ -204,6 +223,7 @@ export class DogAnimator {
     this.onPose = options.onPose
     this.onBusy = options.onBusy
     this.onClipStart = options.onClipStart
+    this.onClipPlay = options.onClipPlay
     this.onReact = options.onReact
     this.onReserve = options.onReserve
     this.onResting = options.onResting
@@ -575,6 +595,7 @@ export class DogAnimator {
     await mv.updateComplete
     if (this.disposed || mine !== this.startToken) return
     mv.play(times ? { repetitions: times, pingpong: false } : undefined)
+    if (times) this.onClipPlay?.(clip, { times, rate: this.rate, time: mv.currentTime, duration: mv.duration })
   }
 
   /** 지금 자세에서 `to` 까지 가장 짧은 전환 순서 */

@@ -19,6 +19,8 @@ export interface VoiceLogEntry {
   interims: readonly string[]
   match: VoiceMatch | null
   error?: string
+  /** 버튼 누름부터 각 이벤트까지 (예: 'onaudiostart 480', 다시 들으면 '2차 …'). 폰에서 마이크가 열리기까지 걸린 시간을 본다 */
+  timings?: readonly string[]
 }
 
 let entries: readonly VoiceLogEntry[] = []
@@ -57,7 +59,8 @@ export function formatVoiceLogEntry(entry: VoiceLogEntry) {
     .map(({ text, confidence }) => (confidence > 0 ? `${text} ${confidence.toFixed(2)}` : text))
     .join(' / ')
   const head = `${time(entry.at)} ${KIND[entry.kind]}${entry.error ? ` ${entry.error}` : ''} | ${alternatives || '-'}`
-  const interims = entry.interims.length ? ` | 중간: ${entry.interims.join(' → ')}` : ''
+  const timings = entry.timings?.length ? ` | 시간(ms): ${entry.timings.join(' → ')}` : ''
+  const interims = (entry.interims.length ? ` | 중간: ${entry.interims.join(' → ')}` : '') + timings
   const { match } = entry
   if (match) {
     const distance = match.distance !== undefined ? ` 거리${match.distance}` : ''
