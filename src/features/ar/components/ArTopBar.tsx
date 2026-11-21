@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Heart, Ruler, X } from 'lucide-react'
+import { Eye, EyeOff, Heart, Ruler, Volume2, VolumeX, X } from 'lucide-react'
 import { cn } from '../../../components/utils/cn'
 import { useToggleFavorite } from '../../favorite/useToggleFavorite'
 import { AR_TEXT } from '../arText'
@@ -6,7 +6,7 @@ import { AR_TEXT } from '../arText'
 const ROUND = 'pointer-events-auto flex size-11 shrink-0 items-center justify-center rounded-full transition active:scale-97'
 
 /**
- * AR 화면 위 줄: 닫기 · 이름·체고 알약(누르면 정보 시트) · 따라보기 · 찜 하트.
+ * AR 화면 위 줄: 닫기 · 이름·체고 알약(누르면 정보 시트) · 따라보기 · 짖는 소리 · 찜 하트.
  * WebXR 중에는 닫기 자리를 비워 model-viewer 의 닫기 버튼을 쓴다
  */
 export function ArTopBar({
@@ -16,6 +16,7 @@ export function ArTopBar({
   withersCm,
   onOpenInfo,
   follow,
+  sound,
   petId,
   favorited,
 }: {
@@ -26,6 +27,8 @@ export function ArTopBar({
   onOpenInfo: () => void
   /** 몸 돌리기가 되는 개만 */
   follow: { on: boolean; onToggle: () => void } | null
+  /** 짖는 소리 켜기/끄기. 짖기(bark) 클립이 있는 개만 */
+  sound: { on: boolean; onToggle: () => void } | null
   petId: number
   favorited: boolean
 }) {
@@ -64,6 +67,21 @@ export function ArTopBar({
           )}
         >
           {follow.on ? <Eye className="size-5" strokeWidth={2.2} aria-hidden /> : <EyeOff className="size-5" strokeWidth={2.2} aria-hidden />}
+        </button>
+      )}
+      {sound && (
+        <button
+          type="button"
+          aria-pressed={sound.on}
+          aria-label={AR_TEXT.sound}
+          onClick={sound.onToggle}
+          className={cn(ROUND, 'bg-black/45', sound.on ? 'text-white' : 'text-white/75 ring-1 ring-white/25 ring-inset')}
+        >
+          {sound.on ? (
+            <Volume2 className="size-5" strokeWidth={2.2} aria-hidden />
+          ) : (
+            <VolumeX className="size-5" strokeWidth={2.2} aria-hidden />
+          )}
         </button>
       )}
       <button

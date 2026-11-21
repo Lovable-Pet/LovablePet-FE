@@ -74,6 +74,7 @@ export function useVoiceCommand({
   disabled = false,
   onCommand,
   onMiss,
+  onMicOpen,
   debug = false,
 }: {
   inAr: boolean
@@ -84,6 +85,11 @@ export function useVoiceCommand({
   onCommand: (id: CommandId) => void
   /** 들린 말에서 명령을 못 찾았을 때 */
   onMiss?: () => void
+  /**
+   * 마이크로 명령을 듣는 중인지 (짖는 소리를 내지 않는다): 누르면 true, 명령을 찾으면 (그 명령을 하기 직전) false, 끝나면 false.
+   * 명령을 찾은 뒤에는 인식기가 멈추는 중이라 '짖어' 의 소리를 막지 않는다
+   */
+  onMicOpen?: (open: boolean) => void
 }) {
   const [supported] = useState(() => getRecognition() !== undefined && (VOICE_ON_IOS || !isIos()))
   const [phase, setPhase] = useState<VoicePhase>('idle')
@@ -93,9 +99,9 @@ export function useVoiceCommand({
   const permission = useMicPermission()
   const sessionRef = useRef<VoiceSession | null>(null)
   // 듣는 동안 바뀔 수 있는 값은 콜백 안에서 최신 값으로 읽는다
-  const latest = useRef({ inAr, onCommand, onMiss, permission, debug })
+  const latest = useRef({ inAr, onCommand, onMiss, onMicOpen, permission, debug })
   useEffect(() => {
-    latest.current = { inAr, onCommand, onMiss, permission, debug }
+    latest.current = { inAr, onCommand, onMiss, onMicOpen, permission, debug }
   })
 
   useEffect(() => () => sessionRef.current?.silence(), [])
@@ -117,12 +123,16 @@ export function useVoiceCommand({
     }
     setHeard('')
     let ended = false
+    latest.current.onMicOpen?.(true)
     const session = startVoiceSession({
       create: () => new RecognitionClass(),
       onPhase: setPhase,
       onHeard: setHeard,
       debug: import.meta.env.DEV && latest.current.debug,
-      onCommand: (id) => latest.current.onCommand(id),
+      onCommand: (id) => {
+        latest.current.onMicOpen?.(false)
+        latest.current.onCommand(id)
+      },
       onMiss: () => latest.current.onMiss?.(),
       show,
       // AR 안에서 권한 창 없이 거절됐으면(아직 '거부'로 정하지 않았으면) AR 밖에서 허용하라고 안내한다
@@ -135,8 +145,10 @@ export function useVoiceCommand({
         // 한 번에 하나만 듣는다 (듣는 중에는 새로 만들지 않는다)
         ended = true
         sessionRef.current = null
+        latest.current.onMicOpen?.(false)
       },
     })
+    if (!session) latest.current.onMicOpen?.(false)
     if (session && !ended) sessionRef.current = session
   }, [show])
 

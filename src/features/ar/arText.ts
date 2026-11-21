@@ -14,6 +14,8 @@ export const AR_TEXT = {
   wag: '꼬리 흔들기',
   replace: '다시 놓기',
   follow: '따라보기',
+  /** 위 스피커 버튼 (짖는 소리 켜기/끄기, aria-pressed) */
+  sound: '짖는 소리',
   favoriteOn: '찜하기',
   favoriteOff: '찜 취소',
   placeOnFloor: '우리 집 바닥에 놓기',

@@ -52,6 +52,7 @@ import {
 import {
   DogAnimator,
   POSE_LABEL,
+  type ClipPlayInfo,
   type CommandId,
   type Pose,
   type ReactSource,
@@ -60,6 +61,8 @@ import {
   type TapResult,
 } from '../features/ar/dogAnimator'
 import { useVoiceCommand } from '../features/ar/useVoiceCommand'
+import { useBarkSound } from '../features/ar/useBarkSound'
+import { BARK_CLIP, barkListenerFrom } from '../features/ar/barkSound'
 import { STANDING_CLIP, WALK_CLIPS } from '../features/ar/walk/walkSpec'
 import { attachPoseLayers, clipQuietEnds, type PoseLayersHandle } from '../features/ar/modelViewerArStage'
 import { ArEventLog } from '../features/ar/devlog/ArEventLog'
@@ -95,7 +98,9 @@ import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 // - AR 이 안 되는 기기(데스크톱 등): 화면 안 3D 로 보여 준다. 명령·탭 반응은 된다
 //
 // 화면 배치 (WebXR 과 화면 안 3D 가 같다. 개가 주인공이라 가운데는 비운다)
-// - 위: 닫기 · 이름·체고 알약(누르면 정보 시트: 다시 놓기도 여기) · 따라보기(몸 돌리기가 되는 개만) · 찜. 그 아래 안내 한 줄 (pickHint)
+// - 위: 닫기 · 이름·체고 알약(누르면 정보 시트: 다시 놓기도 여기) · 따라보기(몸 돌리기가 되는 개만) · 짖는 소리(짖기 클립이 있는 개만) · 찜.
+//   그 아래 안내 한 줄 (pickHint)
+// - 짖을 때 입 모양에 맞춰 짖는 소리 (../features/ar/barkSound.ts, 화면 안 3D 도). 마이크로 듣는 중에는 내지 않는다
 // - 가운데: 개 머리 위 반응 말풍선 ('?', 하트, '멍!', '빵!')
 // - 아래: [묘기 | 말 걸기 | 산책]. 묘기는 명령 트레이(3×2)를 펼친다. 명령 클립이 없으면 묘기 자리에 꼬리 흔들기 하나.
 //   산책 중에는 '산책 끝' 하나
@@ -296,6 +301,10 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const [activeCommand, setActiveCommand] = useState<CommandId | null>(null)
   /** 걷기 클립(walk_start·walk·walk_stop·standing)이 다 있는지. AR 에서 '산책' 버튼 자리를 정한다 */
   const [hasWalkClips, setHasWalkClips] = useState(false)
+  /** 짖기(bark) 클립이 있는지. 있으면 위에 짖는 소리 켜기/끄기 버튼 */
+  const [hasBark, setHasBark] = useState(false)
+  /** 애니메이터가 1회 클립을 실제로 틀 때 (짖는 소리, 아래에서 채운다) */
+  const clipPlayRef = useRef<(clip: string, info: ClipPlayInfo) => void>(() => {})
   /** 묘기 트레이. 명령을 눌러도 열려 있고, 묘기 버튼을 다시 누르거나 개를 탭하면 닫힌다 */
   const [trayOpen, setTrayOpen] = useState(false)
   /** 이름·체고 알약을 누르면 여는 정보 시트 */
@@ -467,6 +476,39 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   }, [walk.active, walk.phase, walk.requestTurn])
   /** 산책 중: 아래 버튼(묘기·말 걸기)을 '산책 끝' 으로 바꾸고 개 탭을 막는다 */
   const walking = walk.active
+
+  // 짖는 소리 (../features/ar/barkSound.ts). 크기·좌우는 놓은 뒤 매 프레임 폰(카메라)과 개 자리 (AR·시뮬레이션),
+  // 화면 안 3D 는 모름 (1 m·가운데로 본다)
+  const soundWalkHost = hosts.walkHost
+  const soundViewRef = useRef({ ok: false, camera: { x: 0, y: 0, z: 0 }, view: new Float64Array(16) })
+  useEffect(() => {
+    const view = soundViewRef.current
+    view.ok = false
+    if (!soundWalkHost) return
+    const unsubscribe = soundWalkHost.subscribe((frame) => {
+      view.ok = frame.tracking
+      if (!frame.tracking) return
+      view.camera.x = frame.camera.x
+      view.camera.y = frame.camera.y
+      view.camera.z = frame.camera.z
+      view.view.set(frame.view.viewMatrix)
+    })
+    return () => {
+      unsubscribe()
+      view.ok = false
+    }
+  }, [soundWalkHost])
+  const bark = useBarkSound({
+    template: model.template,
+    readListener: () => {
+      const view = soundViewRef.current
+      const dog = soundWalkHost?.dogPose()
+      return view.ok && dog ? barkListenerFrom(view.camera, view.view, dog.position) : null
+    },
+  })
+  useEffect(() => {
+    clipPlayRef.current = bark.onClipPlay
+  })
   /** 반응 말풍선을 띄운다. 산책 중에는 띄우지 않는다 */
   const showReaction = useCallback(
     (kind: ReactionKind) => {
@@ -479,6 +521,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   useEffect(() => {
     clipStartRef.current = (clip) => {
       if (import.meta.env.DEV) logArEvent('클립', `${clip} 시작`)
+      // 짖기가 끊기면 아직 안 난 소리는 취소
+      bark.onClipStart(clip)
       if (muteHeartRef.current) return
       const kind = REACTION_BY_CLIP[clip]
       if (kind) showReaction(kind)
@@ -556,6 +600,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
         },
         onLog: import.meta.env.DEV ? (event) => logArEvent('동작', describeAnimatorLog(event)) : undefined,
         onClipStart: (clip) => clipStartRef.current(clip),
+        onClipPlay: (clip, info) => clipPlayRef.current(clip, info),
         onReact: (source) => onReactRef.current(source),
         onReserve: setReserved,
         onResting: setAnimResting,
@@ -567,6 +612,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
       setTapIsHeadTilt(animator.tapIsHeadTilt)
       setCanTap(animator.canTap)
       setHasWalkClips([...WALK_CLIPS, STANDING_CLIP].every((clip) => mv.availableAnimations.includes(clip)))
+      setHasBark(mv.availableAnimations.includes(BARK_CLIP))
     }
     // 'webglcontextlost' 도 error 로 오지만 렌더러가 스스로 복구한다. 파일을 못 받았을 때만 실패로 본다
     const onError = (event: Event) => {
@@ -598,6 +644,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   }, [])
 
   const startAr = () => {
+    // 짖는 소리: 탭 안에서 AudioContext 를 만들거나 다시 켠다 (자동재생 제한)
+    bark.unlock()
     setShowGuide(false)
     setArFailed(false)
     // 버튼을 누른 그 순간에 불러야 브라우저가 카메라를 열어 준다
@@ -677,6 +725,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   }, [dogReady, greetHeart])
   /** 화면 안 3D 로 처음 볼 때도 같은 인사 (한 번) */
   const startPreview = () => {
+    bark.unlock()
     setShowGuide(false)
     if (greetedRef.current.preview) return
     greetedRef.current.preview = true
@@ -733,6 +782,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     disabled: arLocked || walking,
     onCommand: (id) => stamp({ type: 'voiceCommand', accepted: accepted(runCommand(id)) }),
     onMiss: puzzledReaction,
+    // 마이크로 듣는 중에는 짖는 소리를 내지 않는다 (듣기 시작하면 나고 있던 소리도 멈춤)
+    onMicOpen: bark.setMicOpen,
     // 들린 말 → 명령 [규칙]·후보는 ?debug 에서만. 없으면 개발 서버도 배포와 같은 문구
     debug,
   })
@@ -950,6 +1001,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
             withersCm={withersCm}
             onOpenInfo={() => setInfoOpen(true)}
             follow={gaze.canFollow && dogReady ? { on: follow, onToggle: toggleFollow } : null}
+            sound={hasBark ? { on: bark.on, onToggle: bark.toggle } : null}
             petId={pet.id}
             favorited={pet.favorited}
           />
