@@ -183,7 +183,7 @@ const isBangLike = (text: string) => {
   })
 }
 
-/** 못 알아들었을 때 덧붙일 안내. 한 글자 '손'류면 '손 줘', '빵'류면 3초 누르기 */
+/** 못 알아들었을 때 덧붙일 안내. 한 글자 '손'류면 '손 줘', '빵'류면 2초 누르기 */
 export function voiceMissHint(alternatives: readonly string[]): string | null {
   for (const text of alternatives.map(normalizeVoice)) {
     if ((PAW_HEADS as readonly string[]).includes(text)) return '손 줘처럼 말해 보세요'

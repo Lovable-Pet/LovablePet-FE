@@ -120,7 +120,7 @@ const TAP_SLOP_PX = 8
 
 /** 배치 전 빨강(놓을 수 없음)이 이만큼(ms) 넘게 이어지면 다시 열어 보라는 줄을 더한다 */
 const STUCK_HINT_MS = 10_000
-/** 개를 3초 누르면 하는 명령. 짖기는 음성과 묘기 트레이로 */
+/** 개를 2초 누르면 하는 명령. 짖기는 음성과 묘기 트레이로 */
 const HOLD_COMMAND: CommandId = 'play_dead'
 /** 끝부분이 첫 프레임 자세로 돌아와 비어 있으면 거기서 끊는 클립 (목업은 갸우뚱만 비어 있다) */
 const REACTION_CLIPS = ['head_tilt', 'tail_wag', 'bark']
@@ -406,7 +406,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const dogReady = (inAr && placement.phase === 'placed') || sim.active
   /** 산책 발자취·몸 돌리기 쓸고 지나가는 자리를 받을지 (?debug 상자, 시뮬레이션은 화면에 늘 그린다) */
   const pathMarks = debug || sim.active
-  /** AR 에서 개를 놓기 전: 명령 칩·음성·개 탭·3초 누르기를 막는다 */
+  /** AR 에서 개를 놓기 전: 명령 칩·음성·개 탭·2초 누르기를 막는다 */
   const arLocked = inAr && !dogReady
   const canReplace = dogReady && placement.manual
   /** ?debug: 바닥 추정을 처음부터 다시 (잘못 잡힌 바닥 확인용) */
@@ -654,7 +654,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     showTapResult(animator.puzzled())
   }
 
-  /** 개 3초 누르기가 다 참: 빵 ('꾹' 발도장, 예약이어도) */
+  /** 개 2초 누르기가 다 참: 빵 ('꾹' 발도장, 예약이어도) */
   const holdDog = () => stamp({ type: 'hold', accepted: accepted(runCommand(HOLD_COMMAND)) })
 
   /**
@@ -710,7 +710,7 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     placement.replace()
   }
 
-  // 개를 누른 채 3초 → 빵(죽은 척, '빵!' 명령과 같다: 서 있지 않으면 일어난 뒤). 그 뒤 손을 떼도 탭 반응은 내지 않는다 (onPointerUp).
+  // 개를 누른 채 2초 (LONG_PRESS_MS) → 빵(죽은 척, '빵!' 명령과 같다: 서 있지 않으면 일어난 뒤). 그 뒤 손을 떼도 탭 반응은 내지 않는다 (onPointerUp).
   // 예전의 '꼬리 흔들기' 칩 3초(짖기)는 없앴다: 그 칩은 이제 명령 클립이 없는 모델에만 있고, 그런 모델에는 짖기 클립도 없다
   const dogHold = useLongPress<ReactPointerEvent>({
     enabled: hasCommands,

@@ -20,7 +20,7 @@ export const PAW_LABEL: Record<PawId, string> = {
 /** 위 안내 줄: 아직 안 해 본 것 */
 export const PAW_HINT: Record<PawId, string> = {
   tap: '개를 톡 건드려 보세요',
-  hold: '3초 꾹 눌러 보세요 · 빵!',
+  hold: '2초 꾹 눌러 보세요 · 빵!',
   talk: '"앉아"라고 말해 보세요',
   walk: '산책을 눌러 같이 걸어 보세요',
 }
@@ -40,7 +40,7 @@ export const PAW_BUTTON: Partial<Record<PawId, 'talk' | 'walk'>> = { talk: 'talk
 export interface PawFeatures {
   /** 개 탭에 반응 클립(갸우뚱·꼬리 흔들기)이 있다 */
   tap: boolean
-  /** 명령 클립이 있다 (3초 누르기 → 빵) */
+  /** 명령 클립이 있다 (2초 누르기 → 빵) */
   hold: boolean
   /** 명령 클립이 있고 음성 인식이 된다 */
   talk: boolean
@@ -57,7 +57,7 @@ export type PawEvent =
   | { type: 'tap' }
   /** 반응 클립이 실제로 재생됨 (DogAnimator.onReact) */
   | { type: 'react'; source: ReactSource }
-  /** 3초 누르기가 다 참. accepted: 명령으로 받아짐 (바로 또는 예약) */
+  /** 2초 누르기가 다 참. accepted: 명령으로 받아짐 (바로 또는 예약) */
   | { type: 'hold'; accepted: boolean }
   /** 음성에서 명령을 찾음. accepted: 명령으로 받아짐 (바로·예약·이미 그 자세) */
   | { type: 'voiceCommand'; accepted: boolean }

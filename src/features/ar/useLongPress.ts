@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-/** 길게 누르기로 보는 시간 */
-export const LONG_PRESS_MS = 3000
+/** 길게 누르기로 보는 시간 (HoldRing 링이 이 시간 동안 찬다) */
+export const LONG_PRESS_MS = 2000
 
 export interface PressPoint {
   x: number
