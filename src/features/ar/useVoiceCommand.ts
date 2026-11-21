@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useFlashMessage } from '../../hooks/useFlashMessage'
-import { COMMANDS, type CommandId } from './dogAnimator'
-import { addVoiceLog, type VoiceLogEntry } from './voiceLog'
-import { matchVoiceAlternatives, voiceMissHint } from './voiceWords'
+import type { CommandId } from './dogAnimator'
+import { AR_PERMISSION_TEXT, LISTEN_VIBRATE_MS, startVoiceSession, type Recognition, type VoicePhase, type VoiceSession } from './voiceSession'
 
-// 마이크 버튼으로 말해서 명령한다 (Web Speech API).
+// 마이크 버튼으로 말해서 명령한다 (Web Speech API). 한 번 듣기의 흐름·문구는 ./voiceSession.ts
 // - 한 번 누르면 한 번 듣고 끝난다 (continuous 를 쓰지 않는다). 듣는 중에 다시 누르면 멈춘다
+// - 상태: starting (마이크 여는 중, '잠깐만요…') → listening (마이크 열림, '지금 말해 주세요' + 진동) → hearing (말소리가 들어옴)
 // - 후보(maxAlternatives)를 전부 보고 명령이 잡힌 후보 중 앞 순위를 쓴다 (voiceWords.matchVoiceAlternatives)
 // - 말하는 중간 결과(interimResults)에서 단어(includes)가 잡히면 바로 명령하고 듣기를 멈춘다.
 //   문장 전체로만 맞추는 말(exact)과 자모 비교는 최종 결과에서만
-// - 들린 말에서 명령을 못 찾으면 '알아듣지 못했어요' 를 띄우고 onMiss 를 부른다 (한 번 들을 때 한 번).
-//   한 글자 '손'류면 '손 줘처럼 말해 보세요', '빵'류면 '꾹 눌러도 돼요' 를 덧붙인다.
-//   중간 결과, 권한 거부·시작 실패 같은 오류, 아무 말도 안 들린 때는 부르지 않는다
-// - 개발 모드에서는 한 번 들을 때마다 후보·잡힌 규칙을 voiceLog 에 남긴다 (?debug 에서 보기·복사)
+// - 들린 말에서 명령을 못 찾으면 onMiss 를 부른다 (한 번 들을 때 한 번). 중간 결과, 오류, 아무 말도 안 들린 때는 부르지 않는다
+// - 개발 모드에서는 한 번 들을 때마다 후보·잡힌 규칙·걸린 시간을 voiceLog 에 남긴다 (?debug 에서 보기·복사)
 // - 안드로이드 Chrome 의 음성 인식은 구글 서버를 거쳐 인터넷이 필요하다
 // - 아이폰 Quick Look AR 은 페이지 밖에서 돌아 음성이 안 된다 (화면 안 3D 에서만)
 
@@ -36,32 +34,6 @@ const isIos = () =>
 /** 들은 말·오류를 보이는 시간 */
 const VOICE_FLASH_MS = 2500
 
-/** 인식기에 달라는 후보 수 */
-const MAX_ALTERNATIVES = 5
-
-const ERROR_TEXT: Partial<Record<SpeechRecognitionErrorCode, string>> = {
-  'no-speech': '목소리가 들리지 않았어요. 다시 눌러 말해 주세요',
-  'audio-capture': '마이크를 쓸 수 없어요. 다른 앱이 쓰고 있는지 확인해 주세요',
-  network: '음성 인식은 인터넷 연결이 필요해요',
-  'not-allowed': '마이크 권한이 꺼져 있어요. 사이트 설정에서 허용해 주세요',
-  'service-not-allowed': '이 브라우저에서는 음성 인식을 쓸 수 없어요',
-  'language-not-supported': '한국어 음성 인식을 쓸 수 없어요',
-}
-const AR_PERMISSION_TEXT = 'AR 안에서는 마이크를 허용할 수 없었어요. AR을 닫고 마이크를 눌러 먼저 허용해 주세요'
-
-/** lib.dom 에 SpeechRecognition 본체 타입이 없어 쓰는 것만 적는다 */
-interface Recognition {
-  lang: string
-  continuous: boolean
-  interimResults: boolean
-  maxAlternatives: number
-  onresult: ((event: SpeechRecognitionEvent) => void) | null
-  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null
-  onend: (() => void) | null
-  start(): void
-  stop(): void
-  abort(): void
-}
 type RecognitionConstructor = new () => Recognition
 
 const getRecognition = () => {
@@ -71,8 +43,6 @@ const getRecognition = () => {
   }
   return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition
 }
-
-const labelOf = (id: CommandId) => COMMANDS.find((command) => command.id === id)?.label ?? id
 
 /** 마이크 권한 상태. Permissions API 가 없거나 'microphone' 을 모르면 null */
 function useMicPermission() {
@@ -112,30 +82,27 @@ export function useVoiceCommand({
   onMiss?: () => void
 }) {
   const [supported] = useState(() => getRecognition() !== undefined && (VOICE_ON_IOS || !isIos()))
-  const [listening, setListening] = useState(false)
-  /** 듣는 중에 들린 말 (중간 결과) */
+  const [phase, setPhase] = useState<VoicePhase>('idle')
+  /** 듣는 중에 들린 말 (중간 결과). 개발 모드에서만 채운다 */
   const [heard, setHeard] = useState('')
   const { flash, show } = useFlashMessage(VOICE_FLASH_MS)
   const permission = useMicPermission()
-  const recognitionRef = useRef<Recognition | null>(null)
+  const sessionRef = useRef<VoiceSession | null>(null)
   // 듣는 동안 바뀔 수 있는 값은 콜백 안에서 최신 값으로 읽는다
   const latest = useRef({ inAr, onCommand, onMiss, permission })
   useEffect(() => {
     latest.current = { inAr, onCommand, onMiss, permission }
   })
 
-  /** 듣는 중인 것을 결과·안내 없이 멈춘다 */
-  const silenceRef = useRef<(() => void) | null>(null)
-
-  useEffect(() => () => recognitionRef.current?.abort(), [])
+  useEffect(() => () => sessionRef.current?.silence(), [])
 
   useEffect(() => {
-    if (disabled) silenceRef.current?.()
+    if (disabled) sessionRef.current?.silence()
   }, [disabled])
 
   const toggle = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop()
+    if (sessionRef.current) {
+      sessionRef.current.stop()
       return
     }
     const RecognitionClass = getRecognition()
@@ -144,99 +111,28 @@ export function useVoiceCommand({
       show(AR_PERMISSION_TEXT)
       return
     }
-
-    const recognition = new RecognitionClass()
-    recognition.lang = 'ko-KR'
-    recognition.continuous = false
-    recognition.interimResults = true
-    recognition.maxAlternatives = MAX_ALTERNATIVES
-    /** 명령을 찾았거나 결과·오류를 이미 알렸다 */
-    let done = false
-    /** 마지막으로 들린 후보들 (최종 결과 없이 끝날 때 보인다) */
-    let lastAlternatives: VoiceLogEntry['alternatives'] = []
-    /** 개발 기록용: 지나간 중간 결과 (첫 후보) */
-    const interims: string[] = []
-    const log = (entry: Omit<VoiceLogEntry, 'at' | 'interims'>) => {
-      if (import.meta.env.DEV) addVoiceLog({ ...entry, at: Date.now(), interims: [...interims] })
-    }
-    /** '알아듣지 못했어요' 와 덧붙일 안내 */
-    const missText = (texts: readonly string[]) => {
-      const hint = voiceMissHint(texts)
-      return `“${texts[0] ?? ''}” · 알아듣지 못했어요${hint ? ` · ${hint}` : ''}`
-    }
-
-    recognition.onresult = (event) => {
-      if (done) return
-      const result = event.results[event.results.length - 1]
-      const alternatives = Array.from(result, (alternative) => ({
-        text: alternative.transcript.trim(),
-        confidence: alternative.confidence ?? 0,
-      })).filter((alternative) => alternative.text)
-      const texts = alternatives.map((alternative) => alternative.text)
-      const text = texts[0] ?? ''
-      lastAlternatives = alternatives
-      setHeard(text)
-      const match = matchVoiceAlternatives(texts, result.isFinal)
-      if (!match && !result.isFinal) {
-        if (import.meta.env.DEV && text && interims.at(-1) !== text) interims.push(text)
-        return
-      }
-      done = true
-      log({ kind: result.isFinal ? 'final' : 'interim', alternatives, match })
-      if (match) {
-        latest.current.onCommand(match.command)
-        recognition.stop()
-        const heardText = texts[match.alternative]
-        const rule = import.meta.env.DEV
-          ? ` [${match.rule}${match.distance !== undefined ? ` ${match.distance}` : ''}${match.alternative ? ` · 후보${match.alternative + 1}` : ''}]`
-          : ''
-        const others = import.meta.env.DEV && texts.length > 1 ? ` (후보: ${texts.filter((_, index) => index !== match.alternative).join(' / ')})` : ''
-        show(`“${heardText}” → ${labelOf(match.command)}${rule}${others}`)
-      } else {
-        const others = import.meta.env.DEV && texts.length > 1 ? ` (후보: ${texts.slice(1).join(' / ')})` : ''
-        show(missText(texts) + others)
-        if (text) latest.current.onMiss?.()
-      }
-    }
-    recognition.onerror = (event) => {
-      // abort() 로 멈춘 것
-      if (event.error === 'aborted') return
-      done = true
-      log({ kind: 'error', alternatives: lastAlternatives, match: null, error: event.error })
-      // AR 안에서 권한 창 없이 거절됐으면(아직 '거부'로 정하지 않았으면) AR 밖에서 허용하라고 안내한다
-      const blockedInAr = event.error === 'not-allowed' && latest.current.inAr && latest.current.permission !== 'denied'
-      show(blockedInAr ? AR_PERMISSION_TEXT : (ERROR_TEXT[event.error] ?? '음성 인식이 멈췄어요. 다시 눌러 주세요'))
-    }
-    recognition.onend = () => {
-      if (recognitionRef.current === recognition) {
-        recognitionRef.current = null
-        silenceRef.current = null
-      }
-      setListening(false)
-      setHeard('')
-      // 최종 결과 없이 끝났는데 들린 말이 있었으면 (말하다 버튼을 다시 누른 때 등) 보여 준다
-      if (!done && lastAlternatives.length) {
-        log({ kind: 'end', alternatives: lastAlternatives, match: null })
-        show(missText(lastAlternatives.map((alternative) => alternative.text)))
-        latest.current.onMiss?.()
-      }
-    }
-
-    try {
-      recognition.start()
-    } catch {
-      show('음성 인식을 시작하지 못했어요. 다시 눌러 주세요')
-      return
-    }
-    recognitionRef.current = recognition
-    silenceRef.current = () => {
-      // onerror('aborted')·onend 가 결과나 '알아듣지 못했어요' 를 내지 않게
-      done = true
-      lastAlternatives = []
-      recognition.abort()
-    }
     setHeard('')
-    setListening(true)
+    let ended = false
+    const session = startVoiceSession({
+      create: () => new RecognitionClass(),
+      onPhase: setPhase,
+      onHeard: setHeard,
+      onCommand: (id) => latest.current.onCommand(id),
+      onMiss: () => latest.current.onMiss?.(),
+      show,
+      // AR 안에서 권한 창 없이 거절됐으면(아직 '거부'로 정하지 않았으면) AR 밖에서 허용하라고 안내한다
+      blockedInAr: () => latest.current.inAr && latest.current.permission !== 'denied',
+      // 알림음은 마이크에 다시 들어가 쓰지 않는다
+      vibrate: () => {
+        if (typeof navigator.vibrate === 'function') navigator.vibrate(LISTEN_VIBRATE_MS)
+      },
+      onEnd: () => {
+        // 한 번에 하나만 듣는다 (듣는 중에는 새로 만들지 않는다)
+        ended = true
+        sessionRef.current = null
+      },
+    })
+    if (session && !ended) sessionRef.current = session
   }, [show])
 
   /**
@@ -252,6 +148,6 @@ export function useVoiceCommand({
     }
   }, [])
 
-  /** 마이크 권한 상태 (Permissions API 가 없거나 microphone 을 모르면 null) */
-  return { supported, listening, heard, flash, toggle, permission, askPermission }
+  /** listening: 듣기 시작부터 끝까지 (starting·listening·hearing). phase 로 말풍선·버튼 모양을 가른다 */
+  return { supported, phase, listening: phase !== 'idle', heard, flash, toggle, permission, askPermission }
 }
