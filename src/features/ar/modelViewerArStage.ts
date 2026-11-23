@@ -1464,6 +1464,17 @@ class PoseLayers {
     return true
   }
 
+  /**
+   * 다음 그리기에서 섞지 않고 지금 클립 자세로 바로 (첫 만남에 앉은 채 나타나기: 서기 → 앉기 루프를 0.6 s 섞으면 앉는 게 보인다).
+   * 하던 섞기·갸우뚱도 그만둔다
+   */
+  snap() {
+    this.blend?.cancel()
+    this.clip = undefined
+    this.tilt = null
+    this.scene.queueRender?.()
+  }
+
   private headParts() {
     const model = this.scene.model
     if (this.head?.model === model) return this.head
@@ -1566,6 +1577,8 @@ export interface PoseLayersHandle {
   blending(): boolean
   /** 절차적 갸우뚱 (앉거나 엎드린 개를 톡). 머리 뼈가 없으면 false */
   tiltHead(): boolean
+  /** 다음 그리기에서 섞지 않고 클립 자세로 바로 (DogAnimator.restIn 으로 처음 자세를 바꾼 뒤) */
+  snap(): void
 }
 
 /**
@@ -1578,7 +1591,12 @@ export function attachPoseLayers(mv: ModelViewerElement): PoseLayersHandle | nul
   const layers = poseLayersFor(mv, scene)
   if (!layers || !isNode(scene.model) || !skinBonesOf(scene.model)) return null
   layers.blendOn = true
-  return { lastBlend: () => layers.lastBlend, blending: () => layers.blending, tiltHead: () => layers.tiltHead() }
+  return {
+    lastBlend: () => layers.lastBlend,
+    blending: () => layers.blending,
+    tiltHead: () => layers.tiltHead(),
+    snap: () => layers.snap(),
+  }
 }
 
 interface TrackedClipLike extends ClipLike {

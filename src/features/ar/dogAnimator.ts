@@ -19,6 +19,7 @@ import type { ModelViewerElement } from '@google/model-viewer'
 // - 개 탭: 서 있으면 클립 반응 (반응 중에 다시 톡 하면 갸우뚱 ↔ 꼬리 흔들기 번갈아), 앉거나 엎드려 있으면 'tilt'
 //   (부르는 쪽이 절차적 갸우뚱), 손 줘 중이면 손을 내리고 'lowerPaw', 끊지 않는 클립 중이면 'bubble' (말풍선만)
 // - 클립 끝이 첫 프레임 자세로 돌아와 비어 있으면 (clipEnds: 갸우뚱 3.5~3.9 s / 4.3 s) 거기서 끊고 다음으로
+// - 첫 만남 (성격, ./persona.ts): greet(횟수) 서서 꼬리 0~2번 · restIn(자세) 전환 클립 없이 그 자세 루프로 바로 (조심스러운 개는 앉은 채)
 
 export type Pose = 'stand' | 'sit' | 'down'
 
@@ -53,7 +54,8 @@ const COMMAND_CLIPS = [...Object.values(LOOPS), ...Object.keys(MOVES), 'shake', 
 /** 반응을 부른 곳 */
 export type ReactSource = 'tap' | 'wag' | 'puzzled' | 'greet'
 
-type Step = ['to', Pose] | ['play', string, number?] | ['hold', string] | ['react', string, ReactSource]
+/** react 의 마지막 값은 연달아 몇 번 (짖어의 bark ×2 처럼 한 번 틀어 횟수만큼, 기본 1) */
+type Step = ['to', Pose] | ['play', string, number?] | ['hold', string] | ['react', string, ReactSource, number?]
 
 export const COMMANDS = [
   { id: 'sit', label: '앉아', steps: [['to', 'sit']] },
@@ -377,11 +379,27 @@ export class DogAnimator {
     return 'clip'
   }
 
-  /** 처음 놓았을 때 인사. 서서 쉬고 있고 tail_wag 가 있을 때 한 번. 흔들었으면 true (onClipStart 는 이 안에서 바로 온다) */
-  greet(): boolean {
-    if (!this.idle || this.pose !== 'stand' || !this.wagClip) return false
-    this.begin({ id: 'greet', steps: [['react', this.wagClip, 'greet']] })
+  /**
+   * 처음 놓았을 때 인사. 서서 쉬고 있고 tail_wag 가 있을 때 times 번 연달아 (0 이면 안 함, 성격: 반가움 2 · 기본 1).
+   * 흔들었으면 true (onClipStart 는 이 안에서 바로 한 번 온다)
+   */
+  greet(times = 1): boolean {
+    if (this.disposed || times < 1 || !this.idle || this.pose !== 'stand' || !this.wagClip) return false
+    this.begin({ id: 'greet', steps: [['react', this.wagClip, 'greet', times]] })
     return true
+  }
+
+  /**
+   * 처음 자세 (성격이 조심스러운 개는 앉은 채 첫 만남): 쉬고 있으면 전환 클립 없이 그 자세 루프로 바로 간다.
+   * '앉아' 명령을 마친 것과 같은 상태가 된다 (자세 알림·명령으로 일어나기·예약 모두 같다).
+   * moved 바꿈 · same 이미 그 자세 · null 명령 클립이 없거나 쉬고 있지 않음 (그대로)
+   */
+  restIn(pose: Pose): 'moved' | 'same' | null {
+    if (this.disposed || !this.hasCommands || !this.idle) return null
+    if (this.pose === pose) return 'same'
+    this.setPose(pose)
+    void this.start(this.loopOf(pose), { reset: true, fade: 0 })
+    return 'moved'
   }
 
   /** 쉬는 상태: 자세 루프만 돌고 명령·반응·손 줘 들기·예약·몸 돌리기가 없다 */
@@ -470,7 +488,7 @@ export class DogAnimator {
         // 반응 클립은 서기 자세 클립이라 서 있을 때만 (차례가 왔을 때 다시 본다)
         if (this.pose !== 'stand') continue
         this.onReact?.(step[2])
-        return this.play(step[1], 1)
+        return this.play(step[1], step[3] ?? 1)
       }
       return this.hold(step[1])
     }
