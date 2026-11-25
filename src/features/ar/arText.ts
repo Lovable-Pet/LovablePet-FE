@@ -1,5 +1,7 @@
 // AR 화면 문구. 화면에 보이는 글은 여기 모은다 (존댓말, 지금 말투 그대로)
 
+import type { Persona } from './persona'
+
 export const AR_TEXT = {
   close: 'AR 닫기',
   info: '정보 보기',
@@ -67,7 +69,7 @@ export const josa = (word: string, withBatchim: string, without: string) => word
 
 // ── 등장 연출과 마무리 카드 ──
 
-/** 처음 놓았을 때 위 안내 자리에 보이는 시간 (ms, 인사·체고 비교 각각) · 새끼면 그 뒤 새끼 안내 */
+/** 처음 놓았을 때 위 안내 자리에 보이는 시간 (ms, 인사·성격·체고 비교 각각) · 새끼면 그 뒤 새끼 안내 */
 export const INTRO_STEP_MS = 2000
 export const INTRO_PUPPY_MS = 3000
 
@@ -85,8 +87,11 @@ export const HEIGHT_REFERENCE: readonly { maxCm: number; text: string }[] = [
 export const heightPhrase = (withersCm: number) => HEIGHT_REFERENCE.find((row) => withersCm <= row.maxCm)!.text
 
 // AR 화면은 이름을 쓰지 않는다: 유기견이라 이름이 없고 displayName 은 '믹스견 · 경기도 화성시 · 14kg' 같은 긴 문자열이다 (정보 시트에만)
+// 등장 순서: 인사 → (보호소 메모로 본 성격, wary·friendly 만) → 체고 비교 → (어린 개) 새끼 안내
 export const INTRO_TEXT = {
   hello: '안녕하세요!',
+  /** 성격 한 줄 (./persona.ts). default 는 없음 (인사 다음 바로 체고) */
+  persona: { wary: '조금 낯을 가려요', friendly: '사람을 좋아하는 아이예요!' } as Readonly<Partial<Record<Persona, string>>>,
   height: (withersCm: number) => `체고 ${withersCm}cm · ${josa(heightPhrase(withersCm), '이에요', '예요')}`,
 }
 
@@ -140,7 +145,7 @@ export const REACTION_MS = 1200
 /**
  * 위 안내 한 줄. 앞에서부터 처음 있는 것을 보인다:
  * 배치 전 안내 > 너무 가까워요 > 산책 문구 > 예약·까닭 (NOTICE_TEXT·SAME_POSE_TEXT) > 따라보기 3초 문구 >
- * 등장 인사·체고 비교·새끼 안내 (처음 놓은 4~7초) > 발도장 다음 할 일 > 지금 자세
+ * 등장 인사·성격·체고 비교·새끼 안내 (처음 놓은 4~9초) > 발도장 다음 할 일 > 지금 자세
  */
 export interface HintSources {
   placement: string | null

@@ -60,6 +60,7 @@ import {
   type ReserveId,
   type TapResult,
 } from '../features/ar/dogAnimator'
+import { classifyPersona, readPersona, type Persona } from '../features/ar/persona'
 import { useVoiceCommand } from '../features/ar/useVoiceCommand'
 import { useBarkSound } from '../features/ar/useBarkSound'
 import { barkListenerFrom } from '../features/ar/barkSound'
@@ -100,6 +101,9 @@ import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 // 화면 배치 (WebXR 과 화면 안 3D 가 같다. 개가 주인공이라 가운데는 비운다)
 // - 위: 닫기 · 체고 알약(이름은 쓰지 않음, 누르면 정보 시트: 다시 놓기도 여기) · 따라보기(몸 돌리기가 되는 개만) · 찜. 그 아래 안내 한 줄 (pickHint)
 // - 짖을 때 입 모양에 맞춰 짖는 소리 (../features/ar/barkSound.ts, 화면 안 3D 도, 켜기/끄기 버튼 없음). 마이크로 듣는 중에는 내지 않는다
+// - 첫 만남 (처음 놓을 때·처음 3D 로 볼 때 각각 한 번): 보호소 메모(특징)로 본 성격 (../features/ar/persona.ts) 에 따라
+//   wary 앉은 채 ('앉아' 를 마친 것과 같은 상태, 인사 꼬리 없음) · friendly 서서 꼬리 두 번 · default 서서 꼬리 한 번,
+//   위 안내 자리에 인사 → (wary·friendly 만) 성격 한 줄 → 체고 비교. 탭·명령·음성·산책·시선 등은 성격과 무관
 // - 가운데: 개 머리 위 반응 말풍선 ('?', 하트, '멍!', '빵!')
 // - 아래: [묘기 | 말 걸기 | 산책]. 묘기는 명령 트레이(3×2)를 펼친다. 명령 클립이 없으면 묘기 자리에 꼬리 흔들기 하나.
 //   산책 중에는 '산책 끝' 하나
@@ -113,7 +117,8 @@ import { LoadingScreen } from '../components/LoadingScreen/LoadingScreen'
 // 개발 모드만 (배포 빌드에는 들어가지 않는다)
 // - ?sim=1: PC 시뮬레이션. 화면 안 3D 에서 개를 바닥 원점에 놓고 키보드·마우스 가상 사용자를 AR 카메라 대신 산책·고개·몸 돌리기·
 //   가까이 앉기·가까움에 넘긴다 (../features/ar/sim, 판단 코드는 그대로)
-// - ?debug: 이벤트 기록 (클립·자세·고개·몸 돌리기·산책·안내·말풍선·발도장·음성·사용자 거리, ../features/ar/devlog)
+// - ?debug: 이벤트 기록 (클립·자세·고개·몸 돌리기·산책·안내·말풍선·발도장·음성·사용자 거리·성격·첫 만남, ../features/ar/devlog)
+// - ?persona=wary|friendly|default: 보호소 메모로 본 성격을 덮어쓴다
 
 type ArStatus = 'not-presenting' | 'session-started' | 'object-placed' | 'failed'
 
@@ -154,15 +159,21 @@ const useNoSim = (_mvRef: unknown, _options: ArSimOptions): ArSim => NO_SIM
 /** 개발용 PC 시뮬레이션 (?sim=1). 배포 빌드에서는 useNoSim 만 남고 ../features/ar/sim 은 빠진다 */
 const useSim = import.meta.env.DEV ? useArSim : useNoSim
 
-/** 처음 인사 (꼬리 흔들기 한 번). heart 가 false 면 그 꼬리의 하트 말풍선만 뺀다 (onClipStart 가 greet() 안에서 바로 온다) */
-function greetDog(animator: DogAnimator | null, muteHeart: { current: boolean }, heart: boolean) {
+/**
+ * 처음 인사 (서서 꼬리 흔들기 times 번 연달아). heart 가 false 면 그 꼬리의 하트 말풍선만 뺀다
+ * (onClipStart 가 greet() 안에서 바로 한 번 온다: 두 번 흔들어도 하트는 시작할 때 한 번). 흔들었으면 true
+ */
+function greetDog(animator: DogAnimator | null, muteHeart: { current: boolean }, heart: boolean, times: number) {
   muteHeart.current = !heart
   try {
-    animator?.greet()
+    return animator?.greet(times) ?? false
   } finally {
     muteHeart.current = false
   }
 }
+
+/** 성격별 인사 꼬리 횟수 (wary 는 앉은 채라 0) */
+const GREET_WAGS: Record<Persona, number> = { wary: 0, friendly: 2, default: 1 }
 
 /** active 가 STUCK_HINT_MS 넘게 이어졌는지 (중간에 풀리면 처음부터) */
 function useLongActive(active: boolean) {
@@ -344,8 +355,8 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   /** 반응 클립이 실제로 재생될 때 (load 때 만든 애니메이터가 부른다) */
   const onReact = useCallback((source: ReactSource) => stamp({ type: 'react', source }), [stamp])
   const onReactRef = useRef(onReact)
-  /** 처음 놓은 순간(AR)·처음 3D 로 본 순간의 인사와 체고 비교 (위 안내 자리에 2초씩), 새끼면 새끼 안내 3초 */
-  const [intro, setIntro] = useState<'hello' | 'height' | 'puppy' | null>(null)
+  /** 처음 놓은 순간(AR)·처음 3D 로 본 순간의 인사·성격 한 줄·체고 비교 (위 안내 자리에 2초씩), 새끼면 새끼 안내 3초 */
+  const [intro, setIntro] = useState<'hello' | 'persona' | 'height' | 'puppy' | null>(null)
   const greetedRef = useRef({ ar: false, preview: false })
   /** 마무리 카드. complete: 발도장을 다 모음 · exit: 닫기를 눌렀을 때 한 번 */
   const [card, setCard] = useState<'complete' | 'exit' | null>(null)
@@ -369,6 +380,15 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
   const inAr = arStatus === 'session-started' || arStatus === 'object-placed'
   /** 개발 모드에서 주소에 ?debug 를 붙였을 때 (배포 파일에는 들어가지 않는다) */
   const debug = import.meta.env.DEV && searchParams.has('debug')
+  /**
+   * 보호소 메모(특징)로 본 성격: 첫 만남의 처음 자세·인사 꼬리 횟수·안내 한 줄에만 쓴다.
+   * 개발 모드 ?persona=wary|friendly|default 로 덮어쓴다 (배포 파일에는 들어가지 않는다)
+   */
+  const personaJudged = useMemo(() => classifyPersona(pet.specialMark), [pet.specialMark])
+  const personaOverride = import.meta.env.DEV ? readPersona(searchParams.get('persona')) : null
+  const persona: Persona = personaOverride ?? personaJudged.persona
+  /** 인사 다음 성격 한 줄 (default 는 없음) */
+  const personaLine = INTRO_TEXT.persona[persona] ?? null
   /**
    * 개발 모드에서 실제 물체가 개를 가리는 시험: ?occlusion=1 (바닥 제외·bilinear·섞기) · ?occlusion=raw (d6b8a0e 방식, 견주기용) ·
    * ?ofloor=0.04 (바닥 제외 문턱 m, 0 이면 끔). 다음 AR 세션부터, 배포 파일에는 들어가지 않는다
@@ -543,6 +563,12 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     return () => setArEventLogEnabled(false)
   }, [debug])
   useEffect(() => {
+    if (import.meta.env.DEV) {
+      const words = personaJudged.matched.length ? personaJudged.matched.join(', ') : '없음'
+      logArEvent('성격', `판별 ${personaJudged.persona} · 걸린 단어 ${words}${personaOverride ? ` → ?persona=${personaOverride} 로 덮음` : ''}`)
+    }
+  }, [personaJudged, personaOverride])
+  useEffect(() => {
     if (import.meta.env.DEV) logArEvent('산책', walk.phase ?? '끝 (산책 아님)')
   }, [walk.phase])
   useEffect(() => {
@@ -707,34 +733,78 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
    * 기본과 배포 빌드는 띄운다. 마무리 축하의 꼬리 하트는 그대로
    */
   const greetHeart = !(import.meta.env.DEV && searchParams.get('greetheart') === '0')
-  /** 인사: 서 있고 꼬리 흔들기가 있으면 한 번 흔들고, 위 안내 자리에 인사 → 체고 비교 */
-  const startIntro = () => {
-    greetDog(animatorRef.current, muteHeartRef, greetHeart)
+  /**
+   * 첫 만남: 성격에 따라 처음 자세·인사 꼬리를 정하고, 위 안내 자리에 인사 → (성격 한 줄) → 체고 비교.
+   * - wary: 앉은 채. '앉아' 명령을 마친 것과 같게 한다: 전환 클립 없이 앉기 루프로 바로 (자세 섞기도 이번만 건너뜀),
+   *   명령 칩 '앉아' 눌림·자세 줄 '앉아 있어요', 시선 쪽은 명령으로 앉음 (스스로 앉음이 아니라 멀어져도 혼자 일어나지 않고
+   *   '일어나'·다른 명령·산책으로만 일어난다). 인사 꼬리 없음. 앉기 클립이 없는 모델은 선 채 꼬리 없이
+   * - friendly: 서서 꼬리 두 번 연달아 · default: 서서 꼬리 한 번 (지금과 같음). 하트는 인사 꼬리 규칙 그대로
+   */
+  const meetDog = () => {
+    const animator = animatorRef.current
+    if (persona === 'wary') {
+      const result = animator?.restIn('sit') ?? null
+      if (result) {
+        gaze.userCommand()
+        setActiveCommand('sit')
+        if (result === 'moved') poseLayersRef.current?.snap()
+      }
+      if (import.meta.env.DEV) {
+        const first =
+          result === 'moved'
+            ? '앉은 채 (전환 없이 앉기 루프로 바로, 앉아 명령과 같은 상태)'
+            : result === 'same'
+              ? '이미 앉아 있음 (그대로, 앉아 명령과 같은 상태)'
+              : animator?.hasCommands
+                ? `쉬는 중이 아니라 ${POSE_LABEL[animator.state.pose]} 그대로`
+                : '앉기 클립 없음 → 선 채'
+        logArEvent('첫 만남', `wary · ${first} · 인사 꼬리 없음`)
+      }
+    } else {
+      const wags = GREET_WAGS[persona]
+      const wagged = greetDog(animator, muteHeartRef, greetHeart, wags)
+      if (import.meta.env.DEV) {
+        const why = animator ? `${POSE_LABEL[animator.state.pose]}·${animator.resting ? '쉼' : '바쁨'}` : '애니메이터 없음'
+        logArEvent('첫 만남', `${persona} · ${wagged ? `서서 꼬리 ${wags}번` : `인사 꼬리 못 함 (${why})`}`)
+      }
+    }
     setIntro('hello')
   }
+  const meetDogRef = useRef(meetDog)
+  useEffect(() => {
+    meetDogRef.current = meetDog
+  })
   // 처음 놓는 순간 (다시 놓기 때는 안 한다)
   useEffect(() => {
     if (!dogReady || greetedRef.current.ar) return
     greetedRef.current.ar = true
-    greetDog(animatorRef.current, muteHeartRef, greetHeart)
-    setIntro('hello')
-  }, [dogReady, greetHeart])
-  /** 화면 안 3D 로 처음 볼 때도 같은 인사 (한 번) */
+    meetDogRef.current()
+  }, [dogReady])
+  /** 화면 안 3D 로 처음 볼 때도 같은 첫 만남 (한 번) */
   const startPreview = () => {
     bark.unlock()
     setShowGuide(false)
     if (greetedRef.current.preview) return
     greetedRef.current.preview = true
-    startIntro()
+    meetDog()
   }
   /** 아직 어린 유기견 (다 자라면 크기가 달라진다): 등장 연출에서 체고 다음에 한 번 */
   const puppy = isLikelyPuppy(pet.birthYear)
   useEffect(() => {
     if (!intro) return
-    const next = intro === 'hello' ? 'height' : intro === 'height' && puppy ? 'puppy' : null
+    const next =
+      intro === 'hello'
+        ? personaLine
+          ? 'persona'
+          : 'height'
+        : intro === 'persona'
+          ? 'height'
+          : intro === 'height' && puppy
+            ? 'puppy'
+            : null
     const timer = window.setTimeout(() => setIntro(next), intro === 'puppy' ? INTRO_PUPPY_MS : INTRO_STEP_MS)
     return () => window.clearTimeout(timer)
-  }, [intro, puppy])
+  }, [intro, puppy, personaLine])
 
   /** 마무리 카드를 띄운다 (한 번 보면 닫기가 바로 나가기) */
   const openCard = (mode: 'complete' | 'exit') => {
@@ -891,11 +961,13 @@ function ArView({ pet, model, onBack }: { pet: PetDetail; model: PetModelView; o
     intro:
       intro === 'hello'
         ? INTRO_TEXT.hello
-        : intro === 'height'
-          ? INTRO_TEXT.height(withersCm)
-          : intro === 'puppy'
-            ? PUPPY_NOTICE
-            : null,
+        : intro === 'persona'
+          ? personaLine
+          : intro === 'height'
+            ? INTRO_TEXT.height(withersCm)
+            : intro === 'puppy'
+              ? PUPPY_NOTICE
+              : null,
     follow: followNotice ? FOLLOW_NOTICE[followNotice.on ? 'on' : 'off'] : null,
     paw: pawHint,
     pose: hasCommands
